@@ -18,8 +18,7 @@ const SOURCE_CONTRACT_TIMEOUT_MS = 45 * 60_000;
 const COMMAND_TIMEOUT_MS = 12 * 60_000;
 const COMMAND_BUFFER_BYTES = 80 * 1024 * 1024;
 
-const sourceContractTest =
-  process.env.NEMOCLAW_RUN_E2E_SCENARIOS === "1" ? test : test.skip;
+const sourceContractTest = process.env.NEMOCLAW_RUN_E2E_SCENARIOS === "1" ? test : test.skip;
 
 type CommandResult = {
   status: number | null;
@@ -37,6 +36,11 @@ type ContractCommand = {
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
 };
+
+function requireString(value: string | undefined, label: string): string {
+  expect(value, label).toEqual(expect.any(String));
+  return value as string;
+}
 
 function commandResult(result: ReturnType<typeof spawnSync>): CommandResult {
   return {
@@ -104,31 +108,32 @@ async function expectCommandOk(
 async function cloneOpenShellSource(artifacts: ArtifactSink, workRoot: string): Promise<string> {
   const configuredSource = process.env.NEMOCLAW_OPENSHELL_SOURCE_DIR?.trim();
   const sourceRoot = path.join(workRoot, "OpenShell");
-  if (configuredSource) {
-    await expectCommandOk(artifacts, {
-      id: "clone-configured-openshell-source",
-      command: "git",
-      args: ["clone", "--local", "--no-hardlinks", configuredSource, sourceRoot],
-      cwd: REPO_ROOT,
-    });
-  } else {
-    await expectCommandOk(artifacts, {
-      id: "clone-openshell-source",
-      command: "git",
-      args: [
-        "clone",
-        "--filter=blob:none",
-        "--depth",
-        "1",
-        "--branch",
-        OPENSHELL_TAG,
-        "https://github.com/NVIDIA/OpenShell.git",
-        sourceRoot,
-      ],
-      cwd: REPO_ROOT,
-      timeoutMs: 5 * 60_000,
-    });
-  }
+  await expectCommandOk(
+    artifacts,
+    configuredSource
+      ? {
+          id: "clone-configured-openshell-source",
+          command: "git",
+          args: ["clone", "--local", "--no-hardlinks", configuredSource, sourceRoot],
+          cwd: REPO_ROOT,
+        }
+      : {
+          id: "clone-openshell-source",
+          command: "git",
+          args: [
+            "clone",
+            "--filter=blob:none",
+            "--depth",
+            "1",
+            "--branch",
+            OPENSHELL_TAG,
+            "https://github.com/NVIDIA/OpenShell.git",
+            sourceRoot,
+          ],
+          cwd: REPO_ROOT,
+          timeoutMs: 5 * 60_000,
+        },
+  );
 
   await expectCommandOk(artifacts, {
     id: "checkout-openshell-contract-sha",
@@ -156,8 +161,10 @@ function writeNemoClawGatewayConfig(stateDir: string): { configPath: string; tom
     stateDir,
     "/usr/bin/openshell-sandbox",
   );
-  const configPath = env.OPENSHELL_GATEWAY_CONFIG;
-  if (!configPath) throw new Error("expected OPENSHELL_GATEWAY_CONFIG");
+  const configPath = requireString(
+    env.OPENSHELL_GATEWAY_CONFIG,
+    "expected OPENSHELL_GATEWAY_CONFIG",
+  );
   return { configPath, toml: fs.readFileSync(configPath, "utf8") };
 }
 
