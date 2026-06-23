@@ -233,8 +233,11 @@ describe("ManifestCompiler", () => {
       enforcement: "enforce",
       request_body_credential_rewrite: true,
       websocket_credential_rewrite: true,
-      allowed_ips: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
     });
+    expect(
+      YAML.parse(plan.networkPolicy.templates?.[0]?.content ?? "").network_policies.mattermost
+        .endpoints[0],
+    ).not.toHaveProperty("allowed_ips");
     expect(
       YAML.parse(plan.networkPolicy.templates?.[0]?.content ?? "").network_policies.mattermost
         .endpoints[0].rules,
@@ -272,9 +275,6 @@ describe("ManifestCompiler", () => {
       kind: "json-fragment",
       path: "channels.mattermost",
       value: {
-        network: {
-          dangerouslyAllowPrivateNetwork: true,
-        },
         allowFrom: ["user-a", "user-b"],
         groupAllowFrom: ["user-a", "user-b"],
         groups: {
@@ -289,6 +289,7 @@ describe("ManifestCompiler", () => {
       allowFrom: ["user-a", "user-b"],
       groupAllowFrom: ["user-a", "user-b"],
     });
+    expect(mattermostRenderValue).not.toHaveProperty("network");
     expect(mattermostRenderValue).toHaveProperty("groups");
     expect((mattermostRenderValue as { groups?: unknown } | undefined)?.groups).toEqual({
       "town-square": {

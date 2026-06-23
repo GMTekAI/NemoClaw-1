@@ -730,12 +730,11 @@ describe("built-in channel manifests", () => {
     expect(findRender(mattermostManifest, "mattermost-openclaw-channel")).toMatchObject({
       fragment: {
         value: {
-          network: {
-            dangerouslyAllowPrivateNetwork: true,
-          },
+          enabled: true,
         },
       },
     });
+    expect(renderJson(mattermostManifest)).not.toContain("dangerouslyAllowPrivateNetwork");
     expect(renderJson(mattermostManifest)).not.toContain('"path":"mattermost"');
     expect(renderJson(mattermostManifest)).not.toContain('"path":"platforms.mattermost"');
     expect(mattermostManifest.agentPackages).toEqual([]);
@@ -754,6 +753,7 @@ describe("built-in channel manifests", () => {
       onFailure: "skip-channel",
     });
     expectOpenClawRuntimeVisibility(mattermostManifest, ["mattermost"], ["mattermost"]);
+    expectOpenClawNodePreload(mattermostManifest, "mattermost-trusted-env-proxy");
     expect(mattermostManifest.state).toEqual({
       persist: {
         mattermostConfig: ["baseUrl", "allowedChannels", "requireMention"],

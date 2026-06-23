@@ -116,9 +116,6 @@ export const mattermostManifest = {
           groupAllowFrom: "{{allowedIds.mattermost.values}}",
           chatmode: "{{mattermostConfig.openclawChatmode}}",
           groups: "{{mattermostConfig.openclawGroups}}",
-          network: {
-            dangerouslyAllowPrivateNetwork: true,
-          },
         },
       },
     },
@@ -142,6 +139,17 @@ export const mattermostManifest = {
         configKeys: ["mattermost"],
         logPatterns: ["mattermost"],
       },
+      nodePreloads: [
+        {
+          module: "mattermost-trusted-env-proxy",
+          injectInto: ["boot", "connect"],
+          optional: false,
+          installMessage:
+            "[channels] Installing Mattermost trusted env-proxy guard (SSRF-preserving DNS delegation)",
+          installedMessage:
+            "[channels] Mattermost trusted env-proxy guard installed (NODE_OPTIONS updated)",
+        },
+      ],
     },
   },
   agentPackages: [],

@@ -20,8 +20,6 @@ function input(value: string): SandboxMessagingInputReference {
 }
 
 describe("policy template renderer", () => {
-  const PRIVATE_NETWORK_RANGES = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"];
-
   it("normalizes HTTP and HTTPS URL sources for self-hosted policy templates", () => {
     expect(renderTemplateUrlContext("https://chat.example.com/api/v4/", "https-url")).toEqual({
       host: "chat.example.com",
@@ -81,7 +79,6 @@ describe("policy template renderer", () => {
         enforcement: "enforce",
         request_body_credential_rewrite: true,
         websocket_credential_rewrite: true,
-        allowed_ips: PRIVATE_NETWORK_RANGES,
         rules: [
           { allow: { method: "GET", path: "/team/api/v4/websocket" } },
           { allow: { method: "WEBSOCKET_TEXT", path: "/team/api/v4/websocket" } },
@@ -93,6 +90,7 @@ describe("policy template renderer", () => {
         ],
       }),
     ]);
+    expect(policy.endpoints[0]).not.toHaveProperty("allowed_ips");
     expect(policy.endpoints[0]).not.toHaveProperty("access");
     expect(policy.endpoints[0]).not.toHaveProperty("tls");
     expect(policy.binaries).toEqual([{ path: "/usr/local/bin/node" }, { path: "/usr/bin/node" }]);
