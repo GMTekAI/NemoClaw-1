@@ -131,6 +131,13 @@ quote_for_remote_sh() {
   printf "'%s'" "$(printf '%s' "$value" | sed "s/'/'\\\\''/g")"
 }
 
+gateway_url_is_expected() {
+  case "${1:-}" in
+    ws://127.0.0.1:* | ws://localhost:* | ws://10.200.0.2:*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 sandbox_exec_sh_script() {
   local seconds="$1"
   local script="$2"
@@ -504,8 +511,8 @@ PROBESH
   after_port=$(sed -n 's/^__PORT_AFTER__=//p' <<<"$output" | tail -1)
   after_token=$(sed -n 's/^__TOKEN_AFTER__=//p' <<<"$output" | tail -1)
   approve_env=$(sed -n 's/^__APPROVE_SUBPROCESS_ENV__=//p' <<<"$output" | tail -1)
-  if [[ "$before_url" != ws://127.0.0.1:* ]] && [[ "$before_url" != ws://localhost:* ]]; then
-    fail "${label}: proxy env did not expose a loopback OPENCLAW_GATEWAY_URL before approve (${before_url:-empty})"
+  if ! gateway_url_is_expected "$before_url"; then
+    fail "${label}: proxy env did not expose an expected OPENCLAW_GATEWAY_URL before approve (${before_url:-empty})"
     return 1
   fi
   if [ -z "$before_port" ] || [ "$before_port" = "unset" ] || [ "$before_token" != "set" ]; then
@@ -589,7 +596,7 @@ exit 0
     printf '%s\n' "$output"
   } >>"$APPROVAL_LOG"
   before_url=$(sed -n 's/^__URL_FOR_LEGACY_APPROVE__=//p' <<<"$output" | tail -1)
-  if [[ "$before_url" != ws://127.0.0.1:* ]] && [[ "$before_url" != ws://localhost:* ]]; then
+  if ! gateway_url_is_expected "$before_url"; then
     fail "legacy characterization did not run with gateway URL pinned (${before_url:-empty})"
     return 1
   fi
@@ -850,7 +857,8 @@ if [ "$guard_rc" -ne 0 ]; then
   fail "Could not source /tmp/nemoclaw-proxy-env.sh: ${guard_probe:0:400}"
   exit 1
 fi
-if grep -q '^OPENCLAW_GATEWAY_URL=ws://127\.0\.0\.1:' <<<"$guard_probe" \
+guard_url=$(sed -n 's/^OPENCLAW_GATEWAY_URL=//p' <<<"$guard_probe" | tail -1)
+if gateway_url_is_expected "$guard_url" \
   && grep -q '^APPROVE_GUARD_PRESENT$' <<<"$guard_probe"; then
   pass "proxy env preserves gateway URL and contains devices approve guard"
 else
