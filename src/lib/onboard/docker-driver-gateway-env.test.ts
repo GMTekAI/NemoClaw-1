@@ -28,14 +28,14 @@ function base64UrlJson(value: unknown): string {
 
 function parseTomlString(toml: string, key: string): string {
   const match = toml.match(new RegExp(`^${key} = "([^"]+)"$`, "m"));
-  if (!match) throw new Error(`missing TOML string key ${key}`);
-  return match[1];
+  expect(match, `missing TOML string key ${key}`).not.toBeNull();
+  return match?.[1] ?? "";
 }
 
 function parseTomlInteger(toml: string, key: string): number {
   const match = toml.match(new RegExp(`^${key} = (\\d+)$`, "m"));
-  if (!match) throw new Error(`missing TOML integer key ${key}`);
-  return Number(match[1]);
+  expect(match, `missing TOML integer key ${key}`).not.toBeNull();
+  return Number(match?.[1] ?? "0");
 }
 
 function decodeJwtPart(part: string): Record<string, unknown> {
@@ -74,29 +74,48 @@ function validateOpenShellStyleSandboxJwt(options: {
   now: number;
 }): Record<string, unknown> | null {
   const [headerPart, payloadPart, signaturePart] = options.token.split(".");
-  if (!headerPart || !payloadPart || !signaturePart) throw new Error("malformed JWT");
+  expect(headerPart, "JWT header segment").toBeTruthy();
+  expect(payloadPart, "JWT payload segment").toBeTruthy();
+  expect(signaturePart, "JWT signature segment").toBeTruthy();
 
-  const header = decodeJwtPart(headerPart);
-  if (header.kid !== options.kid || header.alg !== "EdDSA") return null;
+  const header = decodeJwtPart(headerPart ?? "");
+  return header.kid === options.kid && header.alg === "EdDSA"
+    ? validateOpenShellStyleSandboxJwtSignature({
+        headerPart: headerPart ?? "",
+        payloadPart: payloadPart ?? "",
+        signaturePart: signaturePart ?? "",
+        publicKeyPath: options.publicKeyPath,
+        gatewayId: options.gatewayId,
+        now: options.now,
+      })
+    : null;
+}
 
-  const signingInput = `${headerPart}.${payloadPart}`;
+function validateOpenShellStyleSandboxJwtSignature(options: {
+  headerPart: string;
+  payloadPart: string;
+  signaturePart: string;
+  publicKeyPath: string;
+  gatewayId: string;
+  now: number;
+}): Record<string, unknown> {
+  const signingInput = `${options.headerPart}.${options.payloadPart}`;
   const publicKey = createPublicKey(fs.readFileSync(options.publicKeyPath, "utf-8"));
   const signatureOk = verifyPayload(
     null,
     Buffer.from(signingInput),
     publicKey,
-    Buffer.from(signaturePart, "base64url"),
+    Buffer.from(options.signaturePart, "base64url"),
   );
-  if (!signatureOk) throw new Error("invalid JWT signature");
+  expect(signatureOk, "OpenShell-style sandbox JWT signature").toBe(true);
 
-  const payload = decodeJwtPart(payloadPart);
+  const payload = decodeJwtPart(options.payloadPart);
   const identity = `openshell-gateway:${options.gatewayId}`;
   expect(payload.iss).toBe(identity);
   expect(payload.aud).toBe(identity);
   expect(String(payload.sub)).toBe(`${SANDBOX_JWT_SUBJECT_PREFIX}${payload.sandbox_id}`);
-  if (typeof payload.exp === "number" && payload.exp !== 0 && payload.exp < options.now - 60) {
-    throw new Error("expired JWT");
-  }
+  const exp = typeof payload.exp === "number" ? payload.exp : Number.NaN;
+  expect(exp === 0 || exp >= options.now - 60, "OpenShell-style sandbox JWT expiry").toBe(true);
   return payload;
 }
 
@@ -316,7 +335,7 @@ describe("buildDockerDriverGatewayEnv", () => {
           gatewayId,
           now,
         }),
-      ).toThrow("expired JWT");
+      ).toThrow("OpenShell-style sandbox JWT expiry");
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
