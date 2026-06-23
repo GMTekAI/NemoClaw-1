@@ -842,6 +842,68 @@ describe("E2E reusable workflow contract", () => {
     expect(summary).toContain("- gateway: 1m 0.0s");
   });
 
+  it("lists current slowest onboard phases when total regression exceeds the advisory threshold but total remains under budget", () => {
+    const budget = traceTiming.readOnboardPerformanceBudget();
+    const warning = traceTiming.evaluateOnboardPerformanceBudget({
+      budget,
+      currentTrace: {
+        totalMs: 300_000,
+        phases: {
+          "nemoclaw.onboard.phase.preflight": 20_000,
+          "nemoclaw.onboard.phase.gateway": 80_000,
+          "nemoclaw.onboard.phase.sandbox": 200_000,
+        },
+      },
+      priorTrace: { totalMs: 200_000 },
+      phaseRows: [],
+    });
+
+    const summary = warning?.summaryLines.join("\n") ?? "";
+    expect(warning).toMatchObject({ exceeded: true });
+    expect(warning?.summary).toContain("total regression");
+    expect(summary).toContain("Current slowest phases:");
+    expect(summary).toContain("- sandbox: 3m 20.0s");
+    expect(summary).toContain("- gateway: 1m 20.0s");
+    expect(summary).toContain("- preflight: 20.0s");
+  });
+
+  it("lists current slowest onboard phases when only phase regression exceeds the advisory threshold", () => {
+    const budget = traceTiming.readOnboardPerformanceBudget();
+    const phaseRows = traceTiming.buildPhaseRows(
+      {
+        "nemoclaw.onboard.phase.preflight": 20_000,
+        "nemoclaw.onboard.phase.gateway": 80_000,
+        "nemoclaw.onboard.phase.sandbox": 200_000,
+      },
+      {
+        "nemoclaw.onboard.phase.preflight": 20_000,
+        "nemoclaw.onboard.phase.gateway": 80_000,
+        "nemoclaw.onboard.phase.sandbox": 100_000,
+      },
+    );
+    const warning = traceTiming.evaluateOnboardPerformanceBudget({
+      budget,
+      currentTrace: {
+        totalMs: 300_000,
+        phases: {
+          "nemoclaw.onboard.phase.preflight": 20_000,
+          "nemoclaw.onboard.phase.gateway": 80_000,
+          "nemoclaw.onboard.phase.sandbox": 200_000,
+        },
+      },
+      priorTrace: { totalMs: 280_000 },
+      phaseRows,
+    });
+
+    const summary = warning?.summaryLines.join("\n") ?? "";
+    expect(warning).toMatchObject({ exceeded: true });
+    expect(warning?.summary).toContain("phase regressions");
+    expect(summary).toContain("Current slowest phases:");
+    expect(summary).toContain("- sandbox: 3m 20.0s");
+    expect(summary).toContain("- gateway: 1m 20.0s");
+    expect(summary).toContain("- preflight: 20.0s");
+  });
+
   it("scorecard warns budget config unavailable without saying performance budget exceeded", async () => {
     const tempRoot = mkdtempSync(path.join(tmpdir(), "nemoclaw-budget-config-"));
     const previousWorkspace = process.env.GITHUB_WORKSPACE;

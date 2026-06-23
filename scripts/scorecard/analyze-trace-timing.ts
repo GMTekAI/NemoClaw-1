@@ -421,7 +421,7 @@ function evaluateOnboardPerformanceBudget({
       summaryLines.push(`- ${warning}`);
     }
   }
-  if (totalBudgetExceeded) {
+  if (exceeded) {
     const slowestPhases = currentPhaseRows(currentTrace.phases).slice(0, 3);
     if (slowestPhases.length > 0) {
       summaryLines.push("");
