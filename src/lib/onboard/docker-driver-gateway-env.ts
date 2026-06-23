@@ -110,7 +110,6 @@ export function buildDockerDriverGatewayEnv({
     }
   }
   prepareDockerDriverGatewayConfigEnv(env, stateDir, env.OPENSHELL_DOCKER_SUPERVISOR_BIN);
-  assertDockerDriverGatewayBindAddressSafe(env);
   return env;
 }
 
