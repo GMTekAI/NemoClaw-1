@@ -45,7 +45,7 @@ const STATE_DIR = path.join(
 const PID_FILE = path.join(STATE_DIR, "openshell-gateway.pid");
 const OLD_NEMOCLAW_REF = process.env.NEMOCLAW_OLD_NEMOCLAW_REF ?? "v0.0.36";
 const OLD_OPENSHELL_VERSION = process.env.NEMOCLAW_OLD_OPENSHELL_VERSION ?? "0.0.36";
-const CURRENT_OPENSHELL_VERSION = process.env.NEMOCLAW_CURRENT_OPENSHELL_VERSION ?? "0.0.67";
+const CURRENT_OPENSHELL_VERSION = process.env.NEMOCLAW_CURRENT_OPENSHELL_VERSION ?? "0.0.44";
 const OLD_SANDBOX_BASE_IMAGE_REF =
   process.env.NEMOCLAW_OLD_SANDBOX_BASE_IMAGE_REF ??
   "ghcr.io/nvidia/nemoclaw/sandbox-base@sha256:104151ffadc2ff0b6c815e3c95c2783ced61aee0d0f83fc327cc02be9b7e14e6";
@@ -347,32 +347,6 @@ bash ${shellQuote(installer)} --non-interactive --yes-i-accept-third-party-softw
   return result;
 }
 
-async function clearPreinstalledOpenShellForOldFixture(host: HostCliClient): Promise<void> {
-  const result = await bash(
-    host,
-    `for bin in openshell openshell-gateway openshell-sandbox openshell-driver-vm; do
-  for candidate in "$(command -v "$bin" 2>/dev/null || true)" "$HOME/.local/bin/$bin" "/usr/local/bin/$bin"; do
-    [ -n "$candidate" ] || continue
-    [ -e "$candidate" ] || continue
-    rm -f "$candidate" 2>/dev/null || {
-      command -v sudo >/dev/null 2>&1 && sudo rm -f "$candidate"
-    }
-  done
-done
-hash -r
-if command -v openshell >/dev/null 2>&1; then
-  printf 'openshell still present after fixture reset: %s\\n' "$(command -v openshell)"
-  openshell --version 2>&1 || true
-  exit 1
-fi`,
-    {
-      artifactName: "old-fixture-clear-preinstalled-openshell",
-      timeoutMs: 30_000,
-    },
-  );
-  expectExitZero(result, "clear preinstalled OpenShell before old fixture install");
-}
-
 async function installOldNemoclawAndClaw(
   host: HostCliClient,
   artifacts: ArtifactSink,
@@ -392,7 +366,6 @@ chmod 755 ${shellQuote(oldInstaller)}`,
   );
   expectExitZero(download, `download old ${OLD_NEMOCLAW_REF} installer`);
   patchOldInstallerFixture(oldInstaller);
-  await clearPreinstalledOpenShellForOldFixture(host);
 
   const installEnv = liveEnv({
     PATH: `${wrapperDir}:${process.env.PATH ?? "/usr/bin:/bin"}`,

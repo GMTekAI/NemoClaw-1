@@ -81,7 +81,7 @@ if ! grep -F "unset OPENCLAW_GATEWAY_URL OPENCLAW_GATEWAY_PORT OPENCLAW_GATEWAY_
 fi
 . /tmp/nemoclaw-proxy-env.sh
 case "\${OPENCLAW_GATEWAY_URL:-}" in
-  ws://127.0.0.1:*|ws://localhost:*|ws://10.200.0.2:*) ;;
+  ws://127.0.0.1:*|ws://localhost:*) ;;
   *) echo "BAD_GATEWAY_URL=\${OPENCLAW_GATEWAY_URL:-unset}" >&2; exit 4 ;;
 esac
 

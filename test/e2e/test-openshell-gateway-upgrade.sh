@@ -58,7 +58,7 @@ OLD_NEMOCLAW_REF="${NEMOCLAW_OLD_NEMOCLAW_REF:-v0.0.36}"
 OLD_OPENSHELL_VERSION="${NEMOCLAW_OLD_OPENSHELL_VERSION:-0.0.36}"
 OLD_SANDBOX_BASE_IMAGE_REF="${NEMOCLAW_OLD_SANDBOX_BASE_IMAGE_REF:-ghcr.io/nvidia/nemoclaw/sandbox-base@sha256:104151ffadc2ff0b6c815e3c95c2783ced61aee0d0f83fc327cc02be9b7e14e6}"
 OLD_OPENCLAW_VERSION="${NEMOCLAW_OLD_OPENCLAW_VERSION:-2026.4.24}"
-CURRENT_OPENSHELL_VERSION="${NEMOCLAW_CURRENT_OPENSHELL_VERSION:-0.0.67}"
+CURRENT_OPENSHELL_VERSION="${NEMOCLAW_CURRENT_OPENSHELL_VERSION:-0.0.44}"
 SURVIVOR_SANDBOX="${NEMOCLAW_GATEWAY_UPGRADE_SURVIVOR_NAME:-e2e-gateway-upgrade-survivor}"
 SURVIVOR_MARKER="gateway-upgrade-survivor-$(date +%s)"
 SURVIVOR_MARKER_PATH="/sandbox/.openclaw/workspace/nemoclaw-gateway-upgrade-marker"
@@ -293,7 +293,7 @@ EOF
 # request-body-credential-rewrite
 # websocket-credential-rewrite
 if [ "${1:-}" = "--version" ]; then
-  printf 'openshell 0.0.67\n'
+  printf 'openshell 0.0.44\n'
   exit 0
 fi
 exit 99
@@ -383,7 +383,7 @@ EOF
 # request-body-credential-rewrite
 # websocket-credential-rewrite
 if [ "${1:-}" = "--version" ]; then
-  printf 'openshell 0.0.67\n'
+  printf 'openshell 0.0.44\n'
   exit 0
 fi
 exit 99
@@ -537,23 +537,6 @@ download_old_curl_installer() {
   chmod 755 "$target"
 }
 
-clear_preinstalled_openshell_for_old_fixture() {
-  local bin candidate
-  for bin in openshell openshell-gateway openshell-sandbox openshell-driver-vm; do
-    for candidate in "$(command -v "$bin" 2>/dev/null || true)" "$HOME/.local/bin/$bin" "/usr/local/bin/$bin"; do
-      [ -n "$candidate" ] || continue
-      [ -e "$candidate" ] || continue
-      rm -f "$candidate" 2>/dev/null || {
-        command -v sudo >/dev/null 2>&1 && sudo rm -f "$candidate"
-      }
-    done
-  done
-  hash -r
-  if command -v openshell >/dev/null 2>&1; then
-    fail "openshell still present after old-fixture reset: $(command -v openshell) $(openshell --version 2>&1 || true)"
-  fi
-}
-
 install_old_nemoclaw_and_claw() {
   local installer
   installer="$(mktemp)"
@@ -561,7 +544,6 @@ install_old_nemoclaw_and_claw() {
   info "Pinning old ${OLD_NEMOCLAW_REF} OpenClaw base build to ${OLD_OPENCLAW_VERSION}"
   download_old_curl_installer "$installer"
   patch_old_installer_fixture "$installer"
-  clear_preinstalled_openshell_for_old_fixture
   run_installer_payload "old ${OLD_NEMOCLAW_REF}" "$OLD_NEMOCLAW_REF" "$installer" "$OLD_INSTALL_LOG"
   if [ -f "$OLD_DOCKER_WRAPPER_LOG" ]; then
     diag "old installer docker wrapper activity:"
