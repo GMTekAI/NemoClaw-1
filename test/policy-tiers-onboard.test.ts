@@ -410,7 +410,12 @@ console.log = (...args) => lines.push(args.join(" "));
   it("selected tier is persisted to the registry via updateSandbox({ policyTier })", () => {
     const policiesPath = JSON.stringify(path.join(repoRoot, "dist", "lib", "policy", "index.js"));
     const script =
-      buildPreamble({ tierEnv: "open", policyMode: "skip" }) +
+      buildPreamble({
+        tierEnv: "open",
+        policyMode: "skip",
+        stubOpenshellBin: true,
+        runCaptureReturn: "Running",
+      }) +
       String.raw`
 const policies = require(${policiesPath});
 const generatedPolicyContent = "preset:\n  name: mattermost\nnetwork_policies:\n  mattermost: {}\n";
