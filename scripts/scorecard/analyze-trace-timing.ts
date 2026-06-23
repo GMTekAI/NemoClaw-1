@@ -79,6 +79,7 @@ type BudgetEvaluation = {
   statusLabel: "ok" | "warning";
   summary: string;
   summaryLines: string[];
+  warningMessage: string | null;
 };
 
 type BudgetLoadResult =
@@ -156,8 +157,14 @@ function traceTimingResult(
   traceTimingLine: string,
   traceSummaryLines: string[] = [],
   budgetExceeded = false,
-): { traceTimingLine: string; traceSummaryLines: string[]; budgetExceeded: boolean } {
-  return { traceTimingLine, traceSummaryLines, budgetExceeded };
+  budgetWarningMessage: string | null = null,
+): {
+  traceTimingLine: string;
+  traceSummaryLines: string[];
+  budgetExceeded: boolean;
+  budgetWarningMessage: string | null;
+} {
+  return { traceTimingLine, traceSummaryLines, budgetExceeded, budgetWarningMessage };
 }
 
 function isFiniteNonNegativeNumber(value: unknown): value is number {
@@ -333,6 +340,7 @@ function evaluateOnboardPerformanceBudget({
         scope: "cloud-onboard-e2e warm-system",
         statusLabel: "warning",
         summary: `Budget: advisory warning - ${ONBOARD_PERFORMANCE_BUDGET_FILE} unavailable; ${reason}.`,
+        warningMessage: `Cloud onboard advisory performance budget unavailable; check ${ONBOARD_PERFORMANCE_BUDGET_FILE} and the scorecard summary for details.`,
         summaryLines: [
           "",
           "### Onboard Performance Budget",
@@ -394,6 +402,9 @@ function evaluateOnboardPerformanceBudget({
   const summary = exceeded
     ? `Budget: advisory warning - ${warnings[0]}.`
     : `Budget: advisory OK for ${budget.scope} (${formatDuration(budget.totalBudgetMs)} cap).`;
+  const warningMessage = exceeded
+    ? "Cloud onboard advisory performance budget exceeded; see scorecard summary for timing details."
+    : null;
   const summaryLines = [
     "",
     "### Onboard Performance Budget",
@@ -432,6 +443,7 @@ function evaluateOnboardPerformanceBudget({
     statusLabel: exceeded ? "warning" : "ok",
     summary,
     summaryLines,
+    warningMessage,
   };
 }
 
@@ -553,9 +565,12 @@ async function readTraceSummaryFromRun(
   }
 }
 
-async function buildTraceTimingResult(
-  deps: GitHubDeps,
-): Promise<{ traceTimingLine: string; traceSummaryLines: string[]; budgetExceeded: boolean }> {
+async function buildTraceTimingResult(deps: GitHubDeps): Promise<{
+  traceTimingLine: string;
+  traceSummaryLines: string[];
+  budgetExceeded: boolean;
+  budgetWarningMessage: string | null;
+}> {
   const { context } = deps;
   try {
     const currentTrace = await readTraceSummaryFromRun(deps, context.runId);
@@ -578,6 +593,7 @@ async function buildTraceTimingResult(
           .join(" "),
         budgetEvaluation?.summaryLines ?? [],
         budgetEvaluation?.exceeded ?? false,
+        budgetEvaluation?.warningMessage ?? null,
       );
     }
 
@@ -595,6 +611,7 @@ async function buildTraceTimingResult(
           .join(" "),
         budgetEvaluation?.summaryLines ?? [],
         budgetEvaluation?.exceeded ?? false,
+        budgetEvaluation?.warningMessage ?? null,
       );
     }
 
@@ -612,6 +629,7 @@ async function buildTraceTimingResult(
           .join(" "),
         budgetEvaluation?.summaryLines ?? [],
         budgetEvaluation?.exceeded ?? false,
+        budgetEvaluation?.warningMessage ?? null,
       );
     }
 
@@ -629,6 +647,7 @@ async function buildTraceTimingResult(
         [traceLine, budgetEvaluation?.summary].filter(Boolean).join(" "),
         budgetEvaluation?.summaryLines ?? [],
         budgetEvaluation?.exceeded ?? false,
+        budgetEvaluation?.warningMessage ?? null,
       );
     }
 
@@ -643,6 +662,7 @@ async function buildTraceTimingResult(
         .join(" "),
       buildTraceSummaryLines(currentTrace, priorTrace, priorTag, phaseRows, budgetEvaluation),
       budgetEvaluation?.exceeded ?? false,
+      budgetEvaluation?.warningMessage ?? null,
     );
   } catch (error) {
     return traceTimingResult("Trace: ⊘ comparison unavailable");

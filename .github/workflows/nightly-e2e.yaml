@@ -2977,10 +2977,10 @@ jobs:
                   .map(([name]) => ({ name, url: null }))
                   .sort((a, b) => a.name.localeCompare(b.name));
 
-            const { traceTimingLine, traceSummaryLines, budgetExceeded } =
+            const { traceTimingLine, traceSummaryLines, budgetExceeded, budgetWarningMessage } =
               await traceTiming.buildTraceTimingResult({ github, context });
             if (budgetExceeded) {
-              core.warning('Cloud onboard advisory performance budget exceeded; see scorecard summary for timing details.');
+              core.warning(budgetWarningMessage || 'Cloud onboard advisory performance budget warning; see scorecard summary for timing details.');
             }
 
             // ── Build scorecard ─────────────────────────────────────

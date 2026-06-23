@@ -34,7 +34,12 @@ type TraceTimingAnalyzer = {
   buildTraceTimingResult: (deps: {
     context: Record<string, any>;
     github: Record<string, any>;
-  }) => Promise<{ traceTimingLine: string; traceSummaryLines: string[]; budgetExceeded: boolean }>;
+  }) => Promise<{
+    traceTimingLine: string;
+    traceSummaryLines: string[];
+    budgetExceeded: boolean;
+    budgetWarningMessage: string | null;
+  }>;
   evaluateOnboardPerformanceBudget: (args: {
     budget: unknown;
     currentTrace: { totalMs: number; phases?: Record<string, number> };
@@ -46,7 +51,12 @@ type TraceTimingAnalyzer = {
       deltaAbsMs: number;
       deltaMs?: number;
     }>;
-  }) => { exceeded: boolean; summary: string; summaryLines: string[] } | null;
+  }) => {
+    exceeded: boolean;
+    summary: string;
+    summaryLines: string[];
+    warningMessage: string | null;
+  } | null;
   formatTopPhaseChanges: (
     phaseRows: Array<{ label: string; currentMs: number; priorMs: number; deltaAbsMs: number }>,
   ) => string;
@@ -751,7 +761,11 @@ describe("E2E reusable workflow contract", () => {
     );
     expect(scorecardStep?.with?.script).toContain("traceTiming.buildTraceTimingResult");
     expect(scorecardStep?.with?.script).toContain("budgetExceeded");
+    expect(scorecardStep?.with?.script).toContain("budgetWarningMessage");
     expect(scorecardStep?.with?.script).toContain("core.warning");
+    expect(scorecardStep?.with?.script).not.toContain(
+      "Cloud onboard advisory performance budget exceeded; see scorecard summary for timing details.",
+    );
     expect(phaseRows.map((row) => row.label)).toEqual(["preflight", "gateway", "sandbox"]);
     expect(traceTiming.formatTopPhaseChanges(phaseRows)).toBe(
       "sandbox -8.0s; gateway +2.0s; preflight -1.0s",
@@ -795,6 +809,7 @@ describe("E2E reusable workflow contract", () => {
 
     expect(warning).toMatchObject({ exceeded: true });
     expect(warning?.summary).toContain("Budget: advisory warning");
+    expect(warning?.warningMessage).toContain("performance budget exceeded");
     expect(warning?.summaryLines.join("\n")).toContain("total 14m 10.0s exceeds warm budget");
     expect(warning?.summaryLines.join("\n")).toContain("phase regressions");
     expect(ok).toMatchObject({ exceeded: false });
@@ -819,6 +834,7 @@ describe("E2E reusable workflow contract", () => {
 
     const summary = result.traceSummaryLines.join("\n");
     expect(result.budgetExceeded).toBe(true);
+    expect(result.budgetWarningMessage).toContain("performance budget exceeded");
     expect(result.traceTimingLine).toContain("Budget: advisory warning");
     expect(summary).toContain("Current slowest phases:");
     expect(summary).toContain("- sandbox: 11m 40.0s");
@@ -826,7 +842,7 @@ describe("E2E reusable workflow contract", () => {
     expect(summary).toContain("- gateway: 1m 0.0s");
   });
 
-  it("reports malformed onboard performance budget config instead of silently disabling the signal", async () => {
+  it("scorecard warns budget config unavailable without saying performance budget exceeded", async () => {
     const tempRoot = mkdtempSync(path.join(tmpdir(), "nemoclaw-budget-config-"));
     const previousWorkspace = process.env.GITHUB_WORKSPACE;
     const restoreWorkspace =
@@ -852,6 +868,8 @@ describe("E2E reusable workflow contract", () => {
       });
 
       expect(result.budgetExceeded).toBe(true);
+      expect(result.budgetWarningMessage).toContain("performance budget unavailable");
+      expect(result.budgetWarningMessage).not.toContain("performance budget exceeded");
       expect(result.traceTimingLine).toContain("Trace: cloud-onboard total 1.0s");
       expect(result.traceTimingLine).toContain("Budget: advisory warning");
       expect(result.traceSummaryLines.join("\n")).toContain(
