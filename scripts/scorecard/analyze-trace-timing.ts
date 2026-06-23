@@ -9,6 +9,7 @@ const { execFileSync } = require("node:child_process") as typeof import("node:ch
 const WORKFLOW_FILE = "nightly-e2e.yaml";
 const TRACE_ARTIFACT_NAME = "cloud-onboard-traces";
 const TRACE_SUMMARY_FILE = "cloud-onboard-trace-timing-summary.json";
+const ONBOARD_PERFORMANCE_BUDGET_FILE = "ci/onboard-performance-budget.json";
 const ONBOARD_PHASE_PREFIX = "nemoclaw.onboard.phase.";
 // Keep this ordered list aligned with the trace span names emitted by
 // src/lib/onboard/tracing.ts.
@@ -55,6 +56,29 @@ type PhaseRow = {
   priorMs: number;
   deltaMs?: number;
   deltaAbsMs: number;
+};
+
+type Threshold = {
+  minDeltaMs: number;
+  minPercent: number;
+};
+
+type OnboardPerformanceBudget = {
+  schemaVersion: 1;
+  mode: "advisory";
+  scope: string;
+  totalBudgetMs: number;
+  regressionWarning: Threshold;
+  phaseRegressionWarning: Threshold;
+};
+
+type BudgetEvaluation = {
+  exceeded: boolean;
+  mode: "advisory";
+  scope: string;
+  statusLabel: "ok" | "warning";
+  summary: string;
+  summaryLines: string[];
 };
 
 type GitHubDeps = {
@@ -127,8 +151,65 @@ function extractPhaseDurations(spans: TraceSpanLike[]): Record<string, number> {
 function traceTimingResult(
   traceTimingLine: string,
   traceSummaryLines: string[] = [],
-): { traceTimingLine: string; traceSummaryLines: string[] } {
-  return { traceTimingLine, traceSummaryLines };
+  budgetExceeded = false,
+): { traceTimingLine: string; traceSummaryLines: string[]; budgetExceeded: boolean } {
+  return { traceTimingLine, traceSummaryLines, budgetExceeded };
+}
+
+function isFiniteNonNegativeNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function normalizeThreshold(value: unknown): Threshold | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const object = value as Record<string, unknown>;
+  if (
+    !isFiniteNonNegativeNumber(object.minDeltaMs) ||
+    !isFiniteNonNegativeNumber(object.minPercent)
+  ) {
+    return null;
+  }
+  return {
+    minDeltaMs: object.minDeltaMs,
+    minPercent: object.minPercent,
+  };
+}
+
+function normalizeOnboardPerformanceBudget(value: unknown): OnboardPerformanceBudget | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const object = value as Record<string, unknown>;
+  const regressionWarning = normalizeThreshold(object.regressionWarning);
+  const phaseRegressionWarning = normalizeThreshold(object.phaseRegressionWarning);
+  if (
+    object.schemaVersion !== 1 ||
+    object.mode !== "advisory" ||
+    typeof object.scope !== "string" ||
+    object.scope.trim() === "" ||
+    !isFiniteNonNegativeNumber(object.totalBudgetMs) ||
+    regressionWarning === null ||
+    phaseRegressionWarning === null
+  ) {
+    return null;
+  }
+  return {
+    schemaVersion: 1,
+    mode: "advisory",
+    scope: object.scope,
+    totalBudgetMs: object.totalBudgetMs,
+    regressionWarning,
+    phaseRegressionWarning,
+  };
+}
+
+function readOnboardPerformanceBudget(
+  rootDir = process.env.GITHUB_WORKSPACE || process.cwd(),
+): OnboardPerformanceBudget | null {
+  try {
+    const text = fs.readFileSync(path.join(rootDir, ONBOARD_PERFORMANCE_BUDGET_FILE), "utf8");
+    return normalizeOnboardPerformanceBudget(JSON.parse(text));
+  } catch {
+    return null;
+  }
 }
 
 function normalizePhaseDurations(value: unknown): Record<string, number> | null {
@@ -198,13 +279,113 @@ function formatTopPhaseChanges(phaseRows: PhaseRow[]): string {
     .join("; ");
 }
 
+function percentDelta(currentMs: number, priorMs: number): number {
+  return priorMs > 0 ? ((currentMs - priorMs) / priorMs) * 100 : 0;
+}
+
+function exceedsThreshold(currentMs: number, priorMs: number, threshold: Threshold): boolean {
+  const deltaMs = currentMs - priorMs;
+  return (
+    deltaMs >= threshold.minDeltaMs && percentDelta(currentMs, priorMs) >= threshold.minPercent
+  );
+}
+
+function evaluateOnboardPerformanceBudget({
+  budget,
+  currentTrace,
+  priorTrace,
+  phaseRows,
+}: {
+  budget: OnboardPerformanceBudget | null;
+  currentTrace: { totalMs: number };
+  priorTrace?: { totalMs: number };
+  phaseRows?: PhaseRow[];
+}): BudgetEvaluation | null {
+  if (budget === null) return null;
+
+  const warnings: string[] = [];
+  if (currentTrace.totalMs > budget.totalBudgetMs) {
+    warnings.push(
+      `total ${formatDuration(currentTrace.totalMs)} exceeds warm budget ${formatDuration(
+        budget.totalBudgetMs,
+      )}`,
+    );
+  }
+
+  if (
+    priorTrace &&
+    exceedsThreshold(currentTrace.totalMs, priorTrace.totalMs, budget.regressionWarning)
+  ) {
+    warnings.push(
+      `total regression ${formatPhaseDelta(currentTrace.totalMs, priorTrace.totalMs)} (${percentDelta(
+        currentTrace.totalMs,
+        priorTrace.totalMs,
+      ).toFixed(1)}%) exceeds advisory threshold`,
+    );
+  }
+
+  const phaseWarnings = (phaseRows ?? [])
+    .filter((row) => exceedsThreshold(row.currentMs, row.priorMs, budget.phaseRegressionWarning))
+    .sort((a, b) => (b.deltaMs ?? 0) - (a.deltaMs ?? 0) || a.label.localeCompare(b.label))
+    .slice(0, 3);
+
+  if (phaseWarnings.length > 0) {
+    warnings.push(
+      `phase regressions: ${phaseWarnings
+        .map(
+          (row) =>
+            `${row.label} ${formatPhaseDelta(row.currentMs, row.priorMs)} (${percentDelta(
+              row.currentMs,
+              row.priorMs,
+            ).toFixed(1)}%)`,
+        )
+        .join("; ")}`,
+    );
+  }
+
+  const exceeded = warnings.length > 0;
+  const summary = exceeded
+    ? `Budget: advisory warning - ${warnings[0]}.`
+    : `Budget: advisory OK for ${budget.scope} (${formatDuration(budget.totalBudgetMs)} cap).`;
+  const summaryLines = [
+    "",
+    "### Onboard Performance Budget",
+    "",
+    `Status: **${exceeded ? "Advisory warning" : "OK"}**`,
+    `Scope: \`${budget.scope}\``,
+    `Mode: \`${budget.mode}\``,
+    `Warm total budget: ${formatDuration(budget.totalBudgetMs)}`,
+  ];
+  if (warnings.length > 0) {
+    summaryLines.push("");
+    summaryLines.push("Advisory findings:");
+    for (const warning of warnings) {
+      summaryLines.push(`- ${warning}`);
+    }
+  }
+  summaryLines.push("");
+  summaryLines.push(
+    "This signal is advisory: it surfaces warm-onboard timing regressions without failing the scorecard job.",
+  );
+
+  return {
+    exceeded,
+    mode: budget.mode,
+    scope: budget.scope,
+    statusLabel: exceeded ? "warning" : "ok",
+    summary,
+    summaryLines,
+  };
+}
+
 function buildTraceSummaryLines(
   currentTrace: { totalMs: number },
   priorTrace: { totalMs: number },
   priorTag: { name: string },
   phaseRows: PhaseRow[],
+  budgetEvaluation: BudgetEvaluation | null = null,
 ): string[] {
-  if (phaseRows.length === 0) return [];
+  if (phaseRows.length === 0 && budgetEvaluation === null) return [];
 
   const lines = [
     "",
@@ -214,13 +395,17 @@ function buildTraceSummaryLines(
     "",
   ];
 
-  lines.push("| Phase | Current | Previous | Delta |");
-  lines.push("| --- | ---: | ---: | ---: |");
-  for (const row of phaseRows) {
-    lines.push(
-      `| ${row.label} | ${formatDuration(row.currentMs)} | ${formatDuration(row.priorMs)} | ${formatPhaseDelta(row.currentMs, row.priorMs)} |`,
-    );
+  if (phaseRows.length > 0) {
+    lines.push("| Phase | Current | Previous | Delta |");
+    lines.push("| --- | ---: | ---: | ---: |");
+    for (const row of phaseRows) {
+      lines.push(
+        `| ${row.label} | ${formatDuration(row.currentMs)} | ${formatDuration(row.priorMs)} | ${formatPhaseDelta(row.currentMs, row.priorMs)} |`,
+      );
+    }
   }
+
+  if (budgetEvaluation) lines.push(...budgetEvaluation.summaryLines);
 
   lines.push("");
   lines.push(`Trace artifact: \`${TRACE_ARTIFACT_NAME}\``);
@@ -313,49 +498,94 @@ async function readTraceSummaryFromRun(
 
 async function buildTraceTimingResult(
   deps: GitHubDeps,
-): Promise<{ traceTimingLine: string; traceSummaryLines: string[] }> {
+): Promise<{ traceTimingLine: string; traceSummaryLines: string[]; budgetExceeded: boolean }> {
   const { context } = deps;
   try {
     const currentTrace = await readTraceSummaryFromRun(deps, context.runId);
     if (currentTrace === null) {
       return traceTimingResult(`Trace: ⊘ ${TRACE_ARTIFACT_NAME} artifact not found for this run`);
     }
+    const budget = readOnboardPerformanceBudget();
 
     const priorTag = await resolvePriorReleaseTag(deps);
     if (!priorTag) {
+      const budgetEvaluation = evaluateOnboardPerformanceBudget({ budget, currentTrace });
       return traceTimingResult(
-        `Trace: cloud-onboard total ${formatDuration(currentTrace.totalMs)} (no prior release tag found)`,
+        [
+          `Trace: cloud-onboard total ${formatDuration(
+            currentTrace.totalMs,
+          )} (no prior release tag found)`,
+          budgetEvaluation?.summary,
+        ]
+          .filter(Boolean)
+          .join(" "),
+        budgetEvaluation?.summaryLines ?? [],
+        budgetEvaluation?.exceeded ?? false,
       );
     }
 
     const priorRun = await findLatestCompletedNightlyRunForReleaseTag(deps, priorTag);
     if (!priorRun) {
+      const budgetEvaluation = evaluateOnboardPerformanceBudget({ budget, currentTrace });
       return traceTimingResult(
-        `Trace: cloud-onboard total ${formatDuration(currentTrace.totalMs)} (no nightly-e2e run found for ${priorTag.name})`,
+        [
+          `Trace: cloud-onboard total ${formatDuration(
+            currentTrace.totalMs,
+          )} (no nightly-e2e run found for ${priorTag.name})`,
+          budgetEvaluation?.summary,
+        ]
+          .filter(Boolean)
+          .join(" "),
+        budgetEvaluation?.summaryLines ?? [],
+        budgetEvaluation?.exceeded ?? false,
       );
     }
 
     const priorTrace = await readTraceSummaryFromRun(deps, priorRun.id);
     if (priorTrace === null) {
+      const budgetEvaluation = evaluateOnboardPerformanceBudget({ budget, currentTrace });
       return traceTimingResult(
-        `Trace: cloud-onboard total ${formatDuration(currentTrace.totalMs)} (no ${TRACE_ARTIFACT_NAME} artifact found for ${priorTag.name})`,
+        [
+          `Trace: cloud-onboard total ${formatDuration(
+            currentTrace.totalMs,
+          )} (no ${TRACE_ARTIFACT_NAME} artifact found for ${priorTag.name})`,
+          budgetEvaluation?.summary,
+        ]
+          .filter(Boolean)
+          .join(" "),
+        budgetEvaluation?.summaryLines ?? [],
+        budgetEvaluation?.exceeded ?? false,
       );
     }
 
     const phaseRows = buildPhaseRows(currentTrace.phases, priorTrace.phases);
     const topPhaseChanges = formatTopPhaseChanges(phaseRows);
+    const budgetEvaluation = evaluateOnboardPerformanceBudget({
+      budget,
+      currentTrace,
+      priorTrace,
+      phaseRows,
+    });
     const traceLine = `Trace: cloud-onboard total ${formatDuration(currentTrace.totalMs)}, ${formatTraceDelta(currentTrace.totalMs, priorTrace.totalMs)} vs ${priorTag.name}.`;
     if (phaseRows.length === 0) {
-      return traceTimingResult(traceLine);
+      return traceTimingResult(
+        [traceLine, budgetEvaluation?.summary].filter(Boolean).join(" "),
+        budgetEvaluation?.summaryLines ?? [],
+        budgetEvaluation?.exceeded ?? false,
+      );
     }
 
     return traceTimingResult(
       [
         traceLine,
+        budgetEvaluation?.summary,
         `Top phase changes: ${topPhaseChanges}.`,
         "Full phase timing table is in the GitHub run summary.",
-      ].join(" "),
-      buildTraceSummaryLines(currentTrace, priorTrace, priorTag, phaseRows),
+      ]
+        .filter(Boolean)
+        .join(" "),
+      buildTraceSummaryLines(currentTrace, priorTrace, priorTag, phaseRows, budgetEvaluation),
+      budgetEvaluation?.exceeded ?? false,
     );
   } catch (error) {
     return traceTimingResult("Trace: ⊘ comparison unavailable");
@@ -364,13 +594,16 @@ async function buildTraceTimingResult(
 
 module.exports = {
   ONBOARD_PHASE_ORDER,
+  ONBOARD_PERFORMANCE_BUDGET_FILE,
   TRACE_SUMMARY_FILE,
   buildPhaseRows,
   buildTraceTimingResult,
   buildTraceSummaryLines,
+  evaluateOnboardPerformanceBudget,
   extractPhaseDurations,
   formatTraceDelta,
   formatTopPhaseChanges,
+  readOnboardPerformanceBudget,
   readTraceSummaryFromRun,
   resolvePriorReleaseTag,
   selectOnboardTrace,

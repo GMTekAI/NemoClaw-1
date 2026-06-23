@@ -2852,6 +2852,7 @@ jobs:
         with:
           persist-credentials: false
           sparse-checkout: |
+            ci/onboard-performance-budget.json
             scripts/scorecard
           sparse-checkout-cone-mode: false
 
@@ -2976,8 +2977,11 @@ jobs:
                   .map(([name]) => ({ name, url: null }))
                   .sort((a, b) => a.name.localeCompare(b.name));
 
-            const { traceTimingLine, traceSummaryLines } =
+            const { traceTimingLine, traceSummaryLines, budgetExceeded } =
               await traceTiming.buildTraceTimingResult({ github, context });
+            if (budgetExceeded) {
+              core.warning('Cloud onboard advisory performance budget exceeded; see scorecard summary for timing details.');
+            }
 
             // ── Build scorecard ─────────────────────────────────────
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;

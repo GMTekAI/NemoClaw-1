@@ -4,6 +4,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  applyDeterministicRecommendations,
+  requiresCloudOnboardE2e,
+} from "../tools/e2e-advisor/analyze.mts";
+import {
   collectRecommendedJobs,
   extractDispatchableJobs,
   planAutoDispatch,
@@ -338,5 +342,39 @@ describe("E2E advisor auto-dispatch planning", () => {
     },
   ])("rejects unsafe dispatch inputs %#", (inputs) => {
     expect(() => validateDispatchInputs(inputs)).toThrow(/Refusing to dispatch unsafe/);
+  });
+});
+
+describe("E2E advisor deterministic recommendations", () => {
+  it("requires cloud onboard E2E for onboard performance budget changes", () => {
+    expect(requiresCloudOnboardE2e(["ci/onboard-performance-budget.json"])).toBe(true);
+    expect(requiresCloudOnboardE2e(["scripts/scorecard/analyze-trace-timing.ts"])).toBe(true);
+    expect(requiresCloudOnboardE2e(["src/lib/onboard/tracing.ts"])).toBe(true);
+    expect(requiresCloudOnboardE2e(["docs/reference/commands.mdx"])).toBe(false);
+  });
+
+  it("adds cloud onboard E2E to required tests for timing-sensitive paths", () => {
+    const result = applyDeterministicRecommendations({
+      version: 1,
+      baseRef: "origin/main",
+      headRef: "HEAD",
+      changedFiles: ["scripts/scorecard/analyze-trace-timing.ts"],
+      classifiedDomains: [],
+      requiredTests: [],
+      optionalTests: [],
+      newE2eRecommendations: [],
+      noE2eReason: "No E2E required.",
+      confidence: "low",
+    });
+
+    expect(result.noE2eReason).toBeNull();
+    expect(result.confidence).toBe("medium");
+    expect(result.requiredTests).toEqual([
+      expect.objectContaining({
+        id: "cloud-onboard-e2e",
+        workflow: "nightly-e2e.yaml",
+        job: "cloud-onboard-e2e",
+      }),
+    ]);
   });
 });

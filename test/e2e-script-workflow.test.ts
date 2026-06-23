@@ -26,10 +26,23 @@ type TraceTimingAnalyzer = {
   buildTraceTimingResult: (deps: {
     context: Record<string, any>;
     github: Record<string, any>;
-  }) => Promise<{ traceTimingLine: string; traceSummaryLines: string[] }>;
+  }) => Promise<{ traceTimingLine: string; traceSummaryLines: string[]; budgetExceeded: boolean }>;
+  evaluateOnboardPerformanceBudget: (args: {
+    budget: unknown;
+    currentTrace: { totalMs: number };
+    priorTrace?: { totalMs: number };
+    phaseRows?: Array<{
+      label: string;
+      currentMs: number;
+      priorMs: number;
+      deltaAbsMs: number;
+      deltaMs?: number;
+    }>;
+  }) => { exceeded: boolean; summary: string; summaryLines: string[] } | null;
   formatTopPhaseChanges: (
     phaseRows: Array<{ label: string; currentMs: number; priorMs: number; deltaAbsMs: number }>,
   ) => string;
+  readOnboardPerformanceBudget: (rootDir?: string) => unknown;
   selectOnboardTrace: (
     jsonTexts: string[],
   ) => { totalMs: number; phases: Record<string, number> } | null;
@@ -700,6 +713,9 @@ describe("E2E reusable workflow contract", () => {
     const scorecardStep = nightlyWorkflow.jobs.scorecard.steps?.find(
       (step) => step.name === "Generate nightly scorecard",
     );
+    const scorecardCheckout = nightlyWorkflow.jobs.scorecard.steps?.find(
+      (step) => step.name === "Checkout scorecard builder",
+    );
     const phaseRows = traceTiming.buildPhaseRows(
       {
         "nemoclaw.onboard.phase.preflight": 1_000,
@@ -722,7 +738,12 @@ describe("E2E reusable workflow contract", () => {
     );
 
     expect(scorecardStep?.with?.script).toContain("scripts/scorecard/analyze-trace-timing.ts");
+    expect(scorecardCheckout?.with?.["sparse-checkout"]).toContain(
+      "ci/onboard-performance-budget.json",
+    );
     expect(scorecardStep?.with?.script).toContain("traceTiming.buildTraceTimingResult");
+    expect(scorecardStep?.with?.script).toContain("budgetExceeded");
+    expect(scorecardStep?.with?.script).toContain("core.warning");
     expect(phaseRows.map((row) => row.label)).toEqual(["preflight", "gateway", "sandbox"]);
     expect(traceTiming.formatTopPhaseChanges(phaseRows)).toBe(
       "sandbox -8.0s; gateway +2.0s; preflight -1.0s",
@@ -734,6 +755,42 @@ describe("E2E reusable workflow contract", () => {
     expect(summaryLines).toContain("| Phase | Current | Previous | Delta |");
     expect(summaryLines.join("\n")).toContain("Baseline: latest completed `nightly-e2e.yaml` run");
     expect(scorecardStep?.with?.script).toContain("lines.push(...traceSummaryLines)");
+  });
+
+  it("evaluates cloud onboard timing against the advisory performance budget", () => {
+    const budget = traceTiming.readOnboardPerformanceBudget();
+    const phaseRows = traceTiming.buildPhaseRows(
+      {
+        "nemoclaw.onboard.phase.preflight": 90_000,
+        "nemoclaw.onboard.phase.gateway": 60_000,
+        "nemoclaw.onboard.phase.sandbox": 700_000,
+      },
+      {
+        "nemoclaw.onboard.phase.preflight": 20_000,
+        "nemoclaw.onboard.phase.gateway": 60_000,
+        "nemoclaw.onboard.phase.sandbox": 500_000,
+      },
+    );
+
+    const warning = traceTiming.evaluateOnboardPerformanceBudget({
+      budget,
+      currentTrace: { totalMs: 850_000 },
+      priorTrace: { totalMs: 580_000 },
+      phaseRows,
+    });
+    const ok = traceTiming.evaluateOnboardPerformanceBudget({
+      budget,
+      currentTrace: { totalMs: 100_000 },
+      priorTrace: { totalMs: 95_000 },
+      phaseRows: [],
+    });
+
+    expect(warning).toMatchObject({ exceeded: true });
+    expect(warning?.summary).toContain("Budget: advisory warning");
+    expect(warning?.summaryLines.join("\n")).toContain("total 14m 10.0s exceeds warm budget");
+    expect(warning?.summaryLines.join("\n")).toContain("phase regressions");
+    expect(ok).toMatchObject({ exceeded: false });
+    expect(ok?.summary).toContain("Budget: advisory OK");
   });
 
   it("keeps trace timing analysis limited to the trusted summary schema", () => {
@@ -812,7 +869,9 @@ describe("E2E reusable workflow contract", () => {
         github: traceGithubFixture({ summariesByRunId: { 1: timingSummary() } }),
       }),
     ).resolves.toMatchObject({
-      traceTimingLine: "Trace: cloud-onboard total 1.0s (no prior release tag found)",
+      traceTimingLine: expect.stringContaining(
+        "Trace: cloud-onboard total 1.0s (no prior release tag found)",
+      ),
     });
 
     await expect(
@@ -824,7 +883,9 @@ describe("E2E reusable workflow contract", () => {
         }),
       }),
     ).resolves.toMatchObject({
-      traceTimingLine: "Trace: cloud-onboard total 1.0s (no nightly-e2e run found for v0.0.1)",
+      traceTimingLine: expect.stringContaining(
+        "Trace: cloud-onboard total 1.0s (no nightly-e2e run found for v0.0.1)",
+      ),
     });
 
     await expect(
@@ -837,8 +898,9 @@ describe("E2E reusable workflow contract", () => {
         }),
       }),
     ).resolves.toMatchObject({
-      traceTimingLine:
+      traceTimingLine: expect.stringContaining(
         "Trace: cloud-onboard total 1.0s (no cloud-onboard-traces artifact found for v0.0.1)",
+      ),
     });
 
     await expect(
@@ -851,8 +913,9 @@ describe("E2E reusable workflow contract", () => {
         }),
       }),
     ).resolves.toMatchObject({
-      traceTimingLine:
+      traceTimingLine: expect.stringContaining(
         "Trace: cloud-onboard total 1.0s (no cloud-onboard-traces artifact found for v0.0.1)",
+      ),
     });
   });
 
@@ -869,10 +932,10 @@ describe("E2E reusable workflow contract", () => {
       }),
     });
 
-    expect(result.traceTimingLine).toBe(
+    expect(result.traceTimingLine).toContain(
       "Trace: cloud-onboard total 1.0s, decreased -1.0s (-50.0%) vs v0.0.1.",
     );
-    expect(result.traceSummaryLines).toEqual([]);
+    expect(result.traceSummaryLines.join("\n")).toContain("Onboard Performance Budget");
   });
 
   it("keeps env_json valid and aligned with target-ref installs", () => {

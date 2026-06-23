@@ -7,7 +7,8 @@ The E2E Advisor is an SDK-powered PR reviewer for NemoClaw E2E coverage. It runs
 `NVIDIA/NemoClaw` pull requests, asks the advisor model to inspect the PR diff and repository, and posts a sticky
 PR comment with required/optional E2E recommendations.
 
-The advisor recommends E2E coverage from the PR diff and repository context rather than a fixed path-rule table. The advisor model is expected to inspect existing E2E workflows, scripts, source files, and nearby tests before recommending coverage.
+The advisor recommends E2E coverage from the PR diff and repository context. The advisor model is expected to inspect existing E2E workflows, scripts, source files, and nearby tests before recommending coverage.
+After model output is normalized, the analyzer applies a small deterministic safety net for timing-sensitive onboard infrastructure: changes to onboard, trace timing, scorecard analysis, the E2E runner, or the cloud-onboard E2E path require `cloud-onboard-e2e` so PRs refresh the trusted cloud-onboard trace timing signal.
 
 ## Workflow
 

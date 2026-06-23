@@ -32,6 +32,26 @@ Phase deltas and the full summary table are reported only when the same trace sp
 If phase names change between runs, the scorecard reports only the total onboard duration change.
 If the artifact, prior release tag, prior run, or matching trace data is unavailable, the scorecard keeps the nightly result best-effort and reports the missing comparison in the Slack summary instead of failing CI.
 
+## Onboard Performance Budget
+
+The nightly scorecard also evaluates the trusted `cloud-onboard-e2e` timing summary against `ci/onboard-performance-budget.json`.
+This budget is an advisory maintainer signal for the warm-system cloud onboard path, not a merge-blocking gate.
+It is intended to catch regressions where cached images, dependencies, and model artifacts should already be available or should not dominate the run.
+
+The initial budget separates three signals:
+
+- `totalBudgetMs`: absolute warm-system wall-clock target for `summary.total_duration_ms`
+- `regressionWarning`: minimum absolute and percentage increase versus the prior release baseline before total duration is called out
+- `phaseRegressionWarning`: minimum absolute and percentage increase before matching `nemoclaw.onboard.phase.*` spans are listed as phase diagnostics
+
+Cold image pulls, first-time model downloads, provider outages, and runner or network incidents can still affect total time.
+Those cases remain advisory-only until trace metadata can classify them reliably.
+When the budget is exceeded, the scorecard emits a GitHub Actions warning and adds budget details to the GitHub job summary.
+Slack stays compact and points maintainers to the run summary for the full phase table.
+
+For PRs, E2E Advisor recommends `cloud-onboard-e2e` for changes that can affect onboard timing, trace collection, scorecard analysis, or the E2E runner path.
+PR Review Advisor may summarize the resulting evidence, but deterministic threshold evaluation belongs to the scorecard analyzer.
+
 ## Slack Scorecard Configuration
 
 `nightly-e2e.yaml` posts the scorecard through repository Actions secrets:

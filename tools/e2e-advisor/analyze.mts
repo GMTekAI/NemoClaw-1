@@ -35,6 +35,26 @@ const root = process.cwd();
 const ADVISOR_PROVIDER = DEFAULT_ADVISOR_PROVIDER;
 const ADVISOR_MODEL = DEFAULT_ADVISOR_MODEL;
 const ADVISOR_CREDENTIAL_ENV = ["E2E", "ADVISOR", "API", "KEY"].join("_");
+const CLOUD_ONBOARD_E2E_RECOMMENDATION: AdvisorTest = {
+  id: "cloud-onboard-e2e",
+  workflow: "nightly-e2e.yaml",
+  job: "cloud-onboard-e2e",
+  script: "test/e2e/test-cloud-onboard-e2e.sh",
+  cost: "high",
+  runner: "ubuntu-latest via reusable e2e-script workflow",
+  reason:
+    "Changed onboard, trace timing, scorecard, or E2E workflow code can affect cloud onboard wall-clock behavior and should refresh the trusted cloud-onboard trace timing signal.",
+};
+const CLOUD_ONBOARD_E2E_PATTERNS: readonly RegExp[] = [
+  /^src\/lib\/onboard(?:\.ts|\/)/,
+  /^src\/lib\/trace\.ts$/,
+  /^scripts\/scorecard\/analyze-trace-timing\.ts$/,
+  /^ci\/onboard-performance-budget\.json$/,
+  /^\.github\/actions\/run-e2e-script\//,
+  /^\.github\/workflows\/nightly-e2e\.yaml$/,
+  /^test\/e2e\/test-cloud-onboard-e2e\.sh$/,
+  /^test\/e2e-scenario\/live\/cloud-onboard\.test\.ts$/,
+];
 
 type ArtifactPaths = AdvisorArtifactPaths;
 
@@ -333,7 +353,27 @@ function normalizeAdvisorResult(result: unknown, metadata: AdvisorMetadata): Adv
     normalized.dispatchHint = dispatchHint;
   }
 
-  return normalized;
+  return applyDeterministicRecommendations(normalized);
+}
+
+export function applyDeterministicRecommendations(result: AdvisorResult): AdvisorResult {
+  if (!requiresCloudOnboardE2e(result.changedFiles)) return result;
+  if (result.requiredTests.some((test) => test.id === CLOUD_ONBOARD_E2E_RECOMMENDATION.id)) {
+    return result;
+  }
+
+  return {
+    ...result,
+    requiredTests: [...result.requiredTests, CLOUD_ONBOARD_E2E_RECOMMENDATION],
+    noE2eReason: null,
+    confidence: result.confidence === "low" ? "medium" : result.confidence,
+  };
+}
+
+export function requiresCloudOnboardE2e(changedFiles: string[]): boolean {
+  return changedFiles.some((file) =>
+    CLOUD_ONBOARD_E2E_PATTERNS.some((pattern) => pattern.test(file)),
+  );
 }
 
 function sanitizeDomains(value: unknown): AdvisorDomain[] {
