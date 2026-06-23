@@ -829,6 +829,14 @@ describe("E2E reusable workflow contract", () => {
   it("reports malformed onboard performance budget config instead of silently disabling the signal", async () => {
     const tempRoot = mkdtempSync(path.join(tmpdir(), "nemoclaw-budget-config-"));
     const previousWorkspace = process.env.GITHUB_WORKSPACE;
+    const restoreWorkspace =
+      previousWorkspace === undefined
+        ? () => {
+            delete process.env.GITHUB_WORKSPACE;
+          }
+        : () => {
+            process.env.GITHUB_WORKSPACE = previousWorkspace;
+          };
     try {
       mkdirSync(path.join(tempRoot, "ci"));
       writeFileSync(
@@ -850,11 +858,7 @@ describe("E2E reusable workflow contract", () => {
         "the budget config is invalid or unreadable",
       );
     } finally {
-      if (previousWorkspace === undefined) {
-        delete process.env.GITHUB_WORKSPACE;
-      } else {
-        process.env.GITHUB_WORKSPACE = previousWorkspace;
-      }
+      restoreWorkspace();
       rmSync(tempRoot, { recursive: true, force: true });
     }
   });
