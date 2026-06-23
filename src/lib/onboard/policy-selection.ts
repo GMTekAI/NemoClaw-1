@@ -405,6 +405,11 @@ async function setupPoliciesWithSelectionInner(
 
     if (policyMode === "skip" || policyMode === "none" || policyMode === "no") {
       deps.note("  [non-interactive] Skipping policy presets.");
+      if (!deps.waitForSandboxReady(sandboxName)) {
+        console.error(`  Sandbox '${sandboxName}' was not ready for policy application.`);
+        process.exit(1);
+      }
+      applyGeneratedMessagingPolicyTemplatesFromRegistry(sandboxName);
       return [];
     }
 

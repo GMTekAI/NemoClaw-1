@@ -5,7 +5,7 @@
 // Verifies that selectPolicyTier and setupPoliciesWithSelection wire correctly.
 
 import assert from "node:assert/strict";
-import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { type SpawnSyncReturns, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -413,9 +413,62 @@ console.log = (...args) => lines.push(args.join(" "));
       buildPreamble({ tierEnv: "open", policyMode: "skip" }) +
       String.raw`
 const policies = require(${policiesPath});
+const generatedPolicyContent = "preset:\n  name: mattermost\nnetwork_policies:\n  mattermost: {}\n";
+const appliedContentCalls = [];
 policies.applyPreset = () => {};
 policies.applyPresets = () => true;
+policies.applyPresetContent = (sandboxName, presetName, content, options) => {
+  appliedContentCalls.push({ sandboxName, presetName, content, options });
+  return true;
+};
 policies.getAppliedPresets = () => [];
+registry.getSandbox = () => ({
+  name: "test-sb",
+  model: null,
+  provider: null,
+  messaging: {
+    schemaVersion: 1,
+    plan: {
+      schemaVersion: 1,
+      sandboxName: "test-sb",
+      agent: "openclaw",
+      workflow: "onboard",
+      channels: [
+        {
+          channelId: "mattermost",
+          displayName: "Mattermost",
+          authMode: "token-paste",
+          active: true,
+          selected: true,
+          configured: true,
+          disabled: false,
+          inputs: [],
+          hooks: [],
+        },
+      ],
+      disabledChannels: [],
+      credentialBindings: [],
+      networkPolicy: {
+        presets: [],
+        entries: [],
+        templates: [
+          {
+            channelId: "mattermost",
+            presetName: "mattermost",
+            templateFile: "mattermost.yaml",
+            sourceInput: "baseUrl",
+            policyKeys: ["mattermost"],
+            content: generatedPolicyContent,
+          },
+        ],
+      },
+      agentRender: [],
+      buildSteps: [],
+      stateUpdates: [],
+      healthChecks: [],
+    },
+  },
+});
 
 const lines = [];
 const origLog = console.log;
@@ -425,10 +478,10 @@ console.log = (...args) => lines.push(args.join(" "));
   try {
     const applied = await setupPoliciesWithSelection("test-sb", {});
     console.log = origLog;
-    origLog(JSON.stringify({ applied, updates }));
+    origLog(JSON.stringify({ applied, updates, appliedContentCalls }));
   } catch (err) {
     console.log = origLog;
-    origLog(JSON.stringify({ error: err.message, updates }));
+    origLog(JSON.stringify({ error: err.message, updates, appliedContentCalls }));
   }
 })();
 `;
@@ -447,6 +500,14 @@ console.log = (...args) => lines.push(args.join(" "));
     assert.equal(tierUpdate.policyTier, "open");
     // With POLICY_MODE=skip, applied presets list is empty
     assert.deepEqual(payload.applied, []);
+    assert.deepEqual(payload.appliedContentCalls, [
+      {
+        sandboxName: "test-sb",
+        presetName: "mattermost",
+        content: "preset:\n  name: mattermost\nnetwork_policies:\n  mattermost: {}\n",
+        options: { custom: { sourcePath: "messaging:mattermost" } },
+      },
+    ]);
   });
 
   it("omits Brave from policy preset selection when web search is unsupported", () => {

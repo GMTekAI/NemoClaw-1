@@ -18,7 +18,6 @@ function runScript(scriptBody: string): SpawnSyncReturns<string> {
     cwd: repoRoot,
     encoding: "utf-8",
     env: {
-      ...process.env,
       HOME: tmpDir,
       NEMOCLAW_NON_INTERACTIVE: "1",
       NEMOCLAW_SKIP_MATTERMOST_AUTH_VALIDATION: "1",
@@ -182,15 +181,12 @@ describe("channel preset source-of-truth", () => {
         .filter((manifest) => (manifest.policyTemplates?.length ?? 0) > 0)
         .map((manifest) => manifest.id),
     );
-    const failures: string[] = [];
-    for (const name of knownChannelNames()) {
-      if (generatedPolicyChannels.has(name)) continue;
-      const content = loadPreset(name);
-      const keys = parsePresetPolicyKeys(content);
-      if (content === null || keys.length === 0) {
-        failures.push(name);
-      }
-    }
+    const failures = knownChannelNames()
+      .filter((name) => !generatedPolicyChannels.has(name))
+      .map((name) => ({ name, content: loadPreset(name) }))
+      .map(({ name, content }) => ({ name, content, keys: parsePresetPolicyKeys(content) }))
+      .filter(({ content, keys }) => content === null || keys.length === 0)
+      .map(({ name }) => name);
     assert.deepEqual(failures, []);
   });
 });

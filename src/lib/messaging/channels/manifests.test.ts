@@ -737,7 +737,7 @@ describe("built-in channel manifests", () => {
     });
     expect(renderJson(mattermostManifest)).not.toContain('"path":"mattermost"');
     expect(renderJson(mattermostManifest)).not.toContain('"path":"platforms.mattermost"');
-    expect("agentPackages" in mattermostManifest).toBe(false);
+    expect(mattermostManifest.agentPackages).toEqual([]);
     expectTokenPasteEnrollHook(mattermostManifest, ["botToken"]);
     expectConfigPromptEnrollHook(mattermostManifest, [
       "baseUrl",

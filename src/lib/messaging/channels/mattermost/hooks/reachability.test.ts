@@ -130,6 +130,50 @@ describe("Mattermost reachability hook implementation", () => {
     ]);
   });
 
+  it.each([
+    ["relative URL", "chat.example.com", "requires an absolute http:// or https:// baseUrl"],
+    ["non-http scheme", "ftp://chat.example.com", "baseUrl must use http:// or https://"],
+    [
+      "embedded credentials",
+      "https://bot:token@chat.example.com",
+      "baseUrl must not include credentials",
+    ],
+    [
+      "query string",
+      "https://chat.example.com?team=dev",
+      "baseUrl must not include query strings or fragments",
+    ],
+    [
+      "fragment",
+      "https://chat.example.com#main",
+      "baseUrl must not include query strings or fragments",
+    ],
+  ])("rejects unsafe Mattermost base URLs before fetching: %s", async (_name, baseUrl, error) => {
+    const urls: string[] = [];
+    const registry = new MessagingHookRegistry([
+      {
+        id: MATTERMOST_REACHABILITY_HOOK_HANDLER_ID,
+        handler: createMattermostReachabilityHook({
+          fetch: async (url) => {
+            urls.push(url);
+            throw new Error("fetch should not run");
+          },
+        }),
+      },
+    ]);
+
+    await expect(
+      runMessagingHook(MATTERMOST_REACHABILITY_HOOK, registry, {
+        channelId: "mattermost",
+        inputs: {
+          botToken: "mattermost-token",
+          baseUrl,
+        },
+      }),
+    ).rejects.toThrow(error);
+    expect(urls).toEqual([]);
+  });
+
   it("honors the explicit skip env without calling Mattermost", async () => {
     const urls: string[] = [];
     const registry = new MessagingHookRegistry([

@@ -18,6 +18,10 @@ import { ManifestCompiler } from "./manifest-compiler";
 
 const ALL_CHANNELS = ["telegram", "discord", "wechat", "slack", "whatsapp", "mattermost"] as const;
 const HERMES_CHANNELS = ["telegram", "discord", "wechat", "slack", "whatsapp"] as const;
+type JsonRenderPlan = Extract<
+  SandboxMessagingPlan["agentRender"][number],
+  { kind: "json-fragment" }
+>;
 const TEST_CREDENTIALS: Readonly<Record<string, string>> = {
   TELEGRAM_BOT_TOKEN: "123456:test-telegram-token",
   DISCORD_BOT_TOKEN: "test-discord-token",
@@ -264,9 +268,6 @@ describe("ManifestCompiler", () => {
       (render) =>
         render.channelId === "mattermost" && render.renderId === "mattermost-openclaw-channel",
     );
-    if (mattermostRender?.kind !== "json-fragment") {
-      throw new Error("missing Mattermost OpenClaw json-fragment render");
-    }
     expect(mattermostRender).toMatchObject({
       kind: "json-fragment",
       path: "channels.mattermost",
@@ -283,12 +284,13 @@ describe("ManifestCompiler", () => {
         },
       },
     });
-    expect(mattermostRender?.value).toMatchObject({
+    const mattermostRenderValue = (mattermostRender as JsonRenderPlan | undefined)?.value;
+    expect(mattermostRenderValue).toMatchObject({
       allowFrom: ["user-a", "user-b"],
       groupAllowFrom: ["user-a", "user-b"],
     });
-    expect(mattermostRender?.value).toHaveProperty("groups");
-    expect((mattermostRender?.value as { groups?: unknown } | undefined)?.groups).toEqual({
+    expect(mattermostRenderValue).toHaveProperty("groups");
+    expect((mattermostRenderValue as { groups?: unknown } | undefined)?.groups).toEqual({
       "town-square": {
         requireMention: true,
       },

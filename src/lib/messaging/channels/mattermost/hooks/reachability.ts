@@ -43,13 +43,14 @@ export function createMattermostReachabilityHook(
     }
 
     const token = normalizeInput(context.inputs?.botToken);
-    const baseUrl = normalizeMattermostBaseUrl(normalizeInput(context.inputs?.baseUrl));
+    const rawBaseUrl = normalizeInput(context.inputs?.baseUrl);
     if (!token) {
       throw new Error("Mattermost reachability check requires botToken.");
     }
-    if (!baseUrl) {
+    if (!rawBaseUrl) {
       throw new Error("Mattermost reachability check requires baseUrl.");
     }
+    const baseUrl = normalizeMattermostBaseUrl(rawBaseUrl);
 
     const log = options.log ?? console.log;
     const response = await fetchMattermostMe({ baseUrl, token }, options).catch((error) => {
@@ -153,7 +154,27 @@ async function fetchWithTimeout(
 }
 
 function normalizeMattermostBaseUrl(value: string): string {
-  return value.replace(/\/+$/g, "").replace(/\/api\/v4$/i, "");
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(
+      "Mattermost reachability check requires an absolute http:// or https:// baseUrl.",
+    );
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("Mattermost reachability check baseUrl must use http:// or https://.");
+  }
+  if (url.username || url.password) {
+    throw new Error("Mattermost reachability check baseUrl must not include credentials.");
+  }
+  if (url.search || url.hash) {
+    throw new Error(
+      "Mattermost reachability check baseUrl must not include query strings or fragments.",
+    );
+  }
+  const basePath = url.pathname.replace(/\/+$/g, "").replace(/\/api\/v4$/i, "");
+  return `${url.origin}${basePath}`;
 }
 
 function normalizeInput(value: unknown): string {

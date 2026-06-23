@@ -143,6 +143,7 @@ export const mattermostManifest = {
       },
     },
   },
+  agentPackages: [],
   state: {
     persist: {
       mattermostConfig: ["baseUrl", "allowedChannels", "requireMention"],
