@@ -84,7 +84,9 @@ function expectEd25519BundleSignsAndVerifies(paths: {
   expect(privateKey.asymmetricKeyType).toBe("ed25519");
   expect(publicKey.asymmetricKeyType).toBe("ed25519");
   expect(fs.readFileSync(paths.kidPath, "utf-8").trim()).not.toBe("");
-  expect(verifyPayload(null, payload, publicKey, signPayload(null, payload, privateKey))).toBe(true);
+  expect(verifyPayload(null, payload, publicKey, signPayload(null, payload, privateKey))).toBe(
+    true,
+  );
 }
 
 function decodeJwtPart(part: string): Record<string, unknown> {

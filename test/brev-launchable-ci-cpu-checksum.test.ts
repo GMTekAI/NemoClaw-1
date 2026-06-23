@@ -176,10 +176,7 @@ exit 0
   };
 }
 
-function runLaunchable(options: {
-  checksum: "match" | "mismatch";
-  openshellVersion?: string;
-}) {
+function runLaunchable(options: { checksum: "match" | "mismatch"; openshellVersion?: string }) {
   const fake = makeFakeSystem(options);
   const result = spawnSync("bash", [SCRIPT], {
     encoding: "utf-8",
@@ -197,10 +194,7 @@ function runLaunchable(options: {
   return { fake, result };
 }
 
-function combinedLaunchableOutput(
-  result: ReturnType<typeof spawnSync>,
-  launchLog: string,
-): string {
+function combinedLaunchableOutput(result: ReturnType<typeof spawnSync>, launchLog: string): string {
   return [
     result.stdout || "",
     result.stderr || "",
