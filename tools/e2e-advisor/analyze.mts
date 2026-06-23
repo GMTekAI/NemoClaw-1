@@ -358,7 +358,7 @@ function normalizeAdvisorResult(result: unknown, metadata: AdvisorMetadata): Adv
 
 export function applyDeterministicRecommendations(result: AdvisorResult): AdvisorResult {
   if (!requiresCloudOnboardE2e(result.changedFiles)) return result;
-  if (result.requiredTests.some((test) => test.id === CLOUD_ONBOARD_E2E_RECOMMENDATION.id)) {
+  if (result.requiredTests.some(isCloudOnboardE2eRecommendation)) {
     return result;
   }
 
@@ -368,6 +368,14 @@ export function applyDeterministicRecommendations(result: AdvisorResult): Adviso
     noE2eReason: null,
     confidence: result.confidence === "low" ? "medium" : result.confidence,
   };
+}
+
+function isCloudOnboardE2eRecommendation(test: AdvisorTest): boolean {
+  return (
+    test.id === CLOUD_ONBOARD_E2E_RECOMMENDATION.id ||
+    (test.workflow === CLOUD_ONBOARD_E2E_RECOMMENDATION.workflow &&
+      test.job === CLOUD_ONBOARD_E2E_RECOMMENDATION.job)
+  );
 }
 
 export function requiresCloudOnboardE2e(changedFiles: string[]): boolean {

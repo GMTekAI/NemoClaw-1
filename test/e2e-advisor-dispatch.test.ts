@@ -377,4 +377,33 @@ describe("E2E advisor deterministic recommendations", () => {
       }),
     ]);
   });
+
+  it("does not duplicate cloud onboard E2E when workflow and job already match", () => {
+    const result = applyDeterministicRecommendations({
+      version: 1,
+      baseRef: "origin/main",
+      headRef: "HEAD",
+      changedFiles: ["scripts/scorecard/analyze-trace-timing.ts"],
+      classifiedDomains: [],
+      requiredTests: [
+        {
+          workflow: "nightly-e2e.yaml",
+          job: "cloud-onboard-e2e",
+          reason: "Advisor already selected the cloud onboard job.",
+        },
+      ],
+      optionalTests: [],
+      newE2eRecommendations: [],
+      noE2eReason: null,
+      confidence: "high",
+    });
+
+    expect(result.requiredTests).toHaveLength(1);
+    expect(result.requiredTests[0]).toEqual(
+      expect.objectContaining({
+        workflow: "nightly-e2e.yaml",
+        job: "cloud-onboard-e2e",
+      }),
+    );
+  });
 });

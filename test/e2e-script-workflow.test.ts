@@ -2,7 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -29,7 +37,7 @@ type TraceTimingAnalyzer = {
   }) => Promise<{ traceTimingLine: string; traceSummaryLines: string[]; budgetExceeded: boolean }>;
   evaluateOnboardPerformanceBudget: (args: {
     budget: unknown;
-    currentTrace: { totalMs: number };
+    currentTrace: { totalMs: number; phases?: Record<string, number> };
     priorTrace?: { totalMs: number };
     phaseRows?: Array<{
       label: string;
@@ -791,6 +799,64 @@ describe("E2E reusable workflow contract", () => {
     expect(warning?.summaryLines.join("\n")).toContain("phase regressions");
     expect(ok).toMatchObject({ exceeded: false });
     expect(ok?.summary).toContain("Budget: advisory OK");
+  });
+
+  it("lists current slowest onboard phases when total budget is exceeded without a prior baseline", async () => {
+    const result = await traceTiming.buildTraceTimingResult({
+      context: { repo: { owner: "NVIDIA", repo: "NemoClaw" }, runId: 1, ref: "refs/heads/main" },
+      github: traceGithubFixture({
+        summariesByRunId: {
+          1: timingSummary({
+            "nemoclaw.onboard.phase.preflight": 90_000,
+            "nemoclaw.onboard.phase.gateway": 60_000,
+            "nemoclaw.onboard.phase.provider_selection": 1_000,
+            "nemoclaw.onboard.phase.inference": 10_000,
+            "nemoclaw.onboard.phase.sandbox": 700_000,
+          }),
+        },
+      }),
+    });
+
+    const summary = result.traceSummaryLines.join("\n");
+    expect(result.budgetExceeded).toBe(true);
+    expect(result.traceTimingLine).toContain("Budget: advisory warning");
+    expect(summary).toContain("Current slowest phases:");
+    expect(summary).toContain("- sandbox: 11m 40.0s");
+    expect(summary).toContain("- preflight: 1m 30.0s");
+    expect(summary).toContain("- gateway: 1m 0.0s");
+  });
+
+  it("reports malformed onboard performance budget config instead of silently disabling the signal", async () => {
+    const tempRoot = mkdtempSync(path.join(tmpdir(), "nemoclaw-budget-config-"));
+    const previousWorkspace = process.env.GITHUB_WORKSPACE;
+    try {
+      mkdirSync(path.join(tempRoot, "ci"));
+      writeFileSync(
+        path.join(tempRoot, "ci", "onboard-performance-budget.json"),
+        "{not-json",
+        "utf8",
+      );
+      process.env.GITHUB_WORKSPACE = tempRoot;
+
+      const result = await traceTiming.buildTraceTimingResult({
+        context: { repo: { owner: "NVIDIA", repo: "NemoClaw" }, runId: 1, ref: "refs/heads/main" },
+        github: traceGithubFixture({ summariesByRunId: { 1: timingSummary() } }),
+      });
+
+      expect(result.budgetExceeded).toBe(true);
+      expect(result.traceTimingLine).toContain("Trace: cloud-onboard total 1.0s");
+      expect(result.traceTimingLine).toContain("Budget: advisory warning");
+      expect(result.traceSummaryLines.join("\n")).toContain(
+        "the budget config is invalid or unreadable",
+      );
+    } finally {
+      if (previousWorkspace === undefined) {
+        delete process.env.GITHUB_WORKSPACE;
+      } else {
+        process.env.GITHUB_WORKSPACE = previousWorkspace;
+      }
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("keeps trace timing analysis limited to the trusted summary schema", () => {

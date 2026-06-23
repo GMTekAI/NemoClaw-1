@@ -81,6 +81,10 @@ type BudgetEvaluation = {
   summaryLines: string[];
 };
 
+type BudgetLoadResult =
+  | { status: "loaded"; budget: OnboardPerformanceBudget }
+  | { status: "unavailable"; reason: "missing" | "invalid" };
+
 type GitHubDeps = {
   github: any;
   context: any;
@@ -203,12 +207,19 @@ function normalizeOnboardPerformanceBudget(value: unknown): OnboardPerformanceBu
 
 function readOnboardPerformanceBudget(
   rootDir = process.env.GITHUB_WORKSPACE || process.cwd(),
-): OnboardPerformanceBudget | null {
+): BudgetLoadResult {
+  const filePath = path.join(rootDir, ONBOARD_PERFORMANCE_BUDGET_FILE);
+  if (!fs.existsSync(filePath)) {
+    return { status: "unavailable", reason: "missing" };
+  }
   try {
-    const text = fs.readFileSync(path.join(rootDir, ONBOARD_PERFORMANCE_BUDGET_FILE), "utf8");
-    return normalizeOnboardPerformanceBudget(JSON.parse(text));
+    const text = fs.readFileSync(filePath, "utf8");
+    const budget = normalizeOnboardPerformanceBudget(JSON.parse(text));
+    return budget === null
+      ? { status: "unavailable", reason: "invalid" }
+      : { status: "loaded", budget };
   } catch {
-    return null;
+    return { status: "unavailable", reason: "invalid" };
   }
 }
 
@@ -279,6 +290,14 @@ function formatTopPhaseChanges(phaseRows: PhaseRow[]): string {
     .join("; ");
 }
 
+function currentPhaseRows(
+  phases: Record<string, number> | undefined,
+): Array<{ label: string; ms: number }> {
+  return ONBOARD_PHASE_ORDER.filter((name) => phases?.[name] !== undefined)
+    .map((name) => ({ label: phaseLabel(name), ms: phases?.[name] ?? 0 }))
+    .sort((a, b) => b.ms - a.ms || a.label.localeCompare(b.label));
+}
+
 function percentDelta(currentMs: number, priorMs: number): number {
   return priorMs > 0 ? ((currentMs - priorMs) / priorMs) * 100 : 0;
 }
@@ -296,15 +315,42 @@ function evaluateOnboardPerformanceBudget({
   priorTrace,
   phaseRows,
 }: {
-  budget: OnboardPerformanceBudget | null;
-  currentTrace: { totalMs: number };
+  budget: BudgetLoadResult | OnboardPerformanceBudget | null;
+  currentTrace: { totalMs: number; phases?: Record<string, number> };
   priorTrace?: { totalMs: number };
   phaseRows?: PhaseRow[];
 }): BudgetEvaluation | null {
   if (budget === null) return null;
+  if ("status" in budget) {
+    if (budget.status === "unavailable") {
+      const reason =
+        budget.reason === "missing"
+          ? "the budget config was not found"
+          : "the budget config is invalid or unreadable";
+      return {
+        exceeded: true,
+        mode: "advisory",
+        scope: "cloud-onboard-e2e warm-system",
+        statusLabel: "warning",
+        summary: `Budget: advisory warning - ${ONBOARD_PERFORMANCE_BUDGET_FILE} unavailable; ${reason}.`,
+        summaryLines: [
+          "",
+          "### Onboard Performance Budget",
+          "",
+          "Status: **Advisory warning**",
+          `Config: \`${ONBOARD_PERFORMANCE_BUDGET_FILE}\``,
+          `Finding: ${reason}.`,
+          "",
+          "This signal is advisory: it surfaces warm-onboard timing regressions without failing the scorecard job.",
+        ],
+      };
+    }
+    budget = budget.budget;
+  }
 
   const warnings: string[] = [];
-  if (currentTrace.totalMs > budget.totalBudgetMs) {
+  const totalBudgetExceeded = currentTrace.totalMs > budget.totalBudgetMs;
+  if (totalBudgetExceeded) {
     warnings.push(
       `total ${formatDuration(currentTrace.totalMs)} exceeds warm budget ${formatDuration(
         budget.totalBudgetMs,
@@ -326,6 +372,7 @@ function evaluateOnboardPerformanceBudget({
 
   const phaseWarnings = (phaseRows ?? [])
     .filter((row) => exceedsThreshold(row.currentMs, row.priorMs, budget.phaseRegressionWarning))
+    // Phase warnings only include positive regressions, so signed delta keeps the largest slowdown first.
     .sort((a, b) => (b.deltaMs ?? 0) - (a.deltaMs ?? 0) || a.label.localeCompare(b.label))
     .slice(0, 3);
 
@@ -361,6 +408,16 @@ function evaluateOnboardPerformanceBudget({
     summaryLines.push("Advisory findings:");
     for (const warning of warnings) {
       summaryLines.push(`- ${warning}`);
+    }
+  }
+  if (totalBudgetExceeded) {
+    const slowestPhases = currentPhaseRows(currentTrace.phases).slice(0, 3);
+    if (slowestPhases.length > 0) {
+      summaryLines.push("");
+      summaryLines.push("Current slowest phases:");
+      for (const phase of slowestPhases) {
+        summaryLines.push(`- ${phase.label}: ${formatDuration(phase.ms)}`);
+      }
     }
   }
   summaryLines.push("");
