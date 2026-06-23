@@ -144,16 +144,39 @@ function validateOpenShellStyleSandboxJwtSignature(options: {
 
 type OpenShell067Principal = "local-dev-user" | "sandbox";
 type OpenShell067MethodMode = "user" | "sandbox" | "dual" | "unauthenticated";
+type OpenShell067TokenPrincipal = OpenShell067Principal | "invalid-token" | null;
 type OpenShell067RouterDecision = {
   status: "ok" | "unauthenticated" | "permission_denied";
   principal?: OpenShell067Principal;
   reason?: string;
 };
 
+const OPENSHELL_067_METHOD_MODES: Record<string, OpenShell067MethodMode> = {
+  [USER_CALLABLE_METHOD]: "user",
+  [SANDBOX_ONLY_METHOD]: "sandbox",
+};
+
 function openShell067MethodMode(methodPath: string): OpenShell067MethodMode {
-  if (methodPath === USER_CALLABLE_METHOD) return "user";
-  if (methodPath === SANDBOX_ONLY_METHOD) return "sandbox";
-  throw new Error(`OpenShell 0.0.67 auth contract fixture missing method: ${methodPath}`);
+  const mode = OPENSHELL_067_METHOD_MODES[methodPath];
+  expect(
+    mode,
+    `OpenShell 0.0.67 auth contract fixture missing method: ${methodPath}`,
+  ).toBeDefined();
+  return mode ?? "user";
+}
+
+function openShell067SandboxPrincipalForToken(options: {
+  token: string;
+  publicKeyPath: string;
+  kid: string;
+  gatewayId: string;
+  now: number;
+}): OpenShell067TokenPrincipal {
+  try {
+    return validateOpenShellStyleSandboxJwt(options) ? "sandbox" : null;
+  } catch {
+    return "invalid-token";
+  }
 }
 
 function openShell067RouterDecision(options: {
@@ -168,44 +191,52 @@ function openShell067RouterDecision(options: {
   const methodMode = openShell067MethodMode(options.methodPath);
   const userCallable = methodMode === "user" || methodMode === "dual";
   const sandboxCallable = methodMode === "sandbox" || methodMode === "dual";
-  let principal: OpenShell067Principal | null = null;
-
-  if (options.token) {
-    try {
-      const sandboxPayload = validateOpenShellStyleSandboxJwt({
+  const tokenPrincipal = options.token
+    ? openShell067SandboxPrincipalForToken({
         token: options.token,
         publicKeyPath: options.publicKeyPath,
         kid: options.kid,
         gatewayId: options.gatewayId,
         now: options.now,
-      });
-      principal = sandboxPayload ? "sandbox" : null;
-    } catch {
-      return { status: "unauthenticated", reason: "invalid sandbox JWT" };
-    }
-  }
+      })
+    : null;
+  const principal =
+    tokenPrincipal === "invalid-token"
+      ? null
+      : (tokenPrincipal ?? (options.allowUnauthenticatedUsers ? "local-dev-user" : null));
+  const invalidTokenDecision: OpenShell067RouterDecision | null =
+    tokenPrincipal === "invalid-token"
+      ? { status: "unauthenticated", reason: "invalid sandbox JWT" }
+      : null;
+  const missingPrincipalDecision: OpenShell067RouterDecision | null = principal
+    ? null
+    : { status: "unauthenticated", reason: "missing authorization header" };
+  const userOnSandboxMethodDecision: OpenShell067RouterDecision | null =
+    principal === "local-dev-user" && !userCallable
+      ? {
+          status: "permission_denied",
+          principal,
+          reason: "this method requires a sandbox principal",
+        }
+      : null;
+  const sandboxOnUserMethodDecision: OpenShell067RouterDecision | null =
+    principal === "sandbox" && !sandboxCallable
+      ? {
+          status: "permission_denied",
+          principal,
+          reason: "sandbox principals may not call this method",
+        }
+      : null;
 
-  if (!principal && options.allowUnauthenticatedUsers) {
-    principal = "local-dev-user";
-  }
-  if (!principal) {
-    return { status: "unauthenticated", reason: "missing authorization header" };
-  }
-  if (principal === "local-dev-user" && !userCallable) {
-    return {
-      status: "permission_denied",
-      principal,
-      reason: "this method requires a sandbox principal",
-    };
-  }
-  if (principal === "sandbox" && !sandboxCallable) {
-    return {
-      status: "permission_denied",
-      principal,
-      reason: "sandbox principals may not call this method",
-    };
-  }
-  return { status: "ok", principal };
+  return (
+    invalidTokenDecision ??
+    missingPrincipalDecision ??
+    userOnSandboxMethodDecision ??
+    sandboxOnUserMethodDecision ?? {
+      status: "ok",
+      principal: principal ?? "local-dev-user",
+    }
+  );
 }
 
 describe("docker-driver-gateway-config", () => {
