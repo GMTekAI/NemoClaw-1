@@ -134,7 +134,7 @@ describe("docker-driver-gateway-launch", () => {
       expect(toml).toContain("[openshell.gateway.gateway_jwt]");
       expect(toml).toContain(`signing_key_path = "${path.join(stateDir, "jwt", "signing.pem")}"`);
       expect(toml).toContain("[openshell.gateway.auth]");
-      expect(toml).toContain("allow_unauthenticated_users = false");
+      expect(toml).toContain("allow_unauthenticated_users = true");
       expect(launch.env.OPENSHELL_DISABLE_GATEWAY_AUTH).toBeUndefined();
       expect(launch.args).not.toContain("OPENSHELL_DISABLE_GATEWAY_AUTH");
       expect(fs.existsSync(path.join(stateDir, "jwt", "public.pem"))).toBe(true);
@@ -186,7 +186,7 @@ describe("docker-driver-gateway-launch", () => {
       "  Compatibility gateway bind: 127.0.0.1 main listener plus OpenShell Docker-driver bridge reachability.",
     );
     expect(messages).toContain(
-      "  Gateway auth boundary: unauthenticated user calls are disabled; sandbox callbacks use OpenShell gateway JWT.",
+      "  Gateway auth boundary: host-side OpenShell CLI user calls remain available; sandbox callbacks use OpenShell gateway JWT.",
     );
   });
 

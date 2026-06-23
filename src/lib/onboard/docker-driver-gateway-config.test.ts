@@ -290,7 +290,7 @@ describe("docker-driver-gateway-config", () => {
       "NEMOCLAW_OPENSHELL_GATEWAY_COMPAT_BIND_ADDRESS=0.0.0.0` is rejected",
     );
     expect(reviewNote).toContain("reject `NEMOCLAW_GATEWAY_BIND_ADDRESS=0.0.0.0`");
-    expect(reviewNote).toContain("no-token Docker bridge user calls fail closed");
+    expect(reviewNote).toContain("host-side OpenShell CLI user calls remain available");
   });
 
   it("writes OpenShell 0.0.67 gateway JWT config into the managed state dir", () => {
@@ -311,7 +311,7 @@ describe("docker-driver-gateway-config", () => {
       expect(toml).toContain('gateway_id = "nemoclaw-');
       expect(toml).toContain(`ttl_secs = ${DOCKER_DRIVER_GATEWAY_JWT_TTL_SECS}`);
       expect(toml).toContain("[openshell.gateway.auth]");
-      expect(toml).toContain("allow_unauthenticated_users = false");
+      expect(toml).toContain("allow_unauthenticated_users = true");
       expect(toml).toContain('compute_drivers = ["docker"]');
       expect(toml).toContain('supervisor_bin = "/usr/bin/openshell-sandbox"');
       expect(env.OPENSHELL_DISABLE_GATEWAY_AUTH).toBeUndefined();
@@ -429,7 +429,7 @@ describe("docker-driver-gateway-config", () => {
 
       expect(toml).toContain("[openshell.gateway.gateway_jwt]");
       expect(toml).toContain("[openshell.gateway.auth]");
-      expect(toml).toContain("allow_unauthenticated_users = false");
+      expect(toml).toContain("allow_unauthenticated_users = true");
       expect(env.OPENSHELL_DISABLE_GATEWAY_AUTH).toBeUndefined();
       expect(ttlSecs).toBe(DOCKER_DRIVER_GATEWAY_JWT_TTL_SECS);
 
@@ -497,7 +497,7 @@ describe("docker-driver-gateway-config", () => {
     }
   });
 
-  it("models the OpenShell 0.0.67 auth-router boundary for no-token callers and sandbox JWTs", () => {
+  it("models the OpenShell 0.0.67 auth-router boundary for host users and sandbox JWTs", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-config-"));
     try {
       const env = writeGatewayConfig(stateDir);
@@ -520,27 +520,31 @@ describe("docker-driver-gateway-config", () => {
 
       expect(
         openShell067RouterDecision({
-          allowUnauthenticatedUsers: false,
+          allowUnauthenticatedUsers: true,
           methodPath: USER_CALLABLE_METHOD,
           publicKeyPath,
           kid,
           gatewayId,
           now,
         }),
-      ).toEqual({ status: "unauthenticated", reason: "missing authorization header" });
+      ).toEqual({ status: "ok", principal: "local-dev-user" });
       expect(
         openShell067RouterDecision({
-          allowUnauthenticatedUsers: false,
+          allowUnauthenticatedUsers: true,
           methodPath: SANDBOX_ONLY_METHOD,
           publicKeyPath,
           kid,
           gatewayId,
           now,
         }),
-      ).toEqual({ status: "unauthenticated", reason: "missing authorization header" });
+      ).toEqual({
+        status: "permission_denied",
+        principal: "local-dev-user",
+        reason: "this method requires a sandbox principal",
+      });
       expect(
         openShell067RouterDecision({
-          allowUnauthenticatedUsers: false,
+          allowUnauthenticatedUsers: true,
           methodPath: SANDBOX_ONLY_METHOD,
           token,
           publicKeyPath,
@@ -551,7 +555,7 @@ describe("docker-driver-gateway-config", () => {
       ).toEqual({ status: "ok", principal: "sandbox" });
       expect(
         openShell067RouterDecision({
-          allowUnauthenticatedUsers: false,
+          allowUnauthenticatedUsers: true,
           methodPath: USER_CALLABLE_METHOD,
           token,
           publicKeyPath,
@@ -566,7 +570,7 @@ describe("docker-driver-gateway-config", () => {
       });
       expect(
         openShell067RouterDecision({
-          allowUnauthenticatedUsers: false,
+          allowUnauthenticatedUsers: true,
           methodPath: SANDBOX_ONLY_METHOD,
           token,
           publicKeyPath,
@@ -574,17 +578,21 @@ describe("docker-driver-gateway-config", () => {
           gatewayId,
           now,
         }),
-      ).toEqual({ status: "unauthenticated", reason: "missing authorization header" });
+      ).toEqual({
+        status: "permission_denied",
+        principal: "local-dev-user",
+        reason: "this method requires a sandbox principal",
+      });
       expect(
         openShell067RouterDecision({
-          allowUnauthenticatedUsers: false,
+          allowUnauthenticatedUsers: true,
           methodPath: USER_CALLABLE_METHOD,
           publicKeyPath,
           kid,
           gatewayId,
           now,
         }),
-      ).toEqual({ status: "unauthenticated", reason: "missing authorization header" });
+      ).toEqual({ status: "ok", principal: "local-dev-user" });
 
       expect(openShell067MethodMode(USER_CALLABLE_METHOD)).toBe("user");
       expect(openShell067MethodMode(SANDBOX_ONLY_METHOD)).toBe("sandbox");

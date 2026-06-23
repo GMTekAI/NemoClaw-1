@@ -135,12 +135,9 @@ export function buildDockerDriverGatewayConfigToml(
   ];
 
   if (jwtBundle) {
-    // OpenShell v0.0.67 adds Docker-driver bridge reachability for sandbox
-    // callbacks and does not origin-scope the unauthenticated local-user escape
-    // hatch. With gateway_jwt configured, disable that escape hatch so a
-    // no-token caller over the bridge cannot become the local dev user. Remove
-    // this guard only after OpenShell provides a trusted local-user auth path or
-    // NemoClaw sends user auth for host-side provider registration.
+    // OpenShell v0.0.67 still relies on the unauthenticated local-user fallback
+    // for host-side CLI calls such as sandbox list/delete. Keep that compatibility
+    // path while using gateway_jwt for sandbox supervisor callbacks.
     sections.push(
       "[openshell.gateway.gateway_jwt]",
       `signing_key_path = ${tomlString(jwtBundle.signingKeyPath)}`,
@@ -150,7 +147,7 @@ export function buildDockerDriverGatewayConfigToml(
       `ttl_secs = ${DOCKER_DRIVER_GATEWAY_JWT_TTL_SECS}`,
       "",
       "[openshell.gateway.auth]",
-      "allow_unauthenticated_users = false",
+      "allow_unauthenticated_users = true",
       "",
     );
   }

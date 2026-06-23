@@ -379,7 +379,7 @@ export function prepareAndLogDockerDriverGatewayLaunch(
     "  Compatibility gateway bind: 127.0.0.1 main listener plus OpenShell Docker-driver bridge reachability.",
   );
   log(
-    "  Gateway auth boundary: unauthenticated user calls are disabled; sandbox callbacks use OpenShell gateway JWT.",
+    "  Gateway auth boundary: host-side OpenShell CLI user calls remain available; sandbox callbacks use OpenShell gateway JWT.",
   );
   prepareDockerDriverGatewayLaunch(launch);
 }
