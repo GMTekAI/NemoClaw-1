@@ -245,6 +245,9 @@ describe("docker-driver-gateway-config", () => {
 
     expect(reviewNote).toContain("NVIDIA/OpenShell@v0.0.67");
     expect(reviewNote).toContain("ce788b50f9b1f977a4327e4484c5b663013dd9a5");
+    expect(reviewNote).toContain("openshell-gateway-source-contract.test.ts");
+    expect(reviewNote).toContain("openshell_server::config_file::load()");
+    expect(reviewNote).toContain("scenarios=openshell-gateway-source-contract");
     expect(reviewNote).toContain("allow_unauthenticated_users");
     expect(reviewNote).toContain("gateway_jwt");
     expect(reviewNote).toContain("SandboxJwtAuthenticator");

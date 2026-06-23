@@ -360,6 +360,49 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  openshell-gateway-source-contract-vitest:
+    needs: generate-matrix
+    if: ${{ (inputs.jobs == '' && inputs.scenarios == '') || contains(format(',{0},', inputs.jobs), ',openshell-gateway-source-contract-vitest,') || contains(format(',{0},', inputs.scenarios), ',openshell-gateway-source-contract,') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      FREE_STANDING_VITEST_JOB: "1"
+      FREE_STANDING_SCENARIO_ID: "openshell-gateway-source-contract"
+      E2E_ARTIFACT_DIR: ${{ github.workspace }}/e2e-artifacts/vitest/openshell-gateway-source-contract
+      NEMOCLAW_RUN_E2E_SCENARIOS: "1"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install root dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Run OpenShell gateway source contract
+        # Source-of-truth contract for the OpenShell 0.0.67 auth/listener
+        # boundary used by NemoClaw's generated Docker-driver gateway TOML.
+        run: |
+          set -euo pipefail
+          npx vitest run --project e2e-scenarios-live \
+            test/e2e-scenario/live/openshell-gateway-source-contract.test.ts \
+            --silent=false --reporter=default
+
+      - name: Upload OpenShell gateway source-contract artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-vitest-scenarios-openshell-gateway-source-contract
+          path: e2e-artifacts/vitest/openshell-gateway-source-contract/
+          include-hidden-files: false
+          if-no-files-found: ignore
+          retention-days: 14
+
   onboard-negative-paths-vitest:
     needs: generate-matrix
     if: ${{ (inputs.jobs == '' && inputs.scenarios == '') || contains(format(',{0},', inputs.jobs), ',onboard-negative-paths-vitest,') || contains(format(',{0},', inputs.scenarios), ',onboard-negative-paths,') }}
@@ -5303,6 +5346,7 @@ jobs:
         generate-matrix,
         live-scenarios,
         openshell-version-pin-vitest,
+        openshell-gateway-source-contract-vitest,
         onboard-negative-paths-vitest,
         skill-agent-vitest,
         openclaw-skill-cli-vitest,

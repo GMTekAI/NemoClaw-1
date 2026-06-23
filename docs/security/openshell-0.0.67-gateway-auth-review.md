@@ -25,6 +25,11 @@ Package-managed Docker-driver gateways also reject `NEMOCLAW_GATEWAY_BIND_ADDRES
 
 ## Upstream Contract Coverage
 
+Executable NemoClaw live scenario:
+
+- `test/e2e-scenario/live/openshell-gateway-source-contract.test.ts` checks out `NVIDIA/OpenShell@v0.0.67` at `ce788b50f9b1f977a4327e4484c5b663013dd9a5`, generates NemoClaw's `OPENSHELL_GATEWAY_CONFIG`, injects a temporary OpenShell integration test that loads that exact TOML through `openshell_server::config_file::load()`, and runs the upstream OpenShell auth/listener contract tests below.
+- Manual scenario selector: `scenarios=openshell-gateway-source-contract`; the default all-scenarios dispatch includes the same free-standing job.
+
 Local run against `NVIDIA/OpenShell@v0.0.67`:
 
 - `cargo test -p openshell-server sandbox_jwt -- --nocapture`: passed 7 sandbox JWT tests, including `mint_and_validate_round_trip`, `token_signed_by_other_key_is_rejected`, `malformed_token_is_rejected`, and `expired_token_is_rejected`.
