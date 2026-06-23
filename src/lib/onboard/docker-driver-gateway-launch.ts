@@ -374,7 +374,9 @@ export function prepareAndLogDockerDriverGatewayLaunch(
   if (launch.mode !== "container") return;
   log(`  OpenShell gateway compatibility patch active (${launch.reason}).`);
   log("  Running openshell-gateway inside a Docker compatibility container.");
-  log("  Compatibility gateway bind: 127.0.0.1.");
+  log(
+    "  Compatibility gateway bind: 127.0.0.1 main listener; OpenShell adds the Docker bridge listener when needed.",
+  );
   log(
     "  Gateway auth boundary: local user CLI/API calls stay compatibility-unauthenticated; sandbox callbacks use OpenShell gateway JWT.",
   );

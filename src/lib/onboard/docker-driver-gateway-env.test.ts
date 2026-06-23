@@ -8,6 +8,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  assertDockerDriverGatewayBindAddressSafe,
   buildDockerDriverGatewayEnv,
   buildDockerGatewayDebEnvFile,
   startPackageManagedDockerDriverGatewayWithEnvOverride,
@@ -58,6 +59,15 @@ describe("buildDockerDriverGatewayEnv", () => {
     expect(env.OPENSHELL_DOCKER_SUPERVISOR_BIN).toBeUndefined();
     expect(env.OPENSHELL_VM_DRIVER_STATE_DIR).toBeUndefined();
     expect(env.OPENSHELL_DRIVER_DIR).toBeUndefined();
+  });
+
+  it("rejects wildcard gateway binds while local user compatibility auth is enabled", () => {
+    expect(() =>
+      assertDockerDriverGatewayBindAddressSafe({
+        OPENSHELL_BIND_ADDRESS: "0.0.0.0",
+        OPENSHELL_GATEWAY_CONFIG: "/tmp/openshell-gateway.toml",
+      }),
+    ).toThrow(/not supported for the OpenShell 0\.0\.67 Docker-driver gateway/);
   });
 });
 
@@ -242,5 +252,24 @@ describe("writeDockerGatewayDebEnvOverride", () => {
       homedirSpy.mockRestore();
       fs.rmSync(tempHome, { recursive: true, force: true });
     }
+  });
+
+  it("rejects package-managed wildcard binds before writing the service env", async () => {
+    expect(() =>
+      startPackageManagedDockerDriverGatewayWithEnvOverride({
+        clearDockerDriverGatewayRuntimeFiles: vi.fn(),
+        exitOnFailure: false,
+        gatewayEnv: {
+          OPENSHELL_BIND_ADDRESS: "0.0.0.0",
+          OPENSHELL_GATEWAY_CONFIG: "/tmp/openshell-gateway.toml",
+        },
+        gatewayName: "nemoclaw",
+        hasOpenShellGatewayUserService: () => true,
+        registerDockerDriverGatewayEndpoint: () => true,
+        runCaptureOpenshell: () => "",
+        skipSandboxBridgeReachability: false,
+        verifySandboxBridgeGatewayReachableOrExit: async () => undefined,
+      }),
+    ).toThrow(/not supported for the OpenShell 0\.0\.67 Docker-driver gateway/);
   });
 });

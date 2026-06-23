@@ -164,7 +164,7 @@ describe("docker-driver-gateway-launch", () => {
     });
   });
 
-  it("logs the loopback bind and auth boundary for compatibility mode", () => {
+  it("logs the loopback main bind, Docker bridge listener contract, and auth boundary", () => {
     const messages: string[] = [];
     prepareAndLogDockerDriverGatewayLaunch(
       {
@@ -181,7 +181,9 @@ describe("docker-driver-gateway-launch", () => {
       (message) => messages.push(message),
     );
 
-    expect(messages).toContain("  Compatibility gateway bind: 127.0.0.1.");
+    expect(messages).toContain(
+      "  Compatibility gateway bind: 127.0.0.1 main listener; OpenShell adds the Docker bridge listener when needed.",
+    );
     expect(messages).toContain(
       "  Gateway auth boundary: local user CLI/API calls stay compatibility-unauthenticated; sandbox callbacks use OpenShell gateway JWT.",
     );

@@ -249,10 +249,16 @@ describe("docker-driver-gateway-config", () => {
     expect(reviewNote).toContain("gateway_jwt");
     expect(reviewNote).toContain("SandboxJwtAuthenticator");
     expect(reviewNote).toContain("user principals are rejected from sandbox-only methods");
-    expect(reviewNote).toContain("forced to `127.0.0.1`");
+    expect(reviewNote).toContain(
+      "gateway_listener_addresses_include_driver_address_on_distinct_ip",
+    );
+    expect(reviewNote).toContain("container_visible_endpoint_rewrites_loopback_hosts");
+    expect(reviewNote).toContain("docker_gateway_route_uses_bridge_gateway_for_linux_docker");
+    expect(reviewNote).toContain("keeps the main OpenShell listener on `127.0.0.1`");
     expect(reviewNote).toContain(
       "NEMOCLAW_OPENSHELL_GATEWAY_COMPAT_BIND_ADDRESS=0.0.0.0` is rejected",
     );
+    expect(reviewNote).toContain("reject `NEMOCLAW_GATEWAY_BIND_ADDRESS=0.0.0.0`");
   });
 
   it("writes OpenShell 0.0.67 gateway JWT config into the managed state dir", () => {

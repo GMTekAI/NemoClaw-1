@@ -69,6 +69,13 @@ export function getGatewayStartNetworkEnv(): Record<string, string> {
   };
 }
 
+export function assertDockerDriverGatewayBindAddressSafe(gatewayEnv: Record<string, string>): void {
+  if (gatewayEnv.OPENSHELL_BIND_ADDRESS !== WILDCARD_GATEWAY_BIND_ADDRESS) return;
+  throw new Error(
+    "NEMOCLAW_GATEWAY_BIND_ADDRESS=0.0.0.0 is not supported for the OpenShell 0.0.67 Docker-driver gateway while local user auth compatibility is enabled. Remove the override, or use NEMOCLAW_DASHBOARD_BIND for dashboard exposure.",
+  );
+}
+
 export function getDockerDriverGatewayEndpoint(): string {
   return getGatewayHttpEndpoint();
 }
@@ -103,6 +110,7 @@ export function buildDockerDriverGatewayEnv({
     }
   }
   prepareDockerDriverGatewayConfigEnv(env, stateDir, env.OPENSHELL_DOCKER_SUPERVISOR_BIN);
+  assertDockerDriverGatewayBindAddressSafe(env);
   return env;
 }
 
@@ -178,6 +186,7 @@ export function startPackageManagedDockerDriverGatewayWithEnvOverride({
   gatewayEnv,
   ...options
 }: PackageManagedDockerDriverGatewayWithEnvOverrideOptions): Promise<boolean> {
+  assertDockerDriverGatewayBindAddressSafe(gatewayEnv);
   return startPackageManagedDockerDriverGateway({
     ...options,
     prepareOpenShellGatewayUserServiceEnv: () =>
