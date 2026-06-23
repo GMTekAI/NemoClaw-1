@@ -537,6 +537,23 @@ download_old_curl_installer() {
   chmod 755 "$target"
 }
 
+clear_preinstalled_openshell_for_old_fixture() {
+  local bin candidate
+  for bin in openshell openshell-gateway openshell-sandbox openshell-driver-vm; do
+    for candidate in "$(command -v "$bin" 2>/dev/null || true)" "$HOME/.local/bin/$bin" "/usr/local/bin/$bin"; do
+      [ -n "$candidate" ] || continue
+      [ -e "$candidate" ] || continue
+      rm -f "$candidate" 2>/dev/null || {
+        command -v sudo >/dev/null 2>&1 && sudo rm -f "$candidate"
+      }
+    done
+  done
+  hash -r
+  if command -v openshell >/dev/null 2>&1; then
+    fail "openshell still present after old-fixture reset: $(command -v openshell) $(openshell --version 2>&1 || true)"
+  fi
+}
+
 install_old_nemoclaw_and_claw() {
   local installer
   installer="$(mktemp)"
@@ -544,6 +561,7 @@ install_old_nemoclaw_and_claw() {
   info "Pinning old ${OLD_NEMOCLAW_REF} OpenClaw base build to ${OLD_OPENCLAW_VERSION}"
   download_old_curl_installer "$installer"
   patch_old_installer_fixture "$installer"
+  clear_preinstalled_openshell_for_old_fixture
   run_installer_payload "old ${OLD_NEMOCLAW_REF}" "$OLD_NEMOCLAW_REF" "$installer" "$OLD_INSTALL_LOG"
   if [ -f "$OLD_DOCKER_WRAPPER_LOG" ]; then
     diag "old installer docker wrapper activity:"
