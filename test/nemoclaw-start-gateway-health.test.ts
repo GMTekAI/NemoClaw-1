@@ -312,6 +312,9 @@ describe("gateway serving watchdog (#4710)", () => {
         '  rest="$(tail -n +2 "$_CURL_PLAN" 2>/dev/null)"',
         '  if [ -n "$rest" ]; then printf "%s\\n" "$rest" >"$_CURL_PLAN"; fi',
         `  printf 'probe\\n' >> ${JSON.stringify(probeLog)}`,
+        '  case "$next" in',
+        '    0) record_gateway_pid "$GATEWAY_B" ;;',
+        "  esac",
         '  return "$next"',
         "}",
         "command sleep 60 &",
@@ -324,10 +327,8 @@ describe("gateway serving watchdog (#4710)", () => {
         watchdogFunctions(),
         'record_gateway_pid "$GATEWAY_A"',
         "start_gateway_serving_watchdog",
-        // Wait until gateway A has been probed (and armed via the plan's 0),
-        // then swap the pidfile to gateway B while refusals continue.
-        `for _ in $(command seq 1 200); do [ -s ${JSON.stringify(probeLog)} ] && break; command sleep 0.02; done`,
-        'record_gateway_pid "$GATEWAY_B"',
+        // The curl stub swaps to gateway B during A's successful probe,
+        // before the watchdog can start counting refused probes again.
         "command sleep 0.6",
         'if kill -0 "$GATEWAY_B" 2>/dev/null; then printf "B_ALIVE=1\\n"; else printf "B_ALIVE=0\\n"; fi',
         "disown -a 2>/dev/null || true",
