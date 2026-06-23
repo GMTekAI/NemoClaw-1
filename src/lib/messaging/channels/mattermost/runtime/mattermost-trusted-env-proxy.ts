@@ -30,9 +30,8 @@
 
   function countMatches(source, pattern) {
     var count = 0;
-    var match;
     pattern.lastIndex = 0;
-    while ((match = pattern.exec(source)) !== null) count += 1;
+    while (pattern.exec(source) !== null) count += 1;
     return count;
   }
 
