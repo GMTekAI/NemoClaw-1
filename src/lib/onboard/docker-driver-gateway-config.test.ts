@@ -249,8 +249,10 @@ describe("docker-driver-gateway-config", () => {
     expect(reviewNote).toContain("gateway_jwt");
     expect(reviewNote).toContain("SandboxJwtAuthenticator");
     expect(reviewNote).toContain("user principals are rejected from sandbox-only methods");
-    expect(reviewNote).toContain("defaults to `127.0.0.1`");
-    expect(reviewNote).toContain("NEMOCLAW_OPENSHELL_GATEWAY_COMPAT_BIND_ADDRESS=0.0.0.0");
+    expect(reviewNote).toContain("forced to `127.0.0.1`");
+    expect(reviewNote).toContain(
+      "NEMOCLAW_OPENSHELL_GATEWAY_COMPAT_BIND_ADDRESS=0.0.0.0` is rejected",
+    );
   });
 
   it("writes OpenShell 0.0.67 gateway JWT config into the managed state dir", () => {

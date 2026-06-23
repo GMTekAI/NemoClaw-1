@@ -17,9 +17,9 @@ Reviewed upstream source at `NVIDIA/OpenShell@v0.0.67` (`ce788b50f9b1f977a4327e4
 
 NemoClaw keeps `allow_unauthenticated_users = true` so local OpenShell CLI/API provider-registration calls remain compatible with OpenShell 0.0.67. The generated `gateway_jwt` bundle remains the sandbox supervisor auth path, and stale `OPENSHELL_DISABLE_GATEWAY_AUTH` env is scrubbed before launch.
 
-The Docker-hosted compatibility gateway now defaults to `127.0.0.1`. Binding the compatibility gateway to `0.0.0.0` is an explicit operator override via `NEMOCLAW_OPENSHELL_GATEWAY_COMPAT_BIND_ADDRESS=0.0.0.0`, because OpenShell 0.0.67 does not distinguish a local unauthenticated user caller from a remote unauthenticated caller once the socket is reachable.
+The Docker-hosted compatibility gateway is forced to `127.0.0.1`. `NEMOCLAW_OPENSHELL_GATEWAY_COMPAT_BIND_ADDRESS=0.0.0.0` is rejected, because OpenShell 0.0.67 does not distinguish a local unauthenticated user caller from a remote unauthenticated caller once the socket is reachable.
 
 ## Local Coverage
 
 - `src/lib/onboard/docker-driver-gateway-config.test.ts` verifies the generated TOML/JWT bundle, key reuse/regeneration, wrong kid, wrong gateway id, expired token rejection, and the OpenShell 0.0.67 auth-router contract for local user versus sandbox principals.
-- `src/lib/onboard/docker-driver-gateway-launch.test.ts` verifies loopback default binding, explicit wildcard override, stale auth-disable env scrubbing, generated `OPENSHELL_GATEWAY_CONFIG`, and the wildcard warning log.
+- `src/lib/onboard/docker-driver-gateway-launch.test.ts` verifies loopback binding, wildcard override rejection, stale auth-disable env scrubbing, and generated `OPENSHELL_GATEWAY_CONFIG`.

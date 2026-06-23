@@ -164,14 +164,14 @@ describe("docker-driver-gateway-launch", () => {
     });
   });
 
-  it("logs the auth boundary and warning when compatibility mode explicitly wildcard-binds the gateway", () => {
+  it("logs the loopback bind and auth boundary for compatibility mode", () => {
     const messages: string[] = [];
     prepareAndLogDockerDriverGatewayLaunch(
       {
         command: "docker",
         args: [],
         env: {
-          OPENSHELL_BIND_ADDRESS: "0.0.0.0",
+          OPENSHELL_BIND_ADDRESS: "127.0.0.1",
           OPENSHELL_GATEWAY_CONFIG: "/tmp/openshell-gateway.toml",
         },
         mode: "container",
@@ -181,12 +181,7 @@ describe("docker-driver-gateway-launch", () => {
       (message) => messages.push(message),
     );
 
-    expect(messages).toContain(
-      "  Compatibility gateway bind: 0.0.0.0 (explicit operator override).",
-    );
-    expect(messages).toContain(
-      "  ! OpenShell gateway may be reachable from other hosts; use only on a trusted network.",
-    );
+    expect(messages).toContain("  Compatibility gateway bind: 127.0.0.1.");
     expect(messages).toContain(
       "  Gateway auth boundary: local user CLI/API calls stay compatibility-unauthenticated; sandbox callbacks use OpenShell gateway JWT.",
     );
@@ -209,28 +204,27 @@ describe("docker-driver-gateway-launch", () => {
     expect(toml).toContain('supervisor_bin = "/home/shadeform/.local/bin/openshell-sandbox"');
   });
 
-  it("allows the compatibility gateway bind address to be explicitly widened", () => {
-    withTempBinaries(({ dir, gatewayBin, sandboxBin }) => {
-      const stateDir = path.join(dir, "state");
-      fs.mkdirSync(stateDir);
-      const launch = buildDockerDriverGatewayLaunch({
-        gatewayBin,
-        sandboxBin,
-        stateDir,
-        platform: "linux",
-        env: {
-          NEMOCLAW_OPENSHELL_GATEWAY_CONTAINER_PATCH: "1",
-          NEMOCLAW_OPENSHELL_GATEWAY_COMPAT_BIND_ADDRESS: "0.0.0.0",
-        },
-        gatewayEnv: {
-          OPENSHELL_BIND_ADDRESS: "127.0.0.1",
-          OPENSHELL_DRIVERS: "docker",
-        },
+  it("rejects wildcard binds for the compatibility gateway", () => {
+    expect(() => {
+      withTempBinaries(({ dir, gatewayBin, sandboxBin }) => {
+        const stateDir = path.join(dir, "state");
+        fs.mkdirSync(stateDir);
+        buildDockerDriverGatewayLaunch({
+          gatewayBin,
+          sandboxBin,
+          stateDir,
+          platform: "linux",
+          env: {
+            NEMOCLAW_OPENSHELL_GATEWAY_CONTAINER_PATCH: "1",
+            NEMOCLAW_OPENSHELL_GATEWAY_COMPAT_BIND_ADDRESS: "0.0.0.0",
+          },
+          gatewayEnv: {
+            OPENSHELL_BIND_ADDRESS: "127.0.0.1",
+            OPENSHELL_DRIVERS: "docker",
+          },
+        });
       });
-
-      expect(launch.mode).toBe("container");
-      expect(launch.env.OPENSHELL_BIND_ADDRESS).toBe("0.0.0.0");
-    });
+    }).toThrow(/only supports 127\.0\.0\.1/);
   });
 
   it("keeps the drift gateway binary null for the containerized compatibility gateway (#4520)", () => {
