@@ -123,7 +123,7 @@ describe("docker-driver-gateway-launch", () => {
         ]),
       );
       expect(launch.env.OPENSHELL_DOCKER_SUPERVISOR_BIN).toBe(sandboxBin);
-      expect(launch.env.OPENSHELL_BIND_ADDRESS).toBe("0.0.0.0");
+      expect(launch.env.OPENSHELL_BIND_ADDRESS).toBe("127.0.0.1");
       const configPath = launch.env.OPENSHELL_GATEWAY_CONFIG;
       expect(configPath).toBe(path.join(stateDir, "openshell-gateway.toml"));
       expect(configPath).toBeDefined();
@@ -164,7 +164,7 @@ describe("docker-driver-gateway-launch", () => {
     });
   });
 
-  it("logs the auth boundary when compatibility mode wildcard-binds the gateway", () => {
+  it("logs the auth boundary and warning when compatibility mode explicitly wildcard-binds the gateway", () => {
     const messages: string[] = [];
     prepareAndLogDockerDriverGatewayLaunch(
       {
@@ -182,7 +182,10 @@ describe("docker-driver-gateway-launch", () => {
     );
 
     expect(messages).toContain(
-      "  Compatibility gateway bind: 0.0.0.0 (required for Docker sandbox callbacks).",
+      "  Compatibility gateway bind: 0.0.0.0 (explicit operator override).",
+    );
+    expect(messages).toContain(
+      "  ! OpenShell gateway may be reachable from other hosts; use only on a trusted network.",
     );
     expect(messages).toContain(
       "  Gateway auth boundary: local user CLI/API calls stay compatibility-unauthenticated; sandbox callbacks use OpenShell gateway JWT.",
@@ -206,7 +209,7 @@ describe("docker-driver-gateway-launch", () => {
     expect(toml).toContain('supervisor_bin = "/home/shadeform/.local/bin/openshell-sandbox"');
   });
 
-  it("allows the compatibility gateway bind address to be forced back to loopback", () => {
+  it("allows the compatibility gateway bind address to be explicitly widened", () => {
     withTempBinaries(({ dir, gatewayBin, sandboxBin }) => {
       const stateDir = path.join(dir, "state");
       fs.mkdirSync(stateDir);
@@ -217,7 +220,7 @@ describe("docker-driver-gateway-launch", () => {
         platform: "linux",
         env: {
           NEMOCLAW_OPENSHELL_GATEWAY_CONTAINER_PATCH: "1",
-          NEMOCLAW_OPENSHELL_GATEWAY_COMPAT_BIND_ADDRESS: "127.0.0.1",
+          NEMOCLAW_OPENSHELL_GATEWAY_COMPAT_BIND_ADDRESS: "0.0.0.0",
         },
         gatewayEnv: {
           OPENSHELL_BIND_ADDRESS: "127.0.0.1",
@@ -226,7 +229,7 @@ describe("docker-driver-gateway-launch", () => {
       });
 
       expect(launch.mode).toBe("container");
-      expect(launch.env.OPENSHELL_BIND_ADDRESS).toBe("127.0.0.1");
+      expect(launch.env.OPENSHELL_BIND_ADDRESS).toBe("0.0.0.0");
     });
   });
 

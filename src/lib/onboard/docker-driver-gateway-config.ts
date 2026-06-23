@@ -117,9 +117,9 @@ export function buildDockerDriverGatewayConfigToml(
     // local CLI/API calls without a user auth header, so keep that local user
     // path compatible while the supervisor channel authenticates with the
     // generated gateway_jwt bundle below. The normal package-managed gateway
-    // remains loopback-bound; the separate Docker compatibility wrapper may
-    // bind 0.0.0.0 only so Docker sandbox callbacks can reach the host-network
-    // gateway container.
+    // remains loopback-bound by default. The separate Docker compatibility
+    // wrapper can bind 0.0.0.0 only when the operator explicitly opts into that
+    // reachability tradeoff.
     //
     // Removal condition: set this back to false once NemoClaw supplies
     // OpenShell user auth for local provider registration/CLI calls, or once

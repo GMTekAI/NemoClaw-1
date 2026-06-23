@@ -18,7 +18,16 @@ import {
   prepareDockerDriverGatewayConfigEnv,
 } from "./docker-driver-gateway-config";
 
+const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
+const GATEWAY_AUTH_REVIEW_NOTE = path.join(
+  REPO_ROOT,
+  "docs",
+  "security",
+  "openshell-0.0.67-gateway-auth-review.md",
+);
 const SANDBOX_JWT_SUBJECT_PREFIX = "spiffe://openshell/sandbox/";
+const USER_CALLABLE_METHOD = "/openshell.v1.OpenShell/ListSandboxes";
+const SANDBOX_ONLY_METHOD = "/openshell.v1.OpenShell/ReportPolicyStatus";
 
 function baseGatewayEnv(): Record<string, string> {
   return {
@@ -133,7 +142,86 @@ function validateOpenShellStyleSandboxJwtSignature(options: {
   return payload;
 }
 
+type OpenShell067Principal = "local-dev-user" | "sandbox";
+type OpenShell067MethodMode = "user" | "sandbox" | "dual" | "unauthenticated";
+type OpenShell067RouterDecision = {
+  status: "ok" | "unauthenticated" | "permission_denied";
+  principal?: OpenShell067Principal;
+  reason?: string;
+};
+
+function openShell067MethodMode(methodPath: string): OpenShell067MethodMode {
+  if (methodPath === USER_CALLABLE_METHOD) return "user";
+  if (methodPath === SANDBOX_ONLY_METHOD) return "sandbox";
+  throw new Error(`OpenShell 0.0.67 auth contract fixture missing method: ${methodPath}`);
+}
+
+function openShell067RouterDecision(options: {
+  allowUnauthenticatedUsers: boolean;
+  methodPath: string;
+  token?: string;
+  publicKeyPath: string;
+  kid: string;
+  gatewayId: string;
+  now: number;
+}): OpenShell067RouterDecision {
+  const methodMode = openShell067MethodMode(options.methodPath);
+  const userCallable = methodMode === "user" || methodMode === "dual";
+  const sandboxCallable = methodMode === "sandbox" || methodMode === "dual";
+  let principal: OpenShell067Principal | null = null;
+
+  if (options.token) {
+    try {
+      const sandboxPayload = validateOpenShellStyleSandboxJwt({
+        token: options.token,
+        publicKeyPath: options.publicKeyPath,
+        kid: options.kid,
+        gatewayId: options.gatewayId,
+        now: options.now,
+      });
+      principal = sandboxPayload ? "sandbox" : null;
+    } catch {
+      return { status: "unauthenticated", reason: "invalid sandbox JWT" };
+    }
+  }
+
+  if (!principal && options.allowUnauthenticatedUsers) {
+    principal = "local-dev-user";
+  }
+  if (!principal) {
+    return { status: "unauthenticated", reason: "missing authorization header" };
+  }
+  if (principal === "local-dev-user" && !userCallable) {
+    return {
+      status: "permission_denied",
+      principal,
+      reason: "this method requires a sandbox principal",
+    };
+  }
+  if (principal === "sandbox" && !sandboxCallable) {
+    return {
+      status: "permission_denied",
+      principal,
+      reason: "sandbox principals may not call this method",
+    };
+  }
+  return { status: "ok", principal };
+}
+
 describe("docker-driver-gateway-config", () => {
+  it("keeps the OpenShell gateway auth source review aligned with the generated config", () => {
+    const reviewNote = fs.readFileSync(GATEWAY_AUTH_REVIEW_NOTE, "utf-8");
+
+    expect(reviewNote).toContain("NVIDIA/OpenShell@v0.0.67");
+    expect(reviewNote).toContain("ce788b50f9b1f977a4327e4484c5b663013dd9a5");
+    expect(reviewNote).toContain("allow_unauthenticated_users");
+    expect(reviewNote).toContain("gateway_jwt");
+    expect(reviewNote).toContain("SandboxJwtAuthenticator");
+    expect(reviewNote).toContain("user principals are rejected from sandbox-only methods");
+    expect(reviewNote).toContain("defaults to `127.0.0.1`");
+    expect(reviewNote).toContain("NEMOCLAW_OPENSHELL_GATEWAY_COMPAT_BIND_ADDRESS=0.0.0.0");
+  });
+
   it("writes OpenShell 0.0.67 gateway JWT config into the managed state dir", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-config-"));
     try {
@@ -289,6 +377,110 @@ describe("docker-driver-gateway-config", () => {
           now,
         }),
       ).toThrow("OpenShell-style sandbox JWT expiry");
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("models the OpenShell 0.0.67 auth-router boundary for local users and sandbox JWTs", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-config-"));
+    try {
+      const env = writeGatewayConfig(stateDir);
+      const toml = fs.readFileSync(env.OPENSHELL_GATEWAY_CONFIG, "utf-8");
+      const signingKeyPath = parseTomlString(toml, "signing_key_path");
+      const publicKeyPath = parseTomlString(toml, "public_key_path");
+      const kidPath = parseTomlString(toml, "kid_path");
+      const gatewayId = parseTomlString(toml, "gateway_id");
+      const ttlSecs = parseTomlInteger(toml, "ttl_secs");
+      const kid = fs.readFileSync(kidPath, "utf-8").trim();
+      const now = Math.floor(Date.now() / 1000);
+      const token = mintOpenShellStyleSandboxJwt({
+        signingKeyPath,
+        kid,
+        gatewayId,
+        sandboxId: "sandbox-router",
+        iat: now,
+        exp: now + ttlSecs,
+      });
+
+      expect(
+        openShell067RouterDecision({
+          allowUnauthenticatedUsers: true,
+          methodPath: USER_CALLABLE_METHOD,
+          publicKeyPath,
+          kid,
+          gatewayId,
+          now,
+        }),
+      ).toEqual({ status: "ok", principal: "local-dev-user" });
+      expect(
+        openShell067RouterDecision({
+          allowUnauthenticatedUsers: true,
+          methodPath: SANDBOX_ONLY_METHOD,
+          publicKeyPath,
+          kid,
+          gatewayId,
+          now,
+        }),
+      ).toEqual({
+        status: "permission_denied",
+        principal: "local-dev-user",
+        reason: "this method requires a sandbox principal",
+      });
+      expect(
+        openShell067RouterDecision({
+          allowUnauthenticatedUsers: true,
+          methodPath: SANDBOX_ONLY_METHOD,
+          token,
+          publicKeyPath,
+          kid,
+          gatewayId,
+          now,
+        }),
+      ).toEqual({ status: "ok", principal: "sandbox" });
+      expect(
+        openShell067RouterDecision({
+          allowUnauthenticatedUsers: true,
+          methodPath: USER_CALLABLE_METHOD,
+          token,
+          publicKeyPath,
+          kid,
+          gatewayId,
+          now,
+        }),
+      ).toEqual({
+        status: "permission_denied",
+        principal: "sandbox",
+        reason: "sandbox principals may not call this method",
+      });
+      expect(
+        openShell067RouterDecision({
+          allowUnauthenticatedUsers: true,
+          methodPath: SANDBOX_ONLY_METHOD,
+          token,
+          publicKeyPath,
+          kid: "wrong-kid",
+          gatewayId,
+          now,
+        }),
+      ).toEqual({
+        status: "permission_denied",
+        principal: "local-dev-user",
+        reason: "this method requires a sandbox principal",
+      });
+      expect(
+        openShell067RouterDecision({
+          allowUnauthenticatedUsers: false,
+          methodPath: USER_CALLABLE_METHOD,
+          publicKeyPath,
+          kid,
+          gatewayId,
+          now,
+        }),
+      ).toEqual({ status: "unauthenticated", reason: "missing authorization header" });
+
+      expect(openShell067MethodMode(USER_CALLABLE_METHOD)).toBe("user");
+      expect(openShell067MethodMode(SANDBOX_ONLY_METHOD)).toBe("sandbox");
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }

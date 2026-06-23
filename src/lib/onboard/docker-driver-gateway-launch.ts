@@ -14,8 +14,9 @@ import {
 const DEFAULT_COMPAT_IMAGE = "ubuntu:24.04";
 const DEFAULT_COMPAT_CONTAINER_NAME = "nemoclaw-openshell-gateway";
 const GATEWAY_MOUNT_PATH = "/opt/nemoclaw/openshell-gateway";
-const DEFAULT_COMPAT_BIND_ADDRESS = "0.0.0.0";
 const LOOPBACK_BIND_ADDRESS = "127.0.0.1";
+const WILDCARD_BIND_ADDRESS = "0.0.0.0";
+const DEFAULT_COMPAT_BIND_ADDRESS = LOOPBACK_BIND_ADDRESS;
 
 export { buildDockerDriverGatewayConfigToml };
 
@@ -207,7 +208,7 @@ function safeDockerHost(value: string | undefined): string | undefined {
 function compatGatewayBindAddress(env: NodeJS.ProcessEnv): string {
   const raw = String(env.NEMOCLAW_OPENSHELL_GATEWAY_COMPAT_BIND_ADDRESS || "").trim();
   if (!raw) return DEFAULT_COMPAT_BIND_ADDRESS;
-  if (raw === DEFAULT_COMPAT_BIND_ADDRESS || raw === LOOPBACK_BIND_ADDRESS) return raw;
+  if (raw === WILDCARD_BIND_ADDRESS || raw === LOOPBACK_BIND_ADDRESS) return raw;
   throw new Error(
     "Invalid NEMOCLAW_OPENSHELL_GATEWAY_COMPAT_BIND_ADDRESS; expected 0.0.0.0 or 127.0.0.1.",
   );
@@ -374,8 +375,9 @@ export function prepareAndLogDockerDriverGatewayLaunch(
   if (launch.mode !== "container") return;
   log(`  OpenShell gateway compatibility patch active (${launch.reason}).`);
   log("  Running openshell-gateway inside a Docker compatibility container.");
-  if (launch.env.OPENSHELL_BIND_ADDRESS === "0.0.0.0") {
-    log("  Compatibility gateway bind: 0.0.0.0 (required for Docker sandbox callbacks).");
+  if (launch.env.OPENSHELL_BIND_ADDRESS === WILDCARD_BIND_ADDRESS) {
+    log("  Compatibility gateway bind: 0.0.0.0 (explicit operator override).");
+    log("  ! OpenShell gateway may be reachable from other hosts; use only on a trusted network.");
   }
   log(
     "  Gateway auth boundary: local user CLI/API calls stay compatibility-unauthenticated; sandbox callbacks use OpenShell gateway JWT.",
