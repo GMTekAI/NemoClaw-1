@@ -709,6 +709,7 @@ describe("built-in channel manifests", () => {
         placeholder: "openshell:resolve:env:MATTERMOST_BOT_TOKEN",
       },
     ]);
+    expect(mattermostManifest.policyPresets).toEqual([]);
     expect(policyPresetNames(mattermostManifest)).toEqual([]);
     expect(policyTemplateNames(mattermostManifest)).toEqual(["mattermost"]);
     expect(mattermostManifest.policyTemplates).toEqual([

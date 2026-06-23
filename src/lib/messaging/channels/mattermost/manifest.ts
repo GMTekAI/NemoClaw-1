@@ -86,6 +86,7 @@ export const mattermostManifest = {
       placeholder: "openshell:resolve:env:MATTERMOST_BOT_TOKEN",
     },
   ],
+  policyPresets: [],
   policyTemplates: [
     {
       name: "mattermost",
