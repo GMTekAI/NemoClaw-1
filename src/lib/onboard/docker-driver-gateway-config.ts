@@ -109,7 +109,8 @@ export function buildDockerDriverGatewayConfigToml(
 
   if (jwtBundle) {
     // OpenShell v0.0.67 loads these tables from OPENSHELL_GATEWAY_CONFIG, with
-    // OPENSHELL_* env vars taking precedence. Its docs classify
+    // OPENSHELL_* env vars taking precedence. The upstream config contract
+    // recognizes gateway_jwt for sandbox callbacks and classifies
     // allow_unauthenticated_users as a local/trusted-proxy escape hatch that
     // affects user-facing CLI/API calls, not sandbox supervisor callbacks.
     // NemoClaw's package-managed gateway still registers providers through

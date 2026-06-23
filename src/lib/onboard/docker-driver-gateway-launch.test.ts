@@ -134,6 +134,8 @@ describe("docker-driver-gateway-launch", () => {
       expect(toml).toContain(`signing_key_path = "${path.join(stateDir, "jwt", "signing.pem")}"`);
       expect(toml).toContain("[openshell.gateway.auth]");
       expect(toml).toContain("allow_unauthenticated_users = true");
+      expect(launch.env.OPENSHELL_DISABLE_GATEWAY_AUTH).toBeUndefined();
+      expect(launch.args).not.toContain("OPENSHELL_DISABLE_GATEWAY_AUTH");
       expect(fs.existsSync(path.join(stateDir, "jwt", "public.pem"))).toBe(true);
     });
   });
