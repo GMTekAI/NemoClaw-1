@@ -1,6 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import {
+  createPrivateKey,
+  createPublicKey,
+  sign as signPayload,
+  verify as verifyPayload,
+} from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +19,86 @@ import {
   startPackageManagedDockerDriverGatewayWithEnvOverride,
   writeDockerGatewayDebEnvOverride,
 } from "./docker-driver-gateway-env";
+
+const SANDBOX_JWT_SUBJECT_PREFIX = "spiffe://openshell/sandbox/";
+
+function base64UrlJson(value: unknown): string {
+  return Buffer.from(JSON.stringify(value), "utf-8").toString("base64url");
+}
+
+function parseTomlString(toml: string, key: string): string {
+  const match = toml.match(new RegExp(`^${key} = "([^"]+)"$`, "m"));
+  if (!match) throw new Error(`missing TOML string key ${key}`);
+  return match[1];
+}
+
+function parseTomlInteger(toml: string, key: string): number {
+  const match = toml.match(new RegExp(`^${key} = (\\d+)$`, "m"));
+  if (!match) throw new Error(`missing TOML integer key ${key}`);
+  return Number(match[1]);
+}
+
+function decodeJwtPart(part: string): Record<string, unknown> {
+  return JSON.parse(Buffer.from(part, "base64url").toString("utf-8")) as Record<string, unknown>;
+}
+
+function mintOpenShellStyleSandboxJwt(options: {
+  signingKeyPath: string;
+  kid: string;
+  gatewayId: string;
+  sandboxId: string;
+  exp: number;
+  iat: number;
+}): string {
+  const header = base64UrlJson({ alg: "EdDSA", kid: options.kid, typ: "JWT" });
+  const identity = `openshell-gateway:${options.gatewayId}`;
+  const payload = base64UrlJson({
+    sub: `${SANDBOX_JWT_SUBJECT_PREFIX}${options.sandboxId}`,
+    iss: identity,
+    aud: identity,
+    iat: options.iat,
+    exp: options.exp,
+    sandbox_id: options.sandboxId,
+  });
+  const signingInput = `${header}.${payload}`;
+  const privateKey = createPrivateKey(fs.readFileSync(options.signingKeyPath, "utf-8"));
+  const signature = signPayload(null, Buffer.from(signingInput), privateKey).toString("base64url");
+  return `${signingInput}.${signature}`;
+}
+
+function validateOpenShellStyleSandboxJwt(options: {
+  token: string;
+  publicKeyPath: string;
+  kid: string;
+  gatewayId: string;
+  now: number;
+}): Record<string, unknown> | null {
+  const [headerPart, payloadPart, signaturePart] = options.token.split(".");
+  if (!headerPart || !payloadPart || !signaturePart) throw new Error("malformed JWT");
+
+  const header = decodeJwtPart(headerPart);
+  if (header.kid !== options.kid || header.alg !== "EdDSA") return null;
+
+  const signingInput = `${headerPart}.${payloadPart}`;
+  const publicKey = createPublicKey(fs.readFileSync(options.publicKeyPath, "utf-8"));
+  const signatureOk = verifyPayload(
+    null,
+    Buffer.from(signingInput),
+    publicKey,
+    Buffer.from(signaturePart, "base64url"),
+  );
+  if (!signatureOk) throw new Error("invalid JWT signature");
+
+  const payload = decodeJwtPart(payloadPart);
+  const identity = `openshell-gateway:${options.gatewayId}`;
+  expect(payload.iss).toBe(identity);
+  expect(payload.aud).toBe(identity);
+  expect(String(payload.sub)).toBe(`${SANDBOX_JWT_SUBJECT_PREFIX}${payload.sandbox_id}`);
+  if (typeof payload.exp === "number" && payload.exp !== 0 && payload.exp < options.now - 60) {
+    throw new Error("expired JWT");
+  }
+  return payload;
+}
 
 describe("buildDockerDriverGatewayEnv", () => {
   it("sets Docker-driver gateway networking from NemoClaw configuration", () => {
@@ -151,6 +237,86 @@ describe("buildDockerDriverGatewayEnv", () => {
       expect(toml).toContain(`signing_key_path = "${signingKeyPath}"`);
       expect(toml).toContain(`public_key_path = "${publicKeyPath}"`);
       expect(toml).toContain(`kid_path = "${kidPath}"`);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("emits an OpenShell 0.0.67-compatible sandbox JWT bundle and TTL contract", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-env-config-"));
+    try {
+      const env = buildDockerDriverGatewayEnv({
+        platform: "linux",
+        stateDir,
+        getDockerSupervisorImage: () => "ghcr.io/nvidia/openshell/supervisor:0.0.67",
+        resolveSandboxBin: () => "/usr/bin/openshell-sandbox",
+      });
+      const toml = fs.readFileSync(env.OPENSHELL_GATEWAY_CONFIG, "utf-8");
+      const signingKeyPath = parseTomlString(toml, "signing_key_path");
+      const publicKeyPath = parseTomlString(toml, "public_key_path");
+      const kidPath = parseTomlString(toml, "kid_path");
+      const gatewayId = parseTomlString(toml, "gateway_id");
+      const ttlSecs = parseTomlInteger(toml, "ttl_secs");
+      const kid = fs.readFileSync(kidPath, "utf-8").trim();
+      const now = Math.floor(Date.now() / 1000);
+      const sandboxId = "sandbox-contract";
+
+      expect(toml).toContain("[openshell.gateway.gateway_jwt]");
+      expect(toml).toContain("[openshell.gateway.auth]");
+      expect(toml).toContain("allow_unauthenticated_users = true");
+      expect(env.OPENSHELL_DISABLE_GATEWAY_AUTH).toBeUndefined();
+      expect(ttlSecs).toBe(3600);
+
+      const token = mintOpenShellStyleSandboxJwt({
+        signingKeyPath,
+        kid,
+        gatewayId,
+        sandboxId,
+        iat: now,
+        exp: now + ttlSecs,
+      });
+
+      const payload = validateOpenShellStyleSandboxJwt({
+        token,
+        publicKeyPath,
+        kid,
+        gatewayId,
+        now,
+      });
+      expect(payload).toMatchObject({
+        sandbox_id: sandboxId,
+        iss: `openshell-gateway:${gatewayId}`,
+        aud: `openshell-gateway:${gatewayId}`,
+      });
+      expect(payload?.exp).toBe(now + ttlSecs);
+
+      expect(
+        validateOpenShellStyleSandboxJwt({
+          token,
+          publicKeyPath,
+          kid: "wrong-kid",
+          gatewayId,
+          now,
+        }),
+      ).toBeNull();
+
+      const expired = mintOpenShellStyleSandboxJwt({
+        signingKeyPath,
+        kid,
+        gatewayId,
+        sandboxId,
+        iat: now - ttlSecs * 2,
+        exp: now - ttlSecs,
+      });
+      expect(() =>
+        validateOpenShellStyleSandboxJwt({
+          token: expired,
+          publicKeyPath,
+          kid,
+          gatewayId,
+          now,
+        }),
+      ).toThrow("expired JWT");
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
