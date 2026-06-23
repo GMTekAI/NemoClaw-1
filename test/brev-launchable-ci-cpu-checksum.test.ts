@@ -176,7 +176,10 @@ exit 0
   };
 }
 
-function runLaunchable(options: { checksum: "match" | "mismatch" }) {
+function runLaunchable(options: {
+  checksum: "match" | "mismatch";
+  openshellVersion?: string;
+}) {
   const fake = makeFakeSystem(options);
   const result = spawnSync("bash", [SCRIPT], {
     encoding: "utf-8",
@@ -184,7 +187,7 @@ function runLaunchable(options: { checksum: "match" | "mismatch" }) {
       ...process.env,
       LAUNCH_LOG: fake.launchLog,
       NEMOCLAW_CLONE_DIR: fake.cloneDir,
-      OPENSHELL_VERSION: "v0.0.67",
+      OPENSHELL_VERSION: options.openshellVersion ?? "v0.0.67",
       PATH: `${fake.fakeBin}:/usr/bin:/bin`,
       SKIP_DOCKER_PULL: "1",
       SUDO_USER: "tester",
@@ -194,11 +197,41 @@ function runLaunchable(options: { checksum: "match" | "mismatch" }) {
   return { fake, result };
 }
 
+function combinedLaunchableOutput(
+  result: ReturnType<typeof spawnSync>,
+  launchLog: string,
+): string {
+  return [
+    result.stdout || "",
+    result.stderr || "",
+    fs.existsSync(launchLog) ? fs.readFileSync(launchLog, "utf-8") : "",
+  ].join("\n");
+}
+
 describe("brev-launchable-ci-cpu.sh OpenShell checksum gate", { timeout: 30_000 }, () => {
+  it("rejects malformed OPENSHELL_VERSION before downloads or Docker pre-pulls", () => {
+    const { fake, result } = runLaunchable({
+      checksum: "match",
+      openshellVersion: "v0.0.67;touch /tmp/nemoclaw-version-injection",
+    });
+    try {
+      const out = combinedLaunchableOutput(result, fake.launchLog);
+      expect(result.status, out).toBe(1);
+      expect(out).toContain("Invalid OPENSHELL_VERSION");
+      expect(fs.existsSync(fake.curlLog) ? fs.readFileSync(fake.curlLog, "utf-8") : "").toBe("");
+      expect(fs.existsSync(fake.tarLog) ? fs.readFileSync(fake.tarLog, "utf-8") : "").toBe("");
+      expect(fs.existsSync(fake.sudoLog) ? fs.readFileSync(fake.sudoLog, "utf-8") : "").not.toMatch(
+        /^install -m 755 .*openshell/m,
+      );
+    } finally {
+      fake.cleanup();
+    }
+  });
+
   it("rejects a tampered OpenShell CLI asset before tar or sudo install", () => {
     const { fake, result } = runLaunchable({ checksum: "mismatch" });
     try {
-      const out = `${result.stdout || ""}\n${result.stderr || ""}`;
+      const out = combinedLaunchableOutput(result, fake.launchLog);
       expect(result.status, out).toBe(1);
       expect(out).toContain(`OpenShell CLI checksum verification failed for ${ASSET}`);
       expect(fs.existsSync(fake.tarLog) ? fs.readFileSync(fake.tarLog, "utf-8") : "").toBe("");
@@ -213,7 +246,7 @@ describe("brev-launchable-ci-cpu.sh OpenShell checksum gate", { timeout: 30_000 
   it("extracts and installs the OpenShell CLI when the checksum matches", () => {
     const { fake, result } = runLaunchable({ checksum: "match" });
     try {
-      const out = `${result.stdout || ""}\n${result.stderr || ""}`;
+      const out = combinedLaunchableOutput(result, fake.launchLog);
       expect(result.status, out).toBe(0);
       expect(out).toContain("OpenShell CLI installed: openshell 0.0.67");
       expect(fs.readFileSync(fake.tarLog, "utf-8")).toContain(`xzf`);

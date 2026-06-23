@@ -61,6 +61,32 @@ function parseTomlInteger(toml: string, key: string): number {
   return Number(match?.[1] ?? "0");
 }
 
+function jwtBundlePaths(stateDir: string): {
+  signingKeyPath: string;
+  publicKeyPath: string;
+  kidPath: string;
+} {
+  return {
+    signingKeyPath: path.join(stateDir, "jwt", "signing.pem"),
+    publicKeyPath: path.join(stateDir, "jwt", "public.pem"),
+    kidPath: path.join(stateDir, "jwt", "kid"),
+  };
+}
+
+function expectEd25519BundleSignsAndVerifies(paths: {
+  signingKeyPath: string;
+  publicKeyPath: string;
+  kidPath: string;
+}): void {
+  const privateKey = createPrivateKey(fs.readFileSync(paths.signingKeyPath, "utf-8"));
+  const publicKey = createPublicKey(fs.readFileSync(paths.publicKeyPath, "utf-8"));
+  const payload = Buffer.from("nemoclaw-openshell-gateway-jwt-bundle-check", "utf-8");
+  expect(privateKey.asymmetricKeyType).toBe("ed25519");
+  expect(publicKey.asymmetricKeyType).toBe("ed25519");
+  expect(fs.readFileSync(paths.kidPath, "utf-8").trim()).not.toBe("");
+  expect(verifyPayload(null, payload, publicKey, signPayload(null, payload, privateKey))).toBe(true);
+}
+
 function decodeJwtPart(part: string): Record<string, unknown> {
   return JSON.parse(Buffer.from(part, "base64url").toString("utf-8")) as Record<string, unknown>;
 }
@@ -245,9 +271,9 @@ describe("docker-driver-gateway-config", () => {
 
     expect(reviewNote).toContain("NVIDIA/OpenShell@v0.0.67");
     expect(reviewNote).toContain("ce788b50f9b1f977a4327e4484c5b663013dd9a5");
-    expect(reviewNote).toContain("openshell-gateway-source-contract.test.ts");
+    expect(reviewNote).not.toContain("openshell-gateway-source-contract.test.ts");
     expect(reviewNote).toContain("openshell_server::config_file::load()");
-    expect(reviewNote).toContain("scenarios=openshell-gateway-source-contract");
+    expect(reviewNote).toContain("No repo-local live source-contract scenario is claimed");
     expect(reviewNote).toContain("allow_unauthenticated_users");
     expect(reviewNote).toContain("gateway_jwt");
     expect(reviewNote).toContain("SandboxJwtAuthenticator");
@@ -262,6 +288,7 @@ describe("docker-driver-gateway-config", () => {
       "NEMOCLAW_OPENSHELL_GATEWAY_COMPAT_BIND_ADDRESS=0.0.0.0` is rejected",
     );
     expect(reviewNote).toContain("reject `NEMOCLAW_GATEWAY_BIND_ADDRESS=0.0.0.0`");
+    expect(reviewNote).toContain("no-token Docker bridge user calls fail closed");
   });
 
   it("writes OpenShell 0.0.67 gateway JWT config into the managed state dir", () => {
@@ -282,7 +309,7 @@ describe("docker-driver-gateway-config", () => {
       expect(toml).toContain('gateway_id = "nemoclaw-');
       expect(toml).toContain(`ttl_secs = ${DOCKER_DRIVER_GATEWAY_JWT_TTL_SECS}`);
       expect(toml).toContain("[openshell.gateway.auth]");
-      expect(toml).toContain("allow_unauthenticated_users = true");
+      expect(toml).toContain("allow_unauthenticated_users = false");
       expect(toml).toContain('compute_drivers = ["docker"]');
       expect(toml).toContain('supervisor_bin = "/usr/bin/openshell-sandbox"');
       expect(env.OPENSHELL_DISABLE_GATEWAY_AUTH).toBeUndefined();
@@ -301,12 +328,56 @@ describe("docker-driver-gateway-config", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-config-"));
     try {
       writeGatewayConfig(stateDir);
-      const signingKeyPath = path.join(stateDir, "jwt", "signing.pem");
-      const firstSigningKey = fs.readFileSync(signingKeyPath, "utf-8");
+      const paths = jwtBundlePaths(stateDir);
+      const firstSigningKey = fs.readFileSync(paths.signingKeyPath, "utf-8");
+      expectEd25519BundleSignsAndVerifies(paths);
 
       writeGatewayConfig(stateDir);
 
-      expect(fs.readFileSync(signingKeyPath, "utf-8")).toBe(firstSigningKey);
+      expect(fs.readFileSync(paths.signingKeyPath, "utf-8")).toBe(firstSigningKey);
+      expectEd25519BundleSignsAndVerifies(paths);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      name: "malformed signing key",
+      corrupt: (paths: ReturnType<typeof jwtBundlePaths>) => {
+        fs.writeFileSync(paths.signingKeyPath, "not a private key\n", { mode: 0o600 });
+      },
+    },
+    {
+      name: "empty kid",
+      corrupt: (paths: ReturnType<typeof jwtBundlePaths>) => {
+        fs.writeFileSync(paths.kidPath, "\n", { mode: 0o600 });
+      },
+    },
+    {
+      name: "mismatched public key",
+      corrupt: (paths: ReturnType<typeof jwtBundlePaths>) => {
+        const otherStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-config-"));
+        try {
+          writeGatewayConfig(otherStateDir);
+          fs.copyFileSync(jwtBundlePaths(otherStateDir).publicKeyPath, paths.publicKeyPath);
+        } finally {
+          fs.rmSync(otherStateDir, { recursive: true, force: true });
+        }
+      },
+    },
+  ])("regenerates a complete gateway JWT bundle when $name", ({ corrupt }) => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-config-"));
+    try {
+      writeGatewayConfig(stateDir);
+      const paths = jwtBundlePaths(stateDir);
+      const firstSigningKey = fs.readFileSync(paths.signingKeyPath, "utf-8");
+
+      corrupt(paths);
+      writeGatewayConfig(stateDir);
+
+      expect(fs.readFileSync(paths.signingKeyPath, "utf-8")).not.toBe(firstSigningKey);
+      expectEd25519BundleSignsAndVerifies(paths);
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
@@ -356,7 +427,7 @@ describe("docker-driver-gateway-config", () => {
 
       expect(toml).toContain("[openshell.gateway.gateway_jwt]");
       expect(toml).toContain("[openshell.gateway.auth]");
-      expect(toml).toContain("allow_unauthenticated_users = true");
+      expect(toml).toContain("allow_unauthenticated_users = false");
       expect(env.OPENSHELL_DISABLE_GATEWAY_AUTH).toBeUndefined();
       expect(ttlSecs).toBe(DOCKER_DRIVER_GATEWAY_JWT_TTL_SECS);
 
@@ -424,7 +495,7 @@ describe("docker-driver-gateway-config", () => {
     }
   });
 
-  it("models the OpenShell 0.0.67 auth-router boundary for local users and sandbox JWTs", () => {
+  it("models the OpenShell 0.0.67 auth-router boundary for no-token callers and sandbox JWTs", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-config-"));
     try {
       const env = writeGatewayConfig(stateDir);
@@ -447,31 +518,27 @@ describe("docker-driver-gateway-config", () => {
 
       expect(
         openShell067RouterDecision({
-          allowUnauthenticatedUsers: true,
+          allowUnauthenticatedUsers: false,
           methodPath: USER_CALLABLE_METHOD,
           publicKeyPath,
           kid,
           gatewayId,
           now,
         }),
-      ).toEqual({ status: "ok", principal: "local-dev-user" });
+      ).toEqual({ status: "unauthenticated", reason: "missing authorization header" });
       expect(
         openShell067RouterDecision({
-          allowUnauthenticatedUsers: true,
+          allowUnauthenticatedUsers: false,
           methodPath: SANDBOX_ONLY_METHOD,
           publicKeyPath,
           kid,
           gatewayId,
           now,
         }),
-      ).toEqual({
-        status: "permission_denied",
-        principal: "local-dev-user",
-        reason: "this method requires a sandbox principal",
-      });
+      ).toEqual({ status: "unauthenticated", reason: "missing authorization header" });
       expect(
         openShell067RouterDecision({
-          allowUnauthenticatedUsers: true,
+          allowUnauthenticatedUsers: false,
           methodPath: SANDBOX_ONLY_METHOD,
           token,
           publicKeyPath,
@@ -482,7 +549,7 @@ describe("docker-driver-gateway-config", () => {
       ).toEqual({ status: "ok", principal: "sandbox" });
       expect(
         openShell067RouterDecision({
-          allowUnauthenticatedUsers: true,
+          allowUnauthenticatedUsers: false,
           methodPath: USER_CALLABLE_METHOD,
           token,
           publicKeyPath,
@@ -497,7 +564,7 @@ describe("docker-driver-gateway-config", () => {
       });
       expect(
         openShell067RouterDecision({
-          allowUnauthenticatedUsers: true,
+          allowUnauthenticatedUsers: false,
           methodPath: SANDBOX_ONLY_METHOD,
           token,
           publicKeyPath,
@@ -505,11 +572,7 @@ describe("docker-driver-gateway-config", () => {
           gatewayId,
           now,
         }),
-      ).toEqual({
-        status: "permission_denied",
-        principal: "local-dev-user",
-        reason: "this method requires a sandbox principal",
-      });
+      ).toEqual({ status: "unauthenticated", reason: "missing authorization header" });
       expect(
         openShell067RouterDecision({
           allowUnauthenticatedUsers: false,

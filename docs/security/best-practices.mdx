@@ -446,9 +446,9 @@ NemoClaw binds the OpenShell gateway to loopback by default.
 | Aspect | Detail |
 |---|---|
 | Default | `NEMOCLAW_GATEWAY_BIND_ADDRESS=127.0.0.1`. |
-| What you can change | Set `NEMOCLAW_GATEWAY_BIND_ADDRESS=0.0.0.0` before onboarding to listen on all IPv4 interfaces. |
-| Risk if relaxed | Other hosts on the network may be able to reach the OpenShell gateway. |
-| Recommendation | Keep the loopback default unless the gateway must be reachable from another host. |
+| What you can change | Keep Docker-driver gateways on loopback. Set `NEMOCLAW_DASHBOARD_BIND=0.0.0.0` for remote dashboard/API access. |
+| Risk if relaxed | Other hosts on the network may be able to reach the OpenShell gateway. Docker-driver gateways on OpenShell 0.0.67 reject wildcard gateway binds while gateway JWT auth is active. |
+| Recommendation | Keep the gateway loopback default and expose only the dashboard forward when remote access is needed. |
 
 ### Insecure Auth Derivation
 

@@ -11,7 +11,8 @@ import {
   prepareDockerDriverGatewayConfigEnv,
 } from "./docker-driver-gateway-config";
 
-const DEFAULT_COMPAT_IMAGE = "ubuntu:24.04";
+const DEFAULT_COMPAT_IMAGE =
+  "ubuntu:24.04@sha256:786a8b558f7be160c6c8c4a54f9a57274f3b4fb1491cf65146521ae77ff1dc54";
 const DEFAULT_COMPAT_CONTAINER_NAME = "nemoclaw-openshell-gateway";
 const GATEWAY_MOUNT_PATH = "/opt/nemoclaw/openshell-gateway";
 const LOOPBACK_BIND_ADDRESS = "127.0.0.1";
@@ -375,10 +376,10 @@ export function prepareAndLogDockerDriverGatewayLaunch(
   log(`  OpenShell gateway compatibility patch active (${launch.reason}).`);
   log("  Running openshell-gateway inside a Docker compatibility container.");
   log(
-    "  Compatibility gateway bind: 127.0.0.1 main listener; OpenShell adds the Docker bridge listener when needed.",
+    "  Compatibility gateway bind: 127.0.0.1 main listener plus OpenShell Docker-driver bridge reachability.",
   );
   log(
-    "  Gateway auth boundary: local user CLI/API calls stay compatibility-unauthenticated; sandbox callbacks use OpenShell gateway JWT.",
+    "  Gateway auth boundary: unauthenticated user calls are disabled; sandbox callbacks use OpenShell gateway JWT.",
   );
   prepareDockerDriverGatewayLaunch(launch);
 }

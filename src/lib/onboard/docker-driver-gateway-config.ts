@@ -1,7 +1,14 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { generateKeyPairSync, randomBytes } from "node:crypto";
+import {
+  createPrivateKey,
+  createPublicKey,
+  generateKeyPairSync,
+  randomBytes,
+  sign,
+  verify,
+} from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -28,6 +35,23 @@ function writeRestrictedFile(filePath: string, value: string, mode = 0o600): voi
   fs.chmodSync(filePath, mode);
 }
 
+function dockerDriverGatewayJwtBundleIsValid(bundle: DockerDriverGatewayJwtBundle): boolean {
+  try {
+    const kid = fs.readFileSync(bundle.kidPath, "utf-8").trim();
+    if (!kid) return false;
+    const privateKey = createPrivateKey(fs.readFileSync(bundle.signingKeyPath, "utf-8"));
+    const publicKey = createPublicKey(fs.readFileSync(bundle.publicKeyPath, "utf-8"));
+    if (privateKey.asymmetricKeyType !== "ed25519" || publicKey.asymmetricKeyType !== "ed25519") {
+      return false;
+    }
+    const payload = Buffer.from("nemoclaw-openshell-gateway-jwt-bundle-check", "utf-8");
+    const signature = sign(null, payload, privateKey);
+    return verify(null, payload, publicKey, signature);
+  } catch {
+    return false;
+  }
+}
+
 export function ensureDockerDriverGatewayJwtBundle(stateDir: string): DockerDriverGatewayJwtBundle {
   const jwtDir = path.join(stateDir, GATEWAY_JWT_DIR_NAME);
   const bundle = {
@@ -46,10 +70,13 @@ export function ensureDockerDriverGatewayJwtBundle(stateDir: string): DockerDriv
     fs.chmodSync(bundle.signingKeyPath, 0o600);
     fs.chmodSync(bundle.publicKeyPath, 0o600);
     fs.chmodSync(bundle.kidPath, 0o600);
-    return bundle;
-  }
-
-  if (present > 0) {
+    if (dockerDriverGatewayJwtBundleIsValid(bundle)) {
+      return bundle;
+    }
+    // Complete-but-invalid local auth material is unsafe to reuse because
+    // OpenShell loads these files as one Ed25519 gateway_jwt bundle.
+    fs.rmSync(jwtDir, { recursive: true, force: true });
+  } else if (present > 0) {
     // Invalid state boundary: this directory is NemoClaw-owned local gateway
     // state, and a manual edit or interrupted prior write can leave only part
     // of the OpenShell v0.0.67 gateway_jwt bundle. OpenShell requires all three
@@ -108,23 +135,12 @@ export function buildDockerDriverGatewayConfigToml(
   ];
 
   if (jwtBundle) {
-    // OpenShell v0.0.67 loads these tables from OPENSHELL_GATEWAY_CONFIG, with
-    // OPENSHELL_* env vars taking precedence. The upstream config contract
-    // recognizes gateway_jwt for sandbox callbacks and classifies
-    // allow_unauthenticated_users as a local/trusted-proxy escape hatch that
-    // affects user-facing CLI/API calls, not sandbox supervisor callbacks.
-    // NemoClaw's package-managed gateway still registers providers through
-    // local CLI/API calls without a user auth header, so keep that local user
-    // path compatible while the supervisor channel authenticates with the
-    // generated gateway_jwt bundle below. The normal package-managed gateway
-    // remains loopback-bound. The separate Docker compatibility wrapper rejects
-    // wildcard binds because OpenShell v0.0.67 does not distinguish a local
-    // unauthenticated user caller from a remote unauthenticated caller once the
-    // socket is reachable.
-    //
-    // Removal condition: set this back to false once NemoClaw supplies
-    // OpenShell user auth for local provider registration/CLI calls, or once
-    // OpenShell exposes an equivalent trusted local-user auth path.
+    // OpenShell v0.0.67 adds Docker-driver bridge reachability for sandbox
+    // callbacks and does not origin-scope the unauthenticated local-user escape
+    // hatch. With gateway_jwt configured, disable that escape hatch so a
+    // no-token caller over the bridge cannot become the local dev user. Remove
+    // this guard only after OpenShell provides a trusted local-user auth path or
+    // NemoClaw sends user auth for host-side provider registration.
     sections.push(
       "[openshell.gateway.gateway_jwt]",
       `signing_key_path = ${tomlString(jwtBundle.signingKeyPath)}`,
@@ -134,7 +150,7 @@ export function buildDockerDriverGatewayConfigToml(
       `ttl_secs = ${DOCKER_DRIVER_GATEWAY_JWT_TTL_SECS}`,
       "",
       "[openshell.gateway.auth]",
-      "allow_unauthenticated_users = true",
+      "allow_unauthenticated_users = false",
       "",
     );
   }

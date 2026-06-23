@@ -118,10 +118,11 @@ describe("docker-driver-gateway-launch", () => {
           "OPENSHELL_DOCKER_SUPERVISOR_BIN",
           "--env",
           "OPENSHELL_GATEWAY_CONFIG",
-          "ubuntu:24.04",
+          "ubuntu:24.04@sha256:786a8b558f7be160c6c8c4a54f9a57274f3b4fb1491cf65146521ae77ff1dc54",
           "/opt/nemoclaw/openshell-gateway",
         ]),
       );
+      expect(launch.args).not.toContain("ubuntu:24.04");
       expect(launch.env.OPENSHELL_DOCKER_SUPERVISOR_BIN).toBe(sandboxBin);
       expect(launch.env.OPENSHELL_BIND_ADDRESS).toBe("127.0.0.1");
       const configPath = launch.env.OPENSHELL_GATEWAY_CONFIG;
@@ -133,7 +134,7 @@ describe("docker-driver-gateway-launch", () => {
       expect(toml).toContain("[openshell.gateway.gateway_jwt]");
       expect(toml).toContain(`signing_key_path = "${path.join(stateDir, "jwt", "signing.pem")}"`);
       expect(toml).toContain("[openshell.gateway.auth]");
-      expect(toml).toContain("allow_unauthenticated_users = true");
+      expect(toml).toContain("allow_unauthenticated_users = false");
       expect(launch.env.OPENSHELL_DISABLE_GATEWAY_AUTH).toBeUndefined();
       expect(launch.args).not.toContain("OPENSHELL_DISABLE_GATEWAY_AUTH");
       expect(fs.existsSync(path.join(stateDir, "jwt", "public.pem"))).toBe(true);
@@ -182,10 +183,10 @@ describe("docker-driver-gateway-launch", () => {
     );
 
     expect(messages).toContain(
-      "  Compatibility gateway bind: 127.0.0.1 main listener; OpenShell adds the Docker bridge listener when needed.",
+      "  Compatibility gateway bind: 127.0.0.1 main listener plus OpenShell Docker-driver bridge reachability.",
     );
     expect(messages).toContain(
-      "  Gateway auth boundary: local user CLI/API calls stay compatibility-unauthenticated; sandbox callbacks use OpenShell gateway JWT.",
+      "  Gateway auth boundary: unauthenticated user calls are disabled; sandbox callbacks use OpenShell gateway JWT.",
     );
   });
 

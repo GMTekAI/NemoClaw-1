@@ -10,6 +10,7 @@ Reviewed upstream source at `NVIDIA/OpenShell@v0.0.67` (`ce788b50f9b1f977a4327e4
 
 - `crates/openshell-core/src/config.rs`: `GatewayAuthConfig.allow_unauthenticated_users` is documented as an unsafe local-development escape hatch for user/CLI calls; sandbox supervisor calls still use gateway-minted sandbox JWTs.
 - `crates/openshell-server/src/lib.rs`: when `gateway_jwt` is configured, OpenShell reads the configured signing key, public key, and kid, then installs both `SandboxJwtIssuer` and `SandboxJwtAuthenticator`.
+- `crates/openshell-server/src/config_file.rs`: OpenShell loads the gateway tables from config files through `openshell_server::config_file::load()`.
 - `crates/openshell-server/src/lib.rs`: the server binds the configured main listener plus compute-driver `gateway_bind_addresses`, skipping only driver addresses already covered by a wildcard listener.
 - `crates/openshell-server/src/auth/sandbox_jwt.rs`: sandbox JWTs are Ed25519/EdDSA, require the configured `kid`, `iss`, `aud`, and `sub`, and reject expired tokens while allowing non-matching `kid` values to fall through to other authenticators.
 - `crates/openshell-driver-docker/src/lib.rs`: Docker-driver sandboxes see loopback and arbitrary hostnames rewritten to `host.openshell.internal:<gateway-port>`, and native Linux Docker gets a bridge-gateway bind address such as `<docker-bridge-gateway-ip>:<gateway-port>`.
@@ -17,18 +18,15 @@ Reviewed upstream source at `NVIDIA/OpenShell@v0.0.67` (`ce788b50f9b1f977a4327e4
 
 ## NemoClaw Boundary
 
-NemoClaw keeps `allow_unauthenticated_users = true` so local OpenShell CLI/API provider-registration calls remain compatible with OpenShell 0.0.67. The generated `gateway_jwt` bundle remains the sandbox supervisor auth path, and stale `OPENSHELL_DISABLE_GATEWAY_AUTH` env is scrubbed before launch.
+NemoClaw generates `allow_unauthenticated_users = false` whenever it writes the Docker-driver `gateway_jwt` config. OpenShell 0.0.67 can add Docker bridge reachability for sandbox callbacks, and its unauthenticated local-user escape hatch is not origin-scoped, so no-token Docker bridge user calls fail closed instead of becoming `local-dev-user`. The generated `gateway_jwt` bundle remains the sandbox supervisor auth path, and stale `OPENSHELL_DISABLE_GATEWAY_AUTH` env is scrubbed before launch.
 
-The Docker-hosted compatibility gateway keeps the main OpenShell listener on `127.0.0.1`. Sandbox callback reachability is preserved by OpenShell's Docker driver: it rewrites the sandbox-facing endpoint to `host.openshell.internal:<gateway-port>` and the OpenShell server adds the computed Docker bridge listener when that route is needed. `NEMOCLAW_OPENSHELL_GATEWAY_COMPAT_BIND_ADDRESS=0.0.0.0` is rejected, because OpenShell 0.0.67 does not distinguish a local unauthenticated user caller from a remote unauthenticated caller once the main socket is reachable.
+The Docker-hosted compatibility gateway keeps the main OpenShell listener on `127.0.0.1`. Sandbox callback reachability is preserved by OpenShell's Docker driver: it rewrites the sandbox-facing endpoint to `host.openshell.internal:<gateway-port>` and the OpenShell server adds the computed Docker bridge listener when that route is needed. `NEMOCLAW_OPENSHELL_GATEWAY_COMPAT_BIND_ADDRESS=0.0.0.0` is rejected because the bridge/listener boundary relies on gateway JWT auth, not unauthenticated user fallback.
 
-Package-managed Docker-driver gateways also reject `NEMOCLAW_GATEWAY_BIND_ADDRESS=0.0.0.0` while NemoClaw uses `allow_unauthenticated_users = true`. Use the dashboard bind setting for remote dashboard exposure instead of widening the OpenShell gateway's unauthenticated local-user compatibility surface.
+Package-managed Docker-driver gateways also reject `NEMOCLAW_GATEWAY_BIND_ADDRESS=0.0.0.0` while gateway JWT auth is active. Use the dashboard bind setting for remote dashboard exposure instead of widening the OpenShell gateway surface.
 
 ## Upstream Contract Coverage
 
-Executable NemoClaw live scenario:
-
-- `test/e2e-scenario/live/openshell-gateway-source-contract.test.ts` checks out `NVIDIA/OpenShell@v0.0.67` at `ce788b50f9b1f977a4327e4484c5b663013dd9a5`, generates NemoClaw's `OPENSHELL_GATEWAY_CONFIG`, injects a temporary OpenShell integration test that loads that exact TOML through `openshell_server::config_file::load()`, and runs the upstream OpenShell auth/listener contract tests below.
-- Manual scenario selector: `scenarios=openshell-gateway-source-contract`; the default all-scenarios dispatch includes the same free-standing job.
+No repo-local live source-contract scenario is claimed by this PR. The source review above was performed directly against `NVIDIA/OpenShell@v0.0.67`, and the local unit coverage below models the relevant OpenShell 0.0.67 auth-router behavior with NemoClaw's generated config.
 
 Local run against `NVIDIA/OpenShell@v0.0.67`:
 
@@ -42,6 +40,6 @@ Local run against `NVIDIA/OpenShell@v0.0.67`:
 
 ## Local Coverage
 
-- `src/lib/onboard/docker-driver-gateway-config.test.ts` verifies the generated TOML/JWT bundle, key reuse/regeneration, wrong kid, wrong gateway id, expired token rejection, and the OpenShell 0.0.67 auth-router contract for local user versus sandbox principals.
-- `src/lib/onboard/docker-driver-gateway-env.test.ts` verifies package-managed Docker-driver gateway startup rejects wildcard binds while the OpenShell 0.0.67 local-user compatibility auth path is active.
-- `src/lib/onboard/docker-driver-gateway-launch.test.ts` verifies loopback main binding, wildcard override rejection, stale auth-disable env scrubbing, and generated `OPENSHELL_GATEWAY_CONFIG`.
+- `src/lib/onboard/docker-driver-gateway-config.test.ts` verifies the generated TOML/JWT bundle, valid bundle reuse, invalid complete bundle regeneration, wrong kid, wrong gateway id, expired token rejection, no-token Docker bridge user-call rejection, and the OpenShell 0.0.67 auth-router contract for sandbox principals.
+- `src/lib/onboard/docker-driver-gateway-env.test.ts` verifies package-managed Docker-driver gateway startup rejects wildcard binds while gateway JWT auth is active.
+- `src/lib/onboard/docker-driver-gateway-launch.test.ts` verifies loopback main binding, digest-pinned compatibility image selection, wildcard override rejection, stale auth-disable env scrubbing, and generated `OPENSHELL_GATEWAY_CONFIG`.

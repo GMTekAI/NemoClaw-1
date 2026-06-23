@@ -61,7 +61,7 @@ describe("buildDockerDriverGatewayEnv", () => {
     expect(env.OPENSHELL_DRIVER_DIR).toBeUndefined();
   });
 
-  it("rejects wildcard gateway binds while local user compatibility auth is enabled", () => {
+  it("rejects wildcard gateway binds while gateway JWT auth is active", () => {
     expect(() =>
       assertDockerDriverGatewayBindAddressSafe({
         OPENSHELL_BIND_ADDRESS: "0.0.0.0",

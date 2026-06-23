@@ -72,6 +72,19 @@ fail() {
   exit 1
 }
 
+assert_openshell_version() {
+  local raw="$1"
+  if [[ ! "$raw" =~ ^v?[0-9]+[.][0-9]+[.][0-9]+$ ]]; then
+    fail "Invalid OPENSHELL_VERSION '$raw'; expected vX.Y.Z or X.Y.Z"
+  fi
+}
+
+assert_openshell_version "$OPENSHELL_VERSION"
+if [[ "$OPENSHELL_VERSION" != v* ]]; then
+  OPENSHELL_VERSION="v${OPENSHELL_VERSION}"
+fi
+OPENSHELL_VERSION_NO_V="${OPENSHELL_VERSION#v}"
+
 # ── Retry helper ─────────────────────────────────────────────────────
 # Usage: retry 3 10 "description" command arg1 arg2
 retry() {
@@ -232,7 +245,7 @@ fi
 # ══════════════════════════════════════════════════════════════════════
 if command -v openshell >/dev/null 2>&1; then
   _installed_ver="$(openshell --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo '0.0.0')"
-  _pinned_ver="${OPENSHELL_VERSION#v}" # strip leading 'v'
+  _pinned_ver="$OPENSHELL_VERSION_NO_V"
   if [ "$_installed_ver" = "$_pinned_ver" ]; then
     info "OpenShell CLI already installed at pinned version: $_installed_ver"
   else
@@ -267,7 +280,7 @@ DOCKER_PULL_PID=""
 if [[ "${SKIP_DOCKER_PULL:-0}" != "1" ]]; then
   info "Pre-pulling Docker images in background..."
   (
-    SUPERVISOR_TAG="${OPENSHELL_VERSION#v}" # v0.0.67 -> 0.0.67
+    SUPERVISOR_TAG="$OPENSHELL_VERSION_NO_V"
     SUPERVISOR_IMAGE="ghcr.io/nvidia/openshell/supervisor:${SUPERVISOR_TAG}"
 
     # Pull all images in parallel

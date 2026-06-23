@@ -200,14 +200,13 @@ or Ollama proxy ports:
 NEMOCLAW_GATEWAY_PORT=8990 nemoclaw onboard
 ```
 
-Remote/headless hosts can bind the OpenShell gateway to all IPv4 interfaces:
+Remote/headless hosts should keep the OpenShell gateway on loopback and bind the dashboard forward instead:
 
 ```bash
-NEMOCLAW_GATEWAY_BIND_ADDRESS=0.0.0.0 NEMOCLAW_GATEWAY_PORT=8990 nemoclaw onboard
+NEMOCLAW_DASHBOARD_BIND=0.0.0.0 NEMOCLAW_GATEWAY_PORT=8990 nemoclaw onboard
 ```
 
-Use `NEMOCLAW_GATEWAY_BIND_ADDRESS=0.0.0.0` only when other hosts on the
-network should be able to reach the gateway.
+Docker-driver gateways on OpenShell 0.0.67 reject `NEMOCLAW_GATEWAY_BIND_ADDRESS=0.0.0.0` while gateway JWT auth is active.
 
 See [Environment Variables](commands.md#environment-variables) for the full list of port overrides.
 
