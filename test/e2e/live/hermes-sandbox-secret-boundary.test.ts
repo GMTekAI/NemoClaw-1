@@ -3,6 +3,7 @@
 
 import { Buffer } from "node:buffer";
 
+import { shellQuote } from "../fixtures/clients/command.ts";
 import { type DockerCommandResult, DockerProbe, resultText } from "../fixtures/docker-probe.ts";
 import { expect, test } from "../fixtures/e2e-test.ts";
 
@@ -239,10 +240,6 @@ if missing_config:
 
 function safeTag(value: string): string {
   return value.replace(/[^A-Za-z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "") || "local";
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function safeArtifactPart(value: string): string {

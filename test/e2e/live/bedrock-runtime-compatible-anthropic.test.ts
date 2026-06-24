@@ -11,6 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import type { ArtifactSink } from "../fixtures/artifacts.ts";
 import { buildAvailabilityProbeEnv } from "../fixtures/availability-env.ts";
+import { shellQuote } from "../fixtures/clients/command.ts";
 import type { HostCliClient } from "../fixtures/clients/host.ts";
 import {
   type SandboxClient,
@@ -113,10 +114,6 @@ function isMissingSandboxCleanupOutput(text: string): boolean {
   return /Sandbox '.+' does not exist|Run 'nemoclaw onboard' to create one|sandbox (?:.* )?not found|no such sandbox/i.test(
     text,
   );
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function sandboxShellArgs(script: string): string[] {

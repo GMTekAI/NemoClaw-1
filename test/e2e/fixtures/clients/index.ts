@@ -5,6 +5,7 @@ export {
   assertExitZero,
   outputContainsSandbox,
   resultText,
+  shellQuote,
   type CommandRunner,
 } from "./command.ts";
 export { GatewayClient } from "./gateway.ts";

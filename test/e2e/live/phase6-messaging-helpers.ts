@@ -4,6 +4,7 @@
 import path from "node:path";
 
 import { buildAvailabilityProbeEnv } from "../fixtures/availability-env.ts";
+import { shellQuote } from "../fixtures/clients/command.ts";
 import type { HostCliClient } from "../fixtures/clients/host.ts";
 import {
   type SandboxClient,
@@ -31,9 +32,7 @@ export function resultText(result: Pick<ShellProbeResult, "stdout" | "stderr">):
   return [result.stdout, result.stderr].filter(Boolean).join("\n");
 }
 
-export function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
+export { shellQuote };
 
 export function base64(value: string): string {
   return Buffer.from(value, "utf8").toString("base64");

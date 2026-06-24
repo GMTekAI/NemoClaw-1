@@ -7,7 +7,7 @@ import path from "node:path";
 
 import { describe, expect, expectTypeOf, it } from "vitest";
 
-import { assertExitZero, type CommandRunner } from "../fixtures/clients/index.ts";
+import { assertExitZero, shellQuote, type CommandRunner } from "../fixtures/clients/index.ts";
 import {
   GatewayClient,
   HostCliClient,
@@ -532,6 +532,10 @@ describe("E2E fixture clients", () => {
     expect(() => assertExitZero({ ...result, exitCode: null, signal: "SIGTERM" }, "cmd")).toThrow(
       "cmd failed: signal=SIGTERM",
     );
+  });
+
+  it("exports the shared shell quoting helper", () => {
+    expect(shellQuote("can't run; rm -rf /")).toBe("'can'\\''t run; rm -rf /'");
   });
 
   it("state client reads text and JSON files", async () => {

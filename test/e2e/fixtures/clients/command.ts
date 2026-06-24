@@ -6,6 +6,7 @@ import type {
   ShellProbeRunOptions,
   TrustedShellCommand,
 } from "../shell-probe.ts";
+export { shellQuote } from "../../../../src/lib/core/shell-quote.ts";
 
 export interface CommandRunner {
   run(command: TrustedShellCommand, options?: ShellProbeRunOptions): Promise<ShellProbeResult>;

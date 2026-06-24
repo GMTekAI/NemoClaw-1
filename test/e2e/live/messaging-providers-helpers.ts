@@ -8,6 +8,7 @@ import path from "node:path";
 
 import type { ArtifactSink } from "../fixtures/artifacts.ts";
 import { buildAvailabilityProbeEnv } from "../fixtures/availability-env.ts";
+import { shellQuote } from "../fixtures/clients/command.ts";
 import type { HostCliClient } from "../fixtures/clients/host.ts";
 import {
   type SandboxClient,
@@ -75,6 +76,7 @@ export type ChannelConfig = {
 };
 
 export type AccountConfig = Record<string, unknown>;
+export { shellQuote };
 
 export type FakeDockerApi = {
   kind: string;
@@ -94,10 +96,6 @@ export function stripAnsi(value: string): string {
 
 export function base64(value: string): string {
   return Buffer.from(value, "utf8").toString("base64");
-}
-
-export function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 export function uniqueContainerName(prefix: string): string {

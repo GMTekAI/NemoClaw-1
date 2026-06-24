@@ -22,6 +22,18 @@ target files under `test/e2e/`.
 - Manual dispatch uses `targets` and `jobs`, and live artifacts are written
   under `e2e-artifacts/live`.
 
+## Helper Cleanup
+
+The closeout audit promoted repeated shell quoting into the shared E2E command
+fixture. E2E tests and helper modules that need shell-safe interpolation should
+use `shellQuote` from `test/e2e/fixtures/clients/command.ts`, which re-exports
+the production implementation in `src/lib/core/shell-quote.ts`.
+
+Other repeated-looking helpers should only move into `test/e2e/fixtures/` when
+they share the same input/output contract. Local helpers that format a
+test-specific result shape, preserve a target's narrative failure message, or
+bind cleanup to one live system boundary should stay with that test.
+
 ## Earlier Typed-Shell Removal
 
 - `.github/workflows/e2e-scenarios.yaml`

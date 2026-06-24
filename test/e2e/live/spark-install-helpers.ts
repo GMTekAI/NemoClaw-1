@@ -3,7 +3,7 @@
 
 import fs from "node:fs";
 
-import { resultText } from "../fixtures/clients/command.ts";
+import { resultText, shellQuote } from "../fixtures/clients/command.ts";
 import { validateSandboxName } from "../fixtures/clients/sandbox.ts";
 import { redactString } from "../fixtures/redaction.ts";
 import type { ShellProbeResult } from "../fixtures/shell-probe.ts";
@@ -28,10 +28,6 @@ function fail(message: string): never {
 
 function requireSparkInstallContract(condition: boolean, message: string): void {
   condition || fail(message);
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
 
 export function assertSparkInstallSandboxName(name: string): string {
