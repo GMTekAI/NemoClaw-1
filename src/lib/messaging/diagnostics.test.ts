@@ -118,16 +118,16 @@ async function withEnvOverrides<T>(
   run: () => Promise<T>,
 ): Promise<T> {
   const previous = Object.fromEntries(Object.keys(values).map((key) => [key, process.env[key]]));
-  for (const [key, value] of Object.entries(values)) {
-    if (value === undefined) delete process.env[key];
-    else process.env[key] = value;
-  }
+  applyEnvOverrides(values);
   try {
     return await run();
   } finally {
-    for (const [key, value] of Object.entries(previous)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
+    applyEnvOverrides(previous);
+  }
+}
+
+function applyEnvOverrides(values: Readonly<Record<string, string | undefined>>): void {
+  for (const [key, value] of Object.entries(values)) {
+    value === undefined ? Reflect.deleteProperty(process.env, key) : (process.env[key] = value);
   }
 }
