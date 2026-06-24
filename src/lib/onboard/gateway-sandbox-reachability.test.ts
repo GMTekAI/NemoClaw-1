@@ -640,6 +640,36 @@ describe("verifySandboxBridgeGatewayReachableOrExit host-gateway retry", () => {
     log.mockRestore();
   });
 
+  it("fails after exhausting persistent host-gateway tcp failures", async () => {
+    const reachabilityImpl = vi.fn().mockResolvedValue(hostGatewayTcpFailure);
+    const sleepMsImpl = vi.fn().mockResolvedValue(undefined);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await expect(
+      verifySandboxBridgeGatewayReachableOrExit(false, {
+        reachabilityImpl,
+        retryAttempts: 3,
+        retryDelayMs: 25,
+        sleepMsImpl,
+      }),
+    ).rejects.toThrow("sandbox-bridge unreachable");
+    expect(reachabilityImpl).toHaveBeenCalledTimes(3);
+    expect(sleepMsImpl).toHaveBeenCalledTimes(2);
+    expect(sleepMsImpl).toHaveBeenNthCalledWith(1, 25);
+    expect(sleepMsImpl).toHaveBeenNthCalledWith(2, 25);
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("probe attempt 1/3 failed (tcp_failed)"),
+    );
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("probe attempt 2/3 failed (tcp_failed)"),
+    );
+    const message = error.mock.calls[0]?.[0] as string;
+    expect(message).toContain("host-gateway route");
+    expect(message).not.toContain("ufw allow");
+    log.mockRestore();
+    error.mockRestore();
+  });
+
   it("does not retry bridge-gateway tcp failures so UFW remediation remains responsible", async () => {
     const bridgeGatewayTcpFailure = {
       ...hostGatewayTcpFailure,
