@@ -1167,6 +1167,100 @@ if (!blocked) throw new Error('private IP literal was not blocked');`,
     }
   });
 
+  it("bare omitted-mode fetches skip pinned DNS in sandbox while preserving SSRF denies", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-fetch-guard-mode-contract-"));
+    const dist = path.join(tmp, "dist");
+    fs.mkdirSync(dist, { recursive: true });
+    fs.writeFileSync(path.join(tmp, "package.json"), '{"type":"module"}\n');
+    const modulePath = path.join(dist, "fetch-guard-mode-contract.js");
+    fs.writeFileSync(
+      modulePath,
+      [
+        "const pinnedDnsCalls = [];",
+        "const policyChecks = [];",
+        "const withStrictGuardedFetchMode = (params) => ({ ...params, mode: GUARDED_FETCH_MODE.STRICT });",
+        "const withTrustedEnvProxyGuardedFetchMode = (params) => ({ ...params, mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY });",
+        "const GUARDED_FETCH_MODE = { STRICT: 'strict', TRUSTED_ENV_PROXY: 'trusted_env_proxy' };",
+        REVIEWED_OPENCLAW_2026_5_27_GUARDED_MODE_SHAPE,
+        "function normalizeHostname(value) { return String(value || '').toLowerCase().replace(/\\.+$/, ''); }",
+        "function assertHostnameAllowedWithPolicy(hostname, policy) {",
+        "  const normalized = normalizeHostname(hostname);",
+        "  policyChecks.push({ normalized, policy });",
+        "  const allowedHostnames = new Set((policy?.allowedHostnames ?? []).map(normalizeHostname));",
+        "  if (allowedHostnames.has(normalized)) return normalized;",
+        "  if (normalized === '169.254.169.254' || normalized === '10.0.0.1' || normalized.endsWith('.internal')) throw new Error('blocked ' + normalized);",
+        "  return normalized;",
+        "}",
+        "async function resolvePinnedHostnameWithPolicy(hostname, params = {}) {",
+        "  pinnedDnsCalls.push({ hostname: normalizeHostname(hostname), policy: params.policy });",
+        "  return { hostname: assertHostnameAllowedWithPolicy(hostname, params.policy), addresses: ['203.0.113.10'] };",
+        "}",
+        "function shouldUseEnvHttpProxyForUrl() { return true; }",
+        "function createHttp1EnvHttpProxyAgent() { return { kind: 'env-proxy' }; }",
+        "function createPinnedDispatcher(pinned) { return { kind: 'pinned', pinned }; }",
+        "async function fetchWithSsrFGuard(params) {",
+        "  const parsedUrl = new URL(params.url);",
+        "  const mode = resolveGuardedFetchMode(params);",
+        "  const canUseTrustedEnvProxy = mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY && shouldUseEnvHttpProxyForUrl(parsedUrl.toString());",
+        "  if (canUseTrustedEnvProxy) {",
+        "    assertHostnameAllowedWithPolicy(parsedUrl.hostname, params.policy);",
+        "    return { mode, dispatcher: createHttp1EnvHttpProxyAgent().kind, hostname: parsedUrl.hostname };",
+        "  }",
+        "  return { mode, dispatcher: createPinnedDispatcher(await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, { policy: params.policy })).kind, hostname: parsedUrl.hostname };",
+        "}",
+        "export { withStrictGuardedFetchMode as a, withTrustedEnvProxyGuardedFetchMode as b, fetchWithSsrFGuard as f, resolveGuardedFetchMode as g, pinnedDnsCalls as p, policyChecks as c };",
+        "",
+      ].join("\n"),
+    );
+
+    try {
+      const patch = runFetchGuardPatchBlock(
+        dist,
+        tmp,
+        CURRENT_REVIEWED_OPENCLAW_PATCH_CLASSIFIER_VERSION,
+      );
+      expect(patch.status, `${patch.stdout}${patch.stderr}`).toBe(0);
+      const mod = await import(`${modulePath}?${Date.now()}`);
+      const prevSandbox = process.env.OPENSHELL_SANDBOX;
+      try {
+        process.env.OPENSHELL_SANDBOX = "1";
+        await expect(
+          mod.f({
+            url: "https://www.googleapis.com/service_accounts/v1/metadata/x509/chat%40system.gserviceaccount.com",
+          }),
+        ).resolves.toMatchObject({
+          mode: "trusted_env_proxy",
+          dispatcher: "env-proxy",
+          hostname: "www.googleapis.com",
+        });
+        expect(mod.p).toEqual([]);
+        expect(mod.c).toContainEqual({ normalized: "www.googleapis.com", policy: undefined });
+
+        await expect(mod.f({ url: "http://169.254.169.254/latest/meta-data" })).rejects.toThrow(
+          /blocked 169\.254\.169\.254/,
+        );
+        await expect(mod.f({ url: "http://10.0.0.1/" })).rejects.toThrow(/blocked 10\.0\.0\.1/);
+        await expect(mod.f({ url: "http://foo.internal/" })).rejects.toThrow(
+          /blocked foo\.internal/,
+        );
+        expect(mod.p).toEqual([]);
+
+        delete process.env.OPENSHELL_SANDBOX;
+        await expect(mod.f({ url: "https://www.googleapis.com/" })).resolves.toMatchObject({
+          mode: "strict",
+          dispatcher: "pinned",
+          hostname: "www.googleapis.com",
+        });
+        expect(mod.p).toContainEqual({ hostname: "www.googleapis.com", policy: undefined });
+      } finally {
+        if (prevSandbox === undefined) delete process.env.OPENSHELL_SANDBOX;
+        else process.env.OPENSHELL_SANDBOX = prevSandbox;
+      }
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("leaves cron preflight callsites unmodified because omitted mode is patched centrally", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-fetch-guard-cron-central-"));
     const dist = path.join(tmp, "dist");
