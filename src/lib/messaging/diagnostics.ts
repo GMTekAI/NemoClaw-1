@@ -9,6 +9,7 @@ import type {
   MessagingAgentId,
   MessagingSerializableValue,
   SandboxMessagingChannelPlan,
+  SandboxMessagingInputReference,
   SandboxMessagingPlan,
 } from "./manifest";
 
@@ -100,21 +101,19 @@ export type VisibleConfigDisplay = {
 
 export function resolveVisibleConfigDisplay(
   input: VisibleChannelConfigInput,
-  rawValue: MessagingSerializableValue | undefined,
+  planInput: SandboxMessagingInputReference | undefined,
 ): VisibleConfigDisplay | null {
-  if (rawValue !== undefined && rawValue !== null && rawValue !== "") {
+  const planInputPresent = planInput !== undefined;
+  const rawValue = planInput?.value;
+  const persistedScalar =
+    planInputPresent && rawValue !== undefined && rawValue !== null && rawValue !== "";
+  if (persistedScalar) {
     if (!isPrintableScalar(rawValue)) {
-      return {
-        detail: "invalid persisted value (unsupported type)",
-        source: "invalid",
-      };
+      return invalidPersistedDisplay(input, "unsupported type");
     }
     const valueText = stringifyScalar(rawValue);
     if (input.validValues && !input.validValues.includes(valueText)) {
-      return {
-        detail: `invalid persisted value (expected: ${input.validValues.join(" | ")})`,
-        source: "invalid",
-      };
+      return invalidPersistedDisplay(input, `expected: ${input.validValues.join(" | ")}`);
     }
     const mapped = input.valueDisplay?.[valueText];
     if (mapped && input.envKey) {
@@ -125,6 +124,15 @@ export function resolveVisibleConfigDisplay(
     }
     return { detail: valueText, source: "persisted" };
   }
+  if (planInputPresent) {
+    // The plan persisted this input but the value is null or empty. Don't
+    // silently swap in the manifest default — surface the boundary state
+    // so the operator can re-enter a valid value.
+    return invalidPersistedDisplay(
+      input,
+      input.validValues ? `expected: ${input.validValues.join(" | ")}` : "present but empty",
+    );
+  }
   if (input.defaultValue !== undefined) {
     const mapped = input.valueDisplay?.[input.defaultValue];
     if (mapped) {
@@ -133,6 +141,16 @@ export function resolveVisibleConfigDisplay(
     return { detail: `${input.defaultValue} (default)`, source: "default" };
   }
   return null;
+}
+
+function invalidPersistedDisplay(
+  _input: VisibleChannelConfigInput,
+  reason: string,
+): VisibleConfigDisplay {
+  return {
+    detail: `invalid persisted value (${reason})`,
+    source: "invalid",
+  };
 }
 
 /**
@@ -164,7 +182,7 @@ export function collectVisibleConfigRecords(
   for (const input of diagnostic.visibleConfigInputs) {
     if (!inputAppliesToAgent(input, agent)) continue;
     const planInput = channelPlan?.inputs.find((entry) => entry.inputId === input.inputId);
-    const display = resolveVisibleConfigDisplay(input, planInput?.value);
+    const display = resolveVisibleConfigDisplay(input, planInput);
     if (!display) continue;
     records.push({ input, display });
   }

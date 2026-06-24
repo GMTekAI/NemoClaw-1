@@ -275,6 +275,161 @@ describe("runSandboxDoctor flow", () => {
     expect(leakedLabel).toBeUndefined();
   });
 
+  it("hides the OpenClaw-only Telegram group policy when the sandbox runs Hermes", async () => {
+    const harness = createDoctorHarness();
+    const registry = requireDist("../../../../dist/lib/state/registry.js");
+    harness.getSandboxSpy.mockReturnValue({
+      name: "alpha",
+      agent: "hermes",
+      model: "registry-model",
+      provider: "ollama-local",
+      openshellDriver: "docker",
+      gatewayName: "nemoclaw-19080",
+      gatewayPort: 19080,
+      messaging: undefined,
+    });
+    vi.spyOn(registry, "getConfiguredMessagingChannelsFromEntry").mockReturnValue(["telegram"]);
+    vi.spyOn(registry, "getDisabledMessagingChannelsFromEntry").mockReturnValue([]);
+    vi.spyOn(registry, "getMessagingPlanFromEntry").mockReturnValue({
+      schemaVersion: 1,
+      sandboxName: "alpha",
+      agent: "hermes",
+      workflow: "onboard",
+      channels: [
+        {
+          channelId: "telegram",
+          displayName: "telegram",
+          authMode: "token-paste",
+          active: true,
+          selected: true,
+          configured: true,
+          disabled: false,
+          inputs: [],
+          hooks: [],
+        },
+      ],
+      disabledChannels: [],
+      credentialBindings: [],
+      networkPolicy: { presets: [], entries: [] },
+      agentRender: [],
+      buildSteps: [],
+      stateUpdates: [],
+      healthChecks: [],
+    });
+
+    const report = await harness.runSandboxDoctor("alpha", ["--json"], { quietJson: true });
+    const messagingChecks = (report?.checks ?? []).filter((check) => check.group === "Messaging");
+
+    expect(messagingChecks.some((check) => check.label === "Telegram group policy")).toBe(false);
+    expect(
+      messagingChecks.find((check) => check.label === "Telegram group mention mode"),
+    ).toMatchObject({ status: "info", detail: "mention-only (default)" });
+  });
+
+  it("flags an invalid persisted Telegram group policy without echoing the raw value", async () => {
+    const harness = createDoctorHarness();
+    const registry = requireDist("../../../../dist/lib/state/registry.js");
+    vi.spyOn(registry, "getConfiguredMessagingChannelsFromEntry").mockReturnValue(["telegram"]);
+    vi.spyOn(registry, "getDisabledMessagingChannelsFromEntry").mockReturnValue([]);
+    vi.spyOn(registry, "getMessagingPlanFromEntry").mockReturnValue({
+      schemaVersion: 1,
+      sandboxName: "alpha",
+      agent: "openclaw",
+      workflow: "onboard",
+      channels: [
+        {
+          channelId: "telegram",
+          displayName: "telegram",
+          authMode: "token-paste",
+          active: true,
+          selected: true,
+          configured: true,
+          disabled: false,
+          inputs: [
+            {
+              channelId: "telegram",
+              inputId: "groupPolicy",
+              kind: "config",
+              required: false,
+              value: "definitely-not-a-policy",
+            },
+          ],
+          hooks: [],
+        },
+      ],
+      disabledChannels: [],
+      credentialBindings: [],
+      networkPolicy: { presets: [], entries: [] },
+      agentRender: [],
+      buildSteps: [],
+      stateUpdates: [],
+      healthChecks: [],
+    });
+
+    const report = await harness.runSandboxDoctor("alpha", ["--json"], { quietJson: true });
+    const policyCheck = (report?.checks ?? []).find(
+      (check) => check.group === "Messaging" && check.label === "Telegram group policy",
+    );
+
+    expect(policyCheck).toBeDefined();
+    expect(policyCheck?.status).toBe("warn");
+    expect(policyCheck?.detail).toMatch(
+      /invalid persisted value \(expected: open \| allowlist \| disabled\)/,
+    );
+    expect(policyCheck?.detail).not.toContain("definitely-not-a-policy");
+  });
+
+  it("flags a present-but-empty Telegram mention-mode value as invalid rather than defaulting", async () => {
+    const harness = createDoctorHarness();
+    const registry = requireDist("../../../../dist/lib/state/registry.js");
+    vi.spyOn(registry, "getConfiguredMessagingChannelsFromEntry").mockReturnValue(["telegram"]);
+    vi.spyOn(registry, "getDisabledMessagingChannelsFromEntry").mockReturnValue([]);
+    vi.spyOn(registry, "getMessagingPlanFromEntry").mockReturnValue({
+      schemaVersion: 1,
+      sandboxName: "alpha",
+      agent: "openclaw",
+      workflow: "onboard",
+      channels: [
+        {
+          channelId: "telegram",
+          displayName: "telegram",
+          authMode: "token-paste",
+          active: true,
+          selected: true,
+          configured: true,
+          disabled: false,
+          inputs: [
+            {
+              channelId: "telegram",
+              inputId: "requireMention",
+              kind: "config",
+              required: false,
+              value: "",
+            },
+          ],
+          hooks: [],
+        },
+      ],
+      disabledChannels: [],
+      credentialBindings: [],
+      networkPolicy: { presets: [], entries: [] },
+      agentRender: [],
+      buildSteps: [],
+      stateUpdates: [],
+      healthChecks: [],
+    });
+
+    const report = await harness.runSandboxDoctor("alpha", ["--json"], { quietJson: true });
+    const mentionCheck = (report?.checks ?? []).find(
+      (check) => check.group === "Messaging" && check.label === "Telegram group mention mode",
+    );
+
+    expect(mentionCheck).toBeDefined();
+    expect(mentionCheck?.status).toBe("warn");
+    expect(mentionCheck?.detail).toMatch(/invalid persisted value/);
+    expect(mentionCheck?.detail).not.toMatch(/default/);
+  });
+
   it("rejects mutating --fix when JSON output was requested", async () => {
     const harness = createDoctorHarness();
 

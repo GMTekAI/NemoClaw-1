@@ -526,7 +526,11 @@ function messagingChannelConfigDoctorChecks(sandboxName: string, sb: SandboxEntr
   );
   if (activeChannels.length === 0) return [];
   const plan = registry.getMessagingPlanFromEntry(sb);
-  const agent = asMessagingAgent(sb.agent ?? null);
+  // Legacy sandbox entries written before the `agent` field existed default
+  // to OpenClaw, matching the convention used by `channels status` and the
+  // surrounding doctor checks. Without the default, OpenClaw-only visible
+  // inputs would silently disappear from a legacy sandbox's report.
+  const agent = asMessagingAgent(sb.agent ?? "openclaw");
   const checks: DoctorCheck[] = [];
   for (const channelName of activeChannels) {
     const diagnostic = getChannelStatusDiagnostic(channelName);
