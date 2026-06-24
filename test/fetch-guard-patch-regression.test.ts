@@ -34,12 +34,8 @@ const REVIEWED_OPENCLAW_2026_5_27_WEB_FETCH_SHAPE = [
 ].join("\n");
 const REVIEWED_OPENCLAW_2026_5_27_GUARDED_MODE_SHAPE = [
   "function resolveGuardedFetchMode(params) {",
-  "  if (params.mode) {",
-  "    return params.mode;",
-  "  }",
-  '  if (params.proxy === "env" && params.dangerouslyAllowEnvProxyWithoutPinnedDns === true) {',
-  "    return GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY;",
-  "  }",
+  "  if (params.mode) return params.mode;",
+  '  if (params.proxy === "env" && params.dangerouslyAllowEnvProxyWithoutPinnedDns === true) return GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY;',
   "  return GUARDED_FETCH_MODE.STRICT;",
   "}",
 ].join("\n");
