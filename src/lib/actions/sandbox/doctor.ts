@@ -517,10 +517,7 @@ function getChannelStatusDiagnostic(channelName: string): MessagingChannelDiagno
   );
 }
 
-function messagingChannelConfigDoctorChecks(
-  sandboxName: string,
-  sb: SandboxEntry,
-): DoctorCheck[] {
+function messagingChannelConfigDoctorChecks(sandboxName: string, sb: SandboxEntry): DoctorCheck[] {
   const registeredChannels = registry.getConfiguredMessagingChannelsFromEntry(sb);
   const disabledChannels = new Set(registry.getDisabledMessagingChannelsFromEntry(sb));
   const activeChannels = registeredChannels.filter(
@@ -533,8 +530,7 @@ function messagingChannelConfigDoctorChecks(
     const diagnostic = getChannelStatusDiagnostic(channelName);
     const visible = diagnostic?.visibleConfigInputs ?? [];
     if (visible.length === 0) continue;
-    const channelPlan =
-      plan?.channels.find((channel) => channel.channelId === channelName) ?? null;
+    const channelPlan = plan?.channels.find((channel) => channel.channelId === channelName) ?? null;
     for (const input of visible) {
       const planInput = channelPlan?.inputs.find((entry) => entry.inputId === input.inputId);
       const rawValue = planInput?.value;

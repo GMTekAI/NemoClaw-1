@@ -265,12 +265,10 @@ describe("runSandboxDoctor flow", () => {
         }),
       ]),
     );
-    const messagingChecks = (report?.checks ?? []).filter(
-      (check) => check.group === "Messaging",
+    const messagingChecks = (report?.checks ?? []).filter((check) => check.group === "Messaging");
+    expect(messagingChecks.some((check) => /[Bb]ot [Tt]oken|secret/i.test(check.label))).toBe(
+      false,
     );
-    expect(
-      messagingChecks.some((check) => /[Bb]ot [Tt]oken|secret/i.test(check.label)),
-    ).toBe(false);
   });
 
   it("rejects mutating --fix when JSON output was requested", async () => {

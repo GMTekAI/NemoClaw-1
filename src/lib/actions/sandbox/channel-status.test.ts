@@ -38,10 +38,7 @@ vi.mock("./process-recovery", () => ({
 }));
 
 import type { AgentDefinition } from "../../agent/defs";
-import type {
-  MessagingSerializableValue,
-  SandboxMessagingPlan,
-} from "../../messaging/manifest";
+import type { MessagingSerializableValue, SandboxMessagingPlan } from "../../messaging/manifest";
 import type { SandboxEntry } from "../../state/registry";
 import { showSandboxChannelStatus } from "./channel-status";
 
