@@ -1120,6 +1120,9 @@ if (!blocked) throw new Error('private IP literal was not blocked');`,
         "const withTrustedEnvProxyGuardedFetchMode = Symbol('trusted');",
         "const GUARDED_FETCH_MODE = { STRICT: 'strict', TRUSTED_ENV_PROXY: 'trusted_env_proxy' };",
         REVIEWED_OPENCLAW_2026_5_27_GUARDED_MODE_SHAPE,
+        "function preserveUnrelatedLegacyProxyLiteral(params) {",
+        '  return params.proxy === "env";',
+        "}",
         "export { withStrictGuardedFetchMode as a, withTrustedEnvProxyGuardedFetchMode as b, resolveGuardedFetchMode as g };",
         "",
       ].join("\n"),
@@ -1135,8 +1138,13 @@ if (!blocked) throw new Error('private IP literal was not blocked');`,
       expect(patch.stdout).toContain("Patch 4 applied");
       const patched = fs.readFileSync(modulePath, "utf-8");
       expect(patched).toContain("nemoclaw: default bare guarded fetches");
-      expect(patched).not.toContain("dangerouslyAllowEnvProxyWithoutPinnedDns === true");
-      expect(patched).not.toContain('params.proxy === "env"');
+      const resolverBlock =
+        patched.match(
+          /function resolveGuardedFetchMode\(params\) \{[\s\S]*?\/\* nemoclaw: default bare guarded fetches[^\n]*/,
+        )?.[0] ?? "";
+      expect(resolverBlock).not.toContain("dangerouslyAllowEnvProxyWithoutPinnedDns === true");
+      expect(resolverBlock).not.toContain('params.proxy === "env"');
+      expect(patched).toContain('params.proxy === "env";');
       expect(patched).toContain("process.env.OPENSHELL_SANDBOX");
       expect(patched).not.toContain("OPENCLAW_PROXY_ACTIVE");
 
