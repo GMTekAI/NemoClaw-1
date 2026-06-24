@@ -17,6 +17,7 @@ import { GATEWAY_PORT, OLLAMA_PORT } from "../../core/ports";
 import { recoverNamedGatewayRuntime } from "../../gateway-runtime-action";
 import { parseGatewayInference } from "../../inference/config";
 import { type ProviderHealthStatus, probeProviderHealth } from "../../inference/health";
+import type { MessagingSerializableValue } from "../../messaging/manifest";
 import {
   collectBuiltInMessagingChannelDiagnostics,
   type MessagingChannelDiagnosticSpec,
@@ -516,6 +517,59 @@ function getChannelStatusDiagnostic(channelName: string): MessagingChannelDiagno
   );
 }
 
+function messagingChannelConfigDoctorChecks(
+  sandboxName: string,
+  sb: SandboxEntry,
+): DoctorCheck[] {
+  const registeredChannels = registry.getConfiguredMessagingChannelsFromEntry(sb);
+  const disabledChannels = new Set(registry.getDisabledMessagingChannelsFromEntry(sb));
+  const activeChannels = registeredChannels.filter(
+    (channel: string) => !disabledChannels.has(channel),
+  );
+  if (activeChannels.length === 0) return [];
+  const plan = registry.getMessagingPlanFromEntry(sb);
+  const checks: DoctorCheck[] = [];
+  for (const channelName of activeChannels) {
+    const diagnostic = getChannelStatusDiagnostic(channelName);
+    const visible = diagnostic?.visibleConfigInputs ?? [];
+    if (visible.length === 0) continue;
+    const channelPlan =
+      plan?.channels.find((channel) => channel.channelId === channelName) ?? null;
+    for (const input of visible) {
+      const planInput = channelPlan?.inputs.find((entry) => entry.inputId === input.inputId);
+      const rawValue = planInput?.value;
+      const persisted = rawValue !== undefined && rawValue !== null && rawValue !== "";
+      if (persisted) {
+        checks.push({
+          group: "Messaging",
+          label: input.label,
+          status: "ok",
+          detail: formatVisibleConfigValue(rawValue),
+        });
+        continue;
+      }
+      if (input.defaultValue !== undefined) {
+        checks.push({
+          group: "Messaging",
+          label: input.label,
+          status: "info",
+          detail: `${input.defaultValue} (default)`,
+          hint: `run \`${CLI_NAME} ${sandboxName} channels status --channel ${channelName}\` to confirm the resolved value`,
+        });
+      }
+    }
+  }
+  return checks;
+}
+
+function formatVisibleConfigValue(value: MessagingSerializableValue): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "number") return String(value);
+  if (Array.isArray(value)) return value.map(formatVisibleConfigValue).join(", ");
+  return JSON.stringify(value);
+}
+
 function formatMessagingOverlapDoctorDetail(overlap: {
   readonly channel: string;
   readonly sandboxes: readonly [string, string];
@@ -836,6 +890,9 @@ export async function runSandboxDoctor(
     if (permsCheck) checks.push(permsCheck);
 
     checks.push(messagingDoctorCheck(sandboxName, sb));
+    for (const check of messagingChannelConfigDoctorChecks(sandboxName, sb)) {
+      checks.push(check);
+    }
     // #4156: bridge the gap between "configured" and "runtime-visible" — the
     // existing messaging check above probes provider attachment, not whether
     // OpenClaw's runtime config actually surfaces each enabled channel.

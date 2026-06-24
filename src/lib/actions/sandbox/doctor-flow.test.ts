@@ -207,6 +207,72 @@ describe("runSandboxDoctor flow", () => {
     expect(harness.logSpy).not.toHaveBeenCalled();
   });
 
+  it("surfaces Telegram visible config inputs in the Messaging doctor section", async () => {
+    const harness = createDoctorHarness();
+    const registry = requireDist("../../../../dist/lib/state/registry.js");
+    vi.spyOn(registry, "getConfiguredMessagingChannelsFromEntry").mockReturnValue(["telegram"]);
+    vi.spyOn(registry, "getDisabledMessagingChannelsFromEntry").mockReturnValue([]);
+    vi.spyOn(registry, "getMessagingPlanFromEntry").mockReturnValue({
+      schemaVersion: 1,
+      sandboxName: "alpha",
+      agent: "openclaw",
+      workflow: "onboard",
+      channels: [
+        {
+          channelId: "telegram",
+          displayName: "telegram",
+          authMode: "token-paste",
+          active: true,
+          selected: true,
+          configured: true,
+          disabled: false,
+          inputs: [
+            {
+              channelId: "telegram",
+              inputId: "requireMention",
+              kind: "config",
+              required: false,
+              value: "0",
+            },
+          ],
+          hooks: [],
+        },
+      ],
+      disabledChannels: [],
+      credentialBindings: [],
+      networkPolicy: { presets: [], entries: [] },
+      agentRender: [],
+      buildSteps: [],
+      stateUpdates: [],
+      healthChecks: [],
+    });
+
+    const report = await harness.runSandboxDoctor("alpha", ["--json"], { quietJson: true });
+
+    expect(report?.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          group: "Messaging",
+          label: "Telegram group mention mode",
+          status: "ok",
+          detail: "0",
+        }),
+        expect.objectContaining({
+          group: "Messaging",
+          label: "Telegram group policy",
+          status: "info",
+          detail: "open (default)",
+        }),
+      ]),
+    );
+    const messagingChecks = (report?.checks ?? []).filter(
+      (check) => check.group === "Messaging",
+    );
+    expect(
+      messagingChecks.some((check) => /[Bb]ot [Tt]oken|secret/i.test(check.label)),
+    ).toBe(false);
+  });
+
   it("rejects mutating --fix when JSON output was requested", async () => {
     const harness = createDoctorHarness();
 

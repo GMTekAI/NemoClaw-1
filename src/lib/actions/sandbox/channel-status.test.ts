@@ -38,6 +38,10 @@ vi.mock("./process-recovery", () => ({
 }));
 
 import type { AgentDefinition } from "../../agent/defs";
+import type {
+  MessagingSerializableValue,
+  SandboxMessagingPlan,
+} from "../../messaging/manifest";
 import type { SandboxEntry } from "../../state/registry";
 import { showSandboxChannelStatus } from "./channel-status";
 
@@ -160,7 +164,10 @@ function makeDeps(opts: {
   gatewayPresets?: string[] | null;
   agentName?: "openclaw" | "hermes";
   sandbox?: SandboxEntry | undefined;
-  channelInputs?: Record<string, ReadonlyArray<{ inputId: string; value?: unknown }>>;
+  channelInputs?: Record<
+    string,
+    ReadonlyArray<{ inputId: string; value?: MessagingSerializableValue }>
+  >;
   out?: (line: string) => void;
 }) {
   const calls: string[] = [];
@@ -185,29 +192,39 @@ function makeDeps(opts: {
 
 function fakePlanFromInputs(
   sandbox: SandboxEntry | undefined,
-  channelInputs: Record<string, ReadonlyArray<{ inputId: string; value?: unknown }>> | undefined,
-) {
-  const base = sandbox?.messaging?.plan;
-  if (!base) return null;
-  if (!channelInputs) return base;
-  const merged = {
+  channelInputs:
+    | Record<string, ReadonlyArray<{ inputId: string; value?: MessagingSerializableValue }>>
+    | undefined,
+): SandboxMessagingPlan | null {
+  const base = sandbox?.messaging?.plan ?? null;
+  return base && channelInputs ? mergePlanInputs(base, channelInputs) : base;
+}
+
+function mergePlanInputs(
+  base: SandboxMessagingPlan,
+  channelInputs: Record<
+    string,
+    ReadonlyArray<{ inputId: string; value?: MessagingSerializableValue }>
+  >,
+): SandboxMessagingPlan {
+  return {
     ...base,
     channels: base.channels.map((channel) => {
       const overrides = channelInputs[channel.channelId];
-      if (!overrides) return channel;
-      return {
-        ...channel,
-        inputs: overrides.map((entry) => ({
-          channelId: channel.channelId,
-          inputId: entry.inputId,
-          kind: "config" as const,
-          required: false,
-          ...(entry.value !== undefined ? { value: entry.value } : {}),
-        })),
-      };
+      return overrides
+        ? {
+            ...channel,
+            inputs: overrides.map((entry) => ({
+              channelId: channel.channelId,
+              inputId: entry.inputId,
+              kind: "config" as const,
+              required: false,
+              ...(entry.value !== undefined ? { value: entry.value } : {}),
+            })),
+          }
+        : channel;
     }),
   };
-  return merged;
 }
 
 describe("showSandboxChannelStatus (whatsapp)", () => {
