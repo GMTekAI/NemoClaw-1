@@ -38,6 +38,12 @@ vi.mock("./process-recovery", () => ({
 }));
 
 import type { AgentDefinition } from "../../agent/defs";
+import {
+  createBuiltInChannelManifestRegistry,
+  createBuiltInRenderTemplateResolver,
+} from "../../messaging/channels";
+import { MessagingWorkflowPlanner } from "../../messaging/compiler/workflow-planner";
+import { createBuiltInMessagingHookRegistry } from "../../messaging/hooks";
 import type { MessagingSerializableValue, SandboxMessagingPlan } from "../../messaging/manifest";
 import type { SandboxEntry } from "../../state/registry";
 import { showSandboxChannelStatus } from "./channel-status";
@@ -165,6 +171,7 @@ function makeDeps(opts: {
     string,
     ReadonlyArray<{ inputId: string; value?: MessagingSerializableValue }>
   >;
+  messagingPlan?: SandboxMessagingPlan | null;
   out?: (line: string) => void;
 }) {
   const calls: string[] = [];
@@ -178,7 +185,10 @@ function makeDeps(opts: {
       getAppliedPresets: () => opts.appliedPresets ?? ["whatsapp"],
       getGatewayPresets: () =>
         opts.gatewayPresets === undefined ? ["whatsapp"] : opts.gatewayPresets,
-      getMessagingPlan: () => fakePlanFromInputs(sandbox, opts.channelInputs),
+      getMessagingPlan: () =>
+        opts.messagingPlan !== undefined
+          ? opts.messagingPlan
+          : fakePlanFromInputs(sandbox, opts.channelInputs),
       execSandbox: vi.fn(opts.exec),
       now: () => PROBED_AT,
       out,
@@ -222,6 +232,58 @@ function mergePlanInputs(
         : channel;
     }),
   };
+}
+
+async function compileTelegramPlanForTests(
+  envOverrides: Readonly<Record<string, string | undefined>>,
+): Promise<SandboxMessagingPlan> {
+  const TELEGRAM_TOKEN = "123456:test-telegram-token";
+  const planner = new MessagingWorkflowPlanner(
+    createBuiltInChannelManifestRegistry(),
+    createBuiltInMessagingHookRegistry({
+      common: {
+        env: { TELEGRAM_BOT_TOKEN: TELEGRAM_TOKEN, ...envOverrides },
+        getCredential: (key) => (key === "TELEGRAM_BOT_TOKEN" ? TELEGRAM_TOKEN : null),
+        saveCredential: () => {},
+        prompt: async () => "unused",
+        log: () => {},
+      },
+      telegram: {
+        fetch: async () => ({
+          ok: true,
+          status: 200,
+          async json() {
+            return { ok: true };
+          },
+          async text() {
+            return "";
+          },
+        }),
+      },
+    }),
+    createBuiltInRenderTemplateResolver(),
+  );
+  const previous = Object.fromEntries(
+    Object.keys(envOverrides).map((key) => [key, process.env[key]]),
+  );
+  applyEnvForTests({ TELEGRAM_BOT_TOKEN: TELEGRAM_TOKEN, ...envOverrides });
+  try {
+    return await planner.buildPlan({
+      sandboxName: "alpha",
+      agent: "openclaw",
+      workflow: "onboard",
+      isInteractive: true,
+      configuredChannels: ["telegram"],
+    });
+  } finally {
+    applyEnvForTests({ TELEGRAM_BOT_TOKEN: undefined, ...previous });
+  }
+}
+
+function applyEnvForTests(values: Readonly<Record<string, string | undefined>>): void {
+  for (const [key, value] of Object.entries(values)) {
+    value === undefined ? Reflect.deleteProperty(process.env, key) : (process.env[key] = value);
+  }
 }
 
 describe("showSandboxChannelStatus (whatsapp)", () => {
@@ -689,6 +751,26 @@ describe("showSandboxChannelStatus (telegram config visibility)", () => {
     expect(dump).not.toMatch(/definitely-not-a-policy/);
     expect(dump).toMatch(
       /Telegram group policy:\s+invalid persisted value \(expected: open \| allowlist \| disabled\)/,
+    );
+  });
+
+  it("renders Telegram inputs from a plan compiled out of process env through the command path", async () => {
+    const plan = await compileTelegramPlanForTests({
+      TELEGRAM_GROUP_POLICY: "allowlist",
+      TELEGRAM_REQUIRE_MENTION: undefined,
+    });
+    const { deps, out_lines } = makeDeps({
+      exec: () => ({ status: 0, stdout: "", stderr: "" }),
+      sandbox: entry(["telegram"]),
+      appliedPresets: ["telegram"],
+      messagingPlan: plan,
+    });
+    await showSandboxChannelStatus("alpha", { deps, channel: "telegram" });
+    const dump = out_lines.join("\n");
+    expect(dump).toMatch(/Telegram group policy:\s+allowlist\b/);
+    expect(dump).not.toMatch(/Telegram group policy:.*\(default\)/);
+    expect(dump).toMatch(
+      /Telegram group mention mode:\s+mention-only \(TELEGRAM_REQUIRE_MENTION=1\)/,
     );
   });
 });
