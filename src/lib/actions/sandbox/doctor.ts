@@ -17,10 +17,10 @@ import { GATEWAY_PORT, OLLAMA_PORT } from "../../core/ports";
 import { recoverNamedGatewayRuntime } from "../../gateway-runtime-action";
 import { parseGatewayInference } from "../../inference/config";
 import { type ProviderHealthStatus, probeProviderHealth } from "../../inference/health";
-import type { MessagingSerializableValue } from "../../messaging/manifest";
 import {
   collectBuiltInMessagingChannelDiagnostics,
   type MessagingChannelDiagnosticSpec,
+  resolveVisibleConfigDisplay,
 } from "../../messaging/diagnostics";
 import { isLinuxDockerDriverGatewayEnabled } from "../../onboard/docker-driver-platform";
 import { resolveGatewayName, resolveSandboxGatewayName } from "../../onboard/gateway-binding";
@@ -533,37 +533,22 @@ function messagingChannelConfigDoctorChecks(sandboxName: string, sb: SandboxEntr
     const channelPlan = plan?.channels.find((channel) => channel.channelId === channelName) ?? null;
     for (const input of visible) {
       const planInput = channelPlan?.inputs.find((entry) => entry.inputId === input.inputId);
-      const rawValue = planInput?.value;
-      const persisted = rawValue !== undefined && rawValue !== null && rawValue !== "";
-      if (persisted) {
-        checks.push({
-          group: "Messaging",
-          label: input.label,
-          status: "ok",
-          detail: formatVisibleConfigValue(rawValue),
-        });
-        continue;
-      }
-      if (input.defaultValue !== undefined) {
-        checks.push({
-          group: "Messaging",
-          label: input.label,
-          status: "info",
-          detail: `${input.defaultValue} (default)`,
-          hint: `run \`${CLI_NAME} ${sandboxName} channels status --channel ${channelName}\` to confirm the resolved value`,
-        });
-      }
+      const display = resolveVisibleConfigDisplay(input, planInput?.value);
+      if (!display) continue;
+      checks.push({
+        group: "Messaging",
+        label: input.label,
+        status: display.source === "persisted" ? "ok" : "info",
+        detail: display.detail,
+        ...(display.source === "default"
+          ? {
+              hint: `run \`${CLI_NAME} ${sandboxName} channels status --channel ${channelName}\` to confirm the resolved value`,
+            }
+          : {}),
+      });
     }
   }
   return checks;
-}
-
-function formatVisibleConfigValue(value: MessagingSerializableValue): string {
-  if (typeof value === "string") return value;
-  if (typeof value === "boolean") return value ? "true" : "false";
-  if (typeof value === "number") return String(value);
-  if (Array.isArray(value)) return value.map(formatVisibleConfigValue).join(", ");
-  return JSON.stringify(value);
 }
 
 function formatMessagingOverlapDoctorDetail(overlap: {

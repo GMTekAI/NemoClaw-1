@@ -17,6 +17,7 @@ import { B, D, G, R, RD, YW } from "../../cli/terminal-style";
 import {
   collectBuiltInMessagingChannelDiagnostics,
   type MessagingChannelDiagnosticSpec,
+  resolveVisibleConfigDisplay,
 } from "../../messaging/diagnostics";
 import type {
   SandboxMessagingChannelPlan,
@@ -507,8 +508,10 @@ function buildBasicChannelReport(
       ? undefined
       : `run \`${CLI_NAME} ${sandboxName} policy-add ${policyPresets[0]}\``,
   });
-  for (const signal of buildConfigVisibilitySignals(channelName, diagnostic, deps, entry)) {
-    signals.push(signal);
+  if (enabled && !disabled) {
+    for (const signal of buildConfigVisibilitySignals(channelName, diagnostic, deps, entry)) {
+      signals.push(signal);
+    }
   }
   signals.push({
     label: "Deep diagnostics",
@@ -543,26 +546,15 @@ function buildConfigVisibilitySignals(
   const channelPlan = plan?.channels.find((channel) => channel.channelId === channelName) ?? null;
   return visible.flatMap<DiagnosticSignal>((input) => {
     const planInput = findChannelInput(channelPlan, input.inputId);
-    const rawValue = planInput?.value;
-    if (rawValue !== undefined && rawValue !== null && rawValue !== "") {
-      return [
-        {
-          label: input.label,
-          severity: "ok",
-          detail: formatVisibleConfigValue(rawValue),
-        },
-      ];
-    }
-    if (input.defaultValue !== undefined) {
-      return [
-        {
-          label: input.label,
-          severity: "info",
-          detail: `${input.defaultValue} (default)`,
-        },
-      ];
-    }
-    return [];
+    const display = resolveVisibleConfigDisplay(input, planInput?.value);
+    if (!display) return [];
+    return [
+      {
+        label: input.label,
+        severity: display.source === "persisted" ? "ok" : "info",
+        detail: display.detail,
+      },
+    ];
   });
 }
 
@@ -572,16 +564,6 @@ function findChannelInput(
 ): SandboxMessagingInputReference | null {
   if (!channelPlan) return null;
   return channelPlan.inputs.find((input) => input.inputId === inputId) ?? null;
-}
-
-function formatVisibleConfigValue(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (typeof value === "boolean") return value ? "true" : "false";
-  if (typeof value === "number") return String(value);
-  if (Array.isArray(value)) {
-    return value.map((entry) => formatVisibleConfigValue(entry)).join(", ");
-  }
-  return JSON.stringify(value);
 }
 
 /**

@@ -594,8 +594,61 @@ describe("showSandboxChannelStatus (telegram config visibility)", () => {
     });
     await showSandboxChannelStatus("alpha", { deps, channel: "telegram" });
     const dump = out_lines.join("\n");
-    expect(dump).toMatch(/Telegram group mention mode:\s+0\b/);
+    expect(dump).toMatch(
+      /Telegram group mention mode:\s+all group messages \(TELEGRAM_REQUIRE_MENTION=0\)/,
+    );
     expect(dump).toMatch(/Telegram group policy:\s+allowlist\b/);
+  });
+
+  it("translates Telegram requireMention=1 to the mention-only behavior label", async () => {
+    const { deps, out_lines } = makeDeps({
+      exec: () => ({ status: 0, stdout: "", stderr: "" }),
+      sandbox: entry(["telegram"]),
+      appliedPresets: ["telegram"],
+      channelInputs: {
+        telegram: [{ inputId: "requireMention", value: "1" }],
+      },
+    });
+    await showSandboxChannelStatus("alpha", { deps, channel: "telegram" });
+    const dump = out_lines.join("\n");
+    expect(dump).toMatch(
+      /Telegram group mention mode:\s+mention-only \(TELEGRAM_REQUIRE_MENTION=1\)/,
+    );
+  });
+
+  it("renders the mention-mode default with the mapped behavior label", async () => {
+    const { deps, out_lines } = makeDeps({
+      exec: () => ({ status: 0, stdout: "", stderr: "" }),
+      sandbox: entry(["telegram"]),
+      appliedPresets: ["telegram"],
+    });
+    await showSandboxChannelStatus("alpha", { deps, channel: "telegram" });
+    const dump = out_lines.join("\n");
+    expect(dump).toMatch(/Telegram group mention mode:\s+mention-only \(default\)/);
+  });
+
+  it("omits visible config defaults when the telegram channel is not registered", async () => {
+    const { deps, out_lines } = makeDeps({
+      exec: () => ({ status: 0, stdout: "", stderr: "" }),
+      sandbox: entry([]),
+      appliedPresets: [],
+    });
+    await showSandboxChannelStatus("alpha", { deps, channel: "telegram" });
+    const dump = out_lines.join("\n");
+    expect(dump).not.toMatch(/Telegram group policy/);
+    expect(dump).not.toMatch(/Telegram group mention mode/);
+  });
+
+  it("omits visible config defaults when the telegram channel is paused", async () => {
+    const { deps, out_lines } = makeDeps({
+      exec: () => ({ status: 0, stdout: "", stderr: "" }),
+      sandbox: entry(["telegram"], ["telegram"]),
+      appliedPresets: ["telegram"],
+    });
+    await showSandboxChannelStatus("alpha", { deps, channel: "telegram" });
+    const dump = out_lines.join("\n");
+    expect(dump).not.toMatch(/Telegram group policy/);
+    expect(dump).not.toMatch(/Telegram group mention mode/);
   });
 
   it("skips visible config inputs that have neither a persisted value nor a default", async () => {

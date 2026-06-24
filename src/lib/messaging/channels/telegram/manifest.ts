@@ -47,6 +47,11 @@ export const telegramManifest = {
       statePath: "telegramConfig.requireMention",
       validValues: ["0", "1"],
       defaultValue: "1",
+      safeToPrintInDiagnostics: true,
+      valueDisplay: {
+        "0": "all group messages",
+        "1": "mention-only",
+      },
       prompt: {
         label: "Telegram group mention mode",
         help: "Controls Telegram group-chat behavior only — reply only when @mentioned vs. to all group messages. Direct messages are unaffected by this setting and remain subject to pairing and TELEGRAM_ALLOWED_IDS.",
@@ -60,6 +65,7 @@ export const telegramManifest = {
       statePath: "telegramConfig.groupPolicy",
       validValues: ["open", "allowlist", "disabled"],
       defaultValue: "open",
+      safeToPrintInDiagnostics: true,
       prompt: {
         label: "Telegram group policy",
         help: "Controls OpenClaw Telegram group access. Hermes does not expose an equivalent disable-groups policy.",

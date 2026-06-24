@@ -100,6 +100,20 @@ export interface ChannelConfigInputSpec extends ChannelInputBaseSpec {
   readonly defaultValue?: string;
   readonly statePath?: MessagingStatePath;
   readonly promptWhenInput?: string;
+  /**
+   * Opt-in flag: when true, this input's resolved value (or manifest default)
+   * may be rendered by user-facing diagnostics such as `channels status` and
+   * `doctor`. Secrets are excluded by `kind` and never reach this flag.
+   * Defaults to false so prompt-labeled config inputs do not leak into
+   * diagnostics merely because they have an operator prompt.
+   */
+  readonly safeToPrintInDiagnostics?: boolean;
+  /**
+   * Optional map from raw input value to a human-readable label, used by the
+   * diagnostics renderer to translate machine-style toggles into the
+   * behavior they describe (for example `"1" -> "mention-only"`).
+   */
+  readonly valueDisplay?: Readonly<Record<string, string>>;
 }
 
 /** Manifest input declaration, split so secrets cannot declare defaults or state paths. */

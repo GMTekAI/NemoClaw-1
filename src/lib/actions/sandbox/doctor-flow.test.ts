@@ -255,7 +255,7 @@ describe("runSandboxDoctor flow", () => {
           group: "Messaging",
           label: "Telegram group mention mode",
           status: "ok",
-          detail: "0",
+          detail: "all group messages (TELEGRAM_REQUIRE_MENTION=0)",
         }),
         expect.objectContaining({
           group: "Messaging",
@@ -266,9 +266,13 @@ describe("runSandboxDoctor flow", () => {
       ]),
     );
     const messagingChecks = (report?.checks ?? []).filter((check) => check.group === "Messaging");
-    expect(messagingChecks.some((check) => /[Bb]ot [Tt]oken|secret/i.test(check.label))).toBe(
-      false,
+    const sensitiveLabels = ["Bot Token", "User ID", "secret"];
+    const leakedLabel = messagingChecks.find((check) =>
+      sensitiveLabels.some((sensitive) =>
+        check.label.toLowerCase().includes(sensitive.toLowerCase()),
+      ),
     );
+    expect(leakedLabel).toBeUndefined();
   });
 
   it("rejects mutating --fix when JSON output was requested", async () => {
