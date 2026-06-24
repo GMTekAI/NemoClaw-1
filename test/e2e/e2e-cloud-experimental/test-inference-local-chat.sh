@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Demo: POST /v1/chat/completions to https://inference.local from *inside* the sandbox (SSH).
-# Same idea as test-e2e-cloud-experimental.sh Phase 5b — use this to verify dialogue without the full suite.
+# Standalone helper for verifying the in-sandbox dialogue path.
 #
 # Prerequisites:
 #   - openshell on PATH, sandbox exists and is Ready
@@ -12,7 +12,7 @@
 #
 # Environment (defaults match e2e-cloud-experimental):
 #   SANDBOX_NAME or NEMOCLAW_SANDBOX_NAME     — default: e2e-cloud-experimental
-#   CLOUD_EXPERIMENTAL_MODEL or NEMOCLAW_CLOUD_EXPERIMENTAL_MODEL / NEMOCLAW_SCENARIO_A_MODEL
+#   CLOUD_EXPERIMENTAL_MODEL or NEMOCLAW_CLOUD_EXPERIMENTAL_MODEL
 #   CHAT_USER_MESSAGE — optional override for the user message (default asks for PONG)
 #   DEMO_CHAT_MAX_DISPLAY_CHARS — max chars of assistant text to print (default: 12000; 0 = unlimited)
 #   DEMO_CHAT_SHOW_RAW_JSON=1 — also print raw response body (can be large)
@@ -25,7 +25,7 @@
 set -euo pipefail
 
 SANDBOX_NAME="${SANDBOX_NAME:-${NEMOCLAW_SANDBOX_NAME:-e2e-cloud-experimental}}"
-CLOUD_EXPERIMENTAL_MODEL="${CLOUD_EXPERIMENTAL_MODEL:-${NEMOCLAW_CLOUD_EXPERIMENTAL_MODEL:-${NEMOCLAW_SCENARIO_A_MODEL:-nvidia/nemotron-3-super-120b-a12b}}}"
+CLOUD_EXPERIMENTAL_MODEL="${CLOUD_EXPERIMENTAL_MODEL:-${NEMOCLAW_CLOUD_EXPERIMENTAL_MODEL:-nvidia/nemotron-3-super-120b-a12b}}"
 CHAT_USER_MESSAGE="${CHAT_USER_MESSAGE:-Reply with exactly one word: PONG}"
 
 die() {
