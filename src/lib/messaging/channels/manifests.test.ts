@@ -753,7 +753,6 @@ describe("built-in channel manifests", () => {
       onFailure: "skip-channel",
     });
     expectOpenClawRuntimeVisibility(mattermostManifest, ["mattermost"], ["mattermost"]);
-    expectOpenClawNodePreload(mattermostManifest, "mattermost-trusted-env-proxy");
     expect(mattermostManifest.state).toEqual({
       persist: {
         mattermostConfig: ["baseUrl", "allowedChannels", "requireMention"],
