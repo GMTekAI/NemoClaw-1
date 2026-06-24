@@ -160,24 +160,54 @@ function makeDeps(opts: {
   gatewayPresets?: string[] | null;
   agentName?: "openclaw" | "hermes";
   sandbox?: SandboxEntry | undefined;
+  channelInputs?: Record<string, ReadonlyArray<{ inputId: string; value?: unknown }>>;
   out?: (line: string) => void;
 }) {
   const calls: string[] = [];
   const out = opts.out ?? ((line: string) => calls.push(line));
+  const sandbox = opts.sandbox ?? entry();
   return {
     out,
     deps: {
       loadAgent: () => fakeAgent(opts.agentName),
-      getSandbox: () => opts.sandbox ?? entry(),
+      getSandbox: () => sandbox,
       getAppliedPresets: () => opts.appliedPresets ?? ["whatsapp"],
       getGatewayPresets: () =>
         opts.gatewayPresets === undefined ? ["whatsapp"] : opts.gatewayPresets,
+      getMessagingPlan: () => fakePlanFromInputs(sandbox, opts.channelInputs),
       execSandbox: vi.fn(opts.exec),
       now: () => PROBED_AT,
       out,
     },
     out_lines: calls,
   };
+}
+
+function fakePlanFromInputs(
+  sandbox: SandboxEntry | undefined,
+  channelInputs: Record<string, ReadonlyArray<{ inputId: string; value?: unknown }>> | undefined,
+) {
+  const base = sandbox?.messaging?.plan;
+  if (!base) return null;
+  if (!channelInputs) return base;
+  const merged = {
+    ...base,
+    channels: base.channels.map((channel) => {
+      const overrides = channelInputs[channel.channelId];
+      if (!overrides) return channel;
+      return {
+        ...channel,
+        inputs: overrides.map((entry) => ({
+          channelId: channel.channelId,
+          inputId: entry.inputId,
+          kind: "config" as const,
+          required: false,
+          ...(entry.value !== undefined ? { value: entry.value } : {}),
+        })),
+      };
+    }),
+  };
+  return merged;
 }
 
 describe("showSandboxChannelStatus (whatsapp)", () => {
@@ -504,5 +534,64 @@ describe("showSandboxChannelStatus (whatsapp)", () => {
     const dump = out_lines.join("\n");
     expect(dump).toMatch(/telegram registered/);
     expect(dump).toMatch(/preset applied/);
+  });
+});
+
+describe("showSandboxChannelStatus (telegram config visibility)", () => {
+  for (const policy of ["open", "allowlist", "disabled"] as const) {
+    it(`surfaces the resolved Telegram group policy: ${policy}`, async () => {
+      const { deps, out_lines } = makeDeps({
+        exec: () => ({ status: 0, stdout: "", stderr: "" }),
+        sandbox: entry(["telegram"]),
+        appliedPresets: ["telegram"],
+        channelInputs: {
+          telegram: [{ inputId: "groupPolicy", value: policy }],
+        },
+      });
+      await showSandboxChannelStatus("alpha", { deps, channel: "telegram" });
+      const dump = out_lines.join("\n");
+      expect(dump).toMatch(new RegExp(`Telegram group policy:\\s+${policy}\\b`));
+      expect(dump).not.toMatch(new RegExp(`Telegram group policy:\\s+${policy}\\s+\\(default\\)`));
+    });
+  }
+
+  it("falls back to the manifest default when no group policy value is persisted", async () => {
+    const { deps, out_lines } = makeDeps({
+      exec: () => ({ status: 0, stdout: "", stderr: "" }),
+      sandbox: entry(["telegram"]),
+      appliedPresets: ["telegram"],
+    });
+    await showSandboxChannelStatus("alpha", { deps, channel: "telegram" });
+    const dump = out_lines.join("\n");
+    expect(dump).toMatch(/Telegram group policy:\s+open\s+\(default\)/);
+  });
+
+  it("surfaces the resolved Telegram mention mode alongside the group policy", async () => {
+    const { deps, out_lines } = makeDeps({
+      exec: () => ({ status: 0, stdout: "", stderr: "" }),
+      sandbox: entry(["telegram"]),
+      appliedPresets: ["telegram"],
+      channelInputs: {
+        telegram: [
+          { inputId: "requireMention", value: "0" },
+          { inputId: "groupPolicy", value: "allowlist" },
+        ],
+      },
+    });
+    await showSandboxChannelStatus("alpha", { deps, channel: "telegram" });
+    const dump = out_lines.join("\n");
+    expect(dump).toMatch(/Telegram group mention mode:\s+0\b/);
+    expect(dump).toMatch(/Telegram group policy:\s+allowlist\b/);
+  });
+
+  it("skips visible config inputs that have neither a persisted value nor a default", async () => {
+    const { deps, out_lines } = makeDeps({
+      exec: () => ({ status: 0, stdout: "", stderr: "" }),
+      sandbox: entry(["telegram"]),
+      appliedPresets: ["telegram"],
+    });
+    await showSandboxChannelStatus("alpha", { deps, channel: "telegram" });
+    const dump = out_lines.join("\n");
+    expect(dump).not.toMatch(/Telegram User ID/);
   });
 });

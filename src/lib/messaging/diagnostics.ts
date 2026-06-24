@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createBuiltInChannelManifestRegistry } from "./channels";
-import type { ChannelManifest, ChannelPolicyPresetReference, MessagingAgentId } from "./manifest";
+import type {
+  ChannelInputSpec,
+  ChannelManifest,
+  ChannelPolicyPresetReference,
+  MessagingAgentId,
+} from "./manifest";
 
 export interface MessagingChannelDiagnosticSpec {
   readonly channelId: string;
@@ -13,6 +18,14 @@ export interface MessagingChannelDiagnosticSpec {
     readonly detail: string;
     readonly hint: string;
   };
+  readonly visibleConfigInputs: readonly VisibleChannelConfigInput[];
+}
+
+export interface VisibleChannelConfigInput {
+  readonly inputId: string;
+  readonly label: string;
+  readonly defaultValue?: string;
+  readonly validValues?: readonly string[];
 }
 
 export function collectBuiltInMessagingChannelDiagnostics(
@@ -35,7 +48,26 @@ export function collectMessagingChannelDiagnostics(
       policyPresets: policyPresetNames(manifest.policyPresets),
       preferredDefault: deepProbe !== undefined,
       ...(deepProbe ? { deepProbe, doctorWhenNoHealthSignals: qrDeepProbeDoctorHint() } : {}),
+      visibleConfigInputs: collectVisibleConfigInputs(manifest.inputs),
     };
+  });
+}
+
+function collectVisibleConfigInputs(
+  inputs: readonly ChannelInputSpec[],
+): readonly VisibleChannelConfigInput[] {
+  return inputs.flatMap((input) => {
+    if (input.kind !== "config") return [];
+    const label = input.prompt?.label;
+    if (!label) return [];
+    return [
+      {
+        inputId: input.id,
+        label,
+        ...(input.defaultValue !== undefined ? { defaultValue: input.defaultValue } : {}),
+        ...(input.validValues ? { validValues: [...input.validValues] } : {}),
+      } satisfies VisibleChannelConfigInput,
+    ];
   });
 }
 

@@ -18,6 +18,11 @@ import {
   collectBuiltInMessagingChannelDiagnostics,
   type MessagingChannelDiagnosticSpec,
 } from "../../messaging/diagnostics";
+import type {
+  SandboxMessagingChannelPlan,
+  SandboxMessagingInputReference,
+  SandboxMessagingPlan,
+} from "../../messaging/manifest";
 import * as policies from "../../policy";
 import {
   type DiagnosticSeverity,
@@ -64,6 +69,7 @@ type StatusDeps = {
   getSandbox?: typeof registry.getSandbox;
   getAppliedPresets?: (sandboxName: string) => string[];
   getGatewayPresets?: (sandboxName: string) => string[] | null;
+  getMessagingPlan?: (entry: ReturnType<typeof registry.getSandbox>) => SandboxMessagingPlan | null;
   execSandbox?: ExecRunner;
   now?: () => Date;
   out?: (line: string) => void;
@@ -131,6 +137,7 @@ function defaultDeps(deps: StatusDeps | undefined): Required<StatusDeps> {
     getSandbox: deps?.getSandbox ?? registry.getSandbox,
     getAppliedPresets: deps?.getAppliedPresets ?? policies.getAppliedPresets,
     getGatewayPresets: deps?.getGatewayPresets ?? policies.getGatewayPresets,
+    getMessagingPlan: deps?.getMessagingPlan ?? registry.getMessagingPlanFromEntry,
     execSandbox: deps?.execSandbox ?? defaultExec,
     now: deps?.now ?? (() => new Date()),
     out: deps?.out ?? ((line: string) => console.log(line)),
@@ -500,13 +507,14 @@ function buildBasicChannelReport(
       ? undefined
       : `run \`${CLI_NAME} ${sandboxName} policy-add ${policyPresets[0]}\``,
   });
+  for (const signal of buildConfigVisibilitySignals(channelName, diagnostic, deps, entry)) {
+    signals.push(signal);
+  }
   signals.push({
     label: "Deep diagnostics",
     severity: "info",
     detail: `not implemented for ${channelName}; see \`${CLI_NAME} ${sandboxName} doctor\` and \`${CLI_NAME} ${sandboxName} logs --follow\``,
   });
-  // Reference the agent in a hint so the deep-diagnostic section is
-  // discoverable per agent without needing extra plumbing.
   if (!agent.messagingPlatforms.includes(channelName)) {
     signals.unshift({
       label: "Agent support",
@@ -521,6 +529,59 @@ function buildBasicChannelReport(
     verdict: "info",
     signals,
   };
+}
+
+function buildConfigVisibilitySignals(
+  channelName: string,
+  diagnostic: MessagingChannelDiagnosticSpec,
+  deps: Required<StatusDeps>,
+  entry: ReturnType<typeof registry.getSandbox>,
+): DiagnosticSignal[] {
+  const visible = diagnostic.visibleConfigInputs;
+  if (!visible || visible.length === 0) return [];
+  const plan = deps.getMessagingPlan(entry);
+  const channelPlan = plan?.channels.find((channel) => channel.channelId === channelName) ?? null;
+  return visible.flatMap<DiagnosticSignal>((input) => {
+    const planInput = findChannelInput(channelPlan, input.inputId);
+    const rawValue = planInput?.value;
+    if (rawValue !== undefined && rawValue !== null && rawValue !== "") {
+      return [
+        {
+          label: input.label,
+          severity: "ok",
+          detail: formatVisibleConfigValue(rawValue),
+        },
+      ];
+    }
+    if (input.defaultValue !== undefined) {
+      return [
+        {
+          label: input.label,
+          severity: "info",
+          detail: `${input.defaultValue} (default)`,
+        },
+      ];
+    }
+    return [];
+  });
+}
+
+function findChannelInput(
+  channelPlan: SandboxMessagingChannelPlan | null,
+  inputId: string,
+): SandboxMessagingInputReference | null {
+  if (!channelPlan) return null;
+  return channelPlan.inputs.find((input) => input.inputId === inputId) ?? null;
+}
+
+function formatVisibleConfigValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "number") return String(value);
+  if (Array.isArray(value)) {
+    return value.map((entry) => formatVisibleConfigValue(entry)).join(", ");
+  }
+  return JSON.stringify(value);
 }
 
 /**
