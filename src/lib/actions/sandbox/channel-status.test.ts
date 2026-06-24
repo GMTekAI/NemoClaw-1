@@ -661,4 +661,34 @@ describe("showSandboxChannelStatus (telegram config visibility)", () => {
     const dump = out_lines.join("\n");
     expect(dump).not.toMatch(/Telegram User ID/);
   });
+
+  it("hides the OpenClaw-only group policy when the sandbox runs Hermes", async () => {
+    const { deps, out_lines } = makeDeps({
+      exec: () => ({ status: 0, stdout: "", stderr: "" }),
+      sandbox: entry(["telegram"]),
+      appliedPresets: ["telegram"],
+      agentName: "hermes",
+    });
+    await showSandboxChannelStatus("alpha", { deps, channel: "telegram" });
+    const dump = out_lines.join("\n");
+    expect(dump).not.toMatch(/Telegram group policy/);
+    expect(dump).toMatch(/Telegram group mention mode:\s+mention-only \(default\)/);
+  });
+
+  it("redacts an invalid persisted value rather than echoing it", async () => {
+    const { deps, out_lines } = makeDeps({
+      exec: () => ({ status: 0, stdout: "", stderr: "" }),
+      sandbox: entry(["telegram"]),
+      appliedPresets: ["telegram"],
+      channelInputs: {
+        telegram: [{ inputId: "groupPolicy", value: "definitely-not-a-policy" }],
+      },
+    });
+    await showSandboxChannelStatus("alpha", { deps, channel: "telegram" });
+    const dump = out_lines.join("\n");
+    expect(dump).not.toMatch(/definitely-not-a-policy/);
+    expect(dump).toMatch(
+      /Telegram group policy:\s+invalid persisted value \(expected: open \| allowlist \| disabled\)/,
+    );
+  });
 });

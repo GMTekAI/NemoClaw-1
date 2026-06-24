@@ -8,6 +8,8 @@ import type {
   ChannelPolicyPresetReference,
   MessagingAgentId,
   MessagingSerializableValue,
+  SandboxMessagingChannelPlan,
+  SandboxMessagingPlan,
 } from "./manifest";
 
 export interface MessagingChannelDiagnosticSpec {
@@ -29,6 +31,7 @@ export interface VisibleChannelConfigInput {
   readonly defaultValue?: string;
   readonly validValues?: readonly string[];
   readonly valueDisplay?: Readonly<Record<string, string>>;
+  readonly agentApplicability?: readonly MessagingAgentId[];
 }
 
 export function collectBuiltInMessagingChannelDiagnostics(
@@ -72,6 +75,7 @@ function collectVisibleConfigInputs(
         ...(input.defaultValue !== undefined ? { defaultValue: input.defaultValue } : {}),
         ...(input.validValues ? { validValues: [...input.validValues] } : {}),
         ...(input.valueDisplay ? { valueDisplay: { ...input.valueDisplay } } : {}),
+        ...(input.agentApplicability ? { agentApplicability: [...input.agentApplicability] } : {}),
       } satisfies VisibleChannelConfigInput,
     ];
   });
@@ -83,10 +87,15 @@ function collectVisibleConfigInputs(
  * manifest default is available). Returns `null` when neither a persisted
  * value nor a default exists so callers can skip the entry rather than emit
  * an empty signal.
+ *
+ * When the persisted value is not in the input's declared `validValues`
+ * allowlist, the renderer returns bounded text (`invalid persisted value
+ * (expected: …)`) rather than echoing the raw value, so a corrupted or
+ * tampered plan cannot bypass the diagnostic boundary.
  */
 export type VisibleConfigDisplay = {
   readonly detail: string;
-  readonly source: "persisted" | "default";
+  readonly source: "persisted" | "default" | "invalid";
 };
 
 export function resolveVisibleConfigDisplay(
@@ -94,7 +103,19 @@ export function resolveVisibleConfigDisplay(
   rawValue: MessagingSerializableValue | undefined,
 ): VisibleConfigDisplay | null {
   if (rawValue !== undefined && rawValue !== null && rawValue !== "") {
-    const valueText = stringifyValue(rawValue);
+    if (!isPrintableScalar(rawValue)) {
+      return {
+        detail: "invalid persisted value (unsupported type)",
+        source: "invalid",
+      };
+    }
+    const valueText = stringifyScalar(rawValue);
+    if (input.validValues && !input.validValues.includes(valueText)) {
+      return {
+        detail: `invalid persisted value (expected: ${input.validValues.join(" | ")})`,
+        source: "invalid",
+      };
+    }
     const mapped = input.valueDisplay?.[valueText];
     if (mapped && input.envKey) {
       return { detail: `${mapped} (${input.envKey}=${valueText})`, source: "persisted" };
@@ -114,12 +135,59 @@ export function resolveVisibleConfigDisplay(
   return null;
 }
 
-function stringifyValue(value: MessagingSerializableValue): string {
+/**
+ * Normalised visible-config record consumed by `channels status` and
+ * `doctor`. The diagnostic shared helper walks a channel plan once and
+ * returns one record per renderable input; the calling command then maps
+ * the record onto its own signal/check shape.
+ */
+export interface VisibleConfigRecord {
+  readonly input: VisibleChannelConfigInput;
+  readonly display: VisibleConfigDisplay;
+}
+
+/**
+ * Walk one diagnostic spec's `visibleConfigInputs` against a sandbox plan
+ * and return only the records that should be rendered for the supplied
+ * agent runtime. Inputs whose `agentApplicability` excludes the agent are
+ * skipped so an OpenClaw-only setting never appears for a Hermes sandbox.
+ */
+export function collectVisibleConfigRecords(
+  diagnostic: MessagingChannelDiagnosticSpec,
+  plan: SandboxMessagingPlan | null,
+  channelId: string,
+  agent: MessagingAgentId | null,
+): VisibleConfigRecord[] {
+  const channelPlan: SandboxMessagingChannelPlan | null =
+    plan?.channels.find((channel) => channel.channelId === channelId) ?? null;
+  const records: VisibleConfigRecord[] = [];
+  for (const input of diagnostic.visibleConfigInputs) {
+    if (!inputAppliesToAgent(input, agent)) continue;
+    const planInput = channelPlan?.inputs.find((entry) => entry.inputId === input.inputId);
+    const display = resolveVisibleConfigDisplay(input, planInput?.value);
+    if (!display) continue;
+    records.push({ input, display });
+  }
+  return records;
+}
+
+function inputAppliesToAgent(
+  input: VisibleChannelConfigInput,
+  agent: MessagingAgentId | null,
+): boolean {
+  if (!input.agentApplicability || input.agentApplicability.length === 0) return true;
+  if (!agent) return false;
+  return input.agentApplicability.includes(agent);
+}
+
+function isPrintableScalar(value: MessagingSerializableValue): value is string | number | boolean {
+  return typeof value === "string" || typeof value === "number" || typeof value === "boolean";
+}
+
+function stringifyScalar(value: string | number | boolean): string {
   if (typeof value === "string") return value;
   if (typeof value === "boolean") return value ? "true" : "false";
-  if (typeof value === "number") return String(value);
-  if (Array.isArray(value)) return value.map(stringifyValue).join(", ");
-  return JSON.stringify(value);
+  return String(value);
 }
 
 function qrDeepProbeDoctorHint(): MessagingChannelDiagnosticSpec["doctorWhenNoHealthSignals"] {

@@ -16,14 +16,10 @@ import { CLI_DISPLAY_NAME, CLI_NAME } from "../../cli/branding";
 import { B, D, G, R, RD, YW } from "../../cli/terminal-style";
 import {
   collectBuiltInMessagingChannelDiagnostics,
+  collectVisibleConfigRecords,
   type MessagingChannelDiagnosticSpec,
-  resolveVisibleConfigDisplay,
 } from "../../messaging/diagnostics";
-import type {
-  SandboxMessagingChannelPlan,
-  SandboxMessagingInputReference,
-  SandboxMessagingPlan,
-} from "../../messaging/manifest";
+import type { MessagingAgentId, SandboxMessagingPlan } from "../../messaging/manifest";
 import * as policies from "../../policy";
 import {
   type DiagnosticSeverity,
@@ -509,7 +505,13 @@ function buildBasicChannelReport(
       : `run \`${CLI_NAME} ${sandboxName} policy-add ${policyPresets[0]}\``,
   });
   if (enabled && !disabled) {
-    for (const signal of buildConfigVisibilitySignals(channelName, diagnostic, deps, entry)) {
+    for (const signal of buildConfigVisibilitySignals(
+      channelName,
+      diagnostic,
+      deps,
+      entry,
+      agent,
+    )) {
       signals.push(signal);
     }
   }
@@ -539,31 +541,36 @@ function buildConfigVisibilitySignals(
   diagnostic: MessagingChannelDiagnosticSpec,
   deps: Required<StatusDeps>,
   entry: ReturnType<typeof registry.getSandbox>,
+  agent: AgentDefinition,
 ): DiagnosticSignal[] {
-  const visible = diagnostic.visibleConfigInputs;
-  if (!visible || visible.length === 0) return [];
+  if (diagnostic.visibleConfigInputs.length === 0) return [];
   const plan = deps.getMessagingPlan(entry);
-  const channelPlan = plan?.channels.find((channel) => channel.channelId === channelName) ?? null;
-  return visible.flatMap<DiagnosticSignal>((input) => {
-    const planInput = findChannelInput(channelPlan, input.inputId);
-    const display = resolveVisibleConfigDisplay(input, planInput?.value);
-    if (!display) return [];
-    return [
-      {
-        label: input.label,
-        severity: display.source === "persisted" ? "ok" : "info",
-        detail: display.detail,
-      },
-    ];
-  });
+  const records = collectVisibleConfigRecords(
+    diagnostic,
+    plan,
+    channelName,
+    asMessagingAgent(agent.name),
+  );
+  return records.map(({ input, display }) => ({
+    label: input.label,
+    severity: severityForDisplay(display.source),
+    detail: display.detail,
+  }));
 }
 
-function findChannelInput(
-  channelPlan: SandboxMessagingChannelPlan | null,
-  inputId: string,
-): SandboxMessagingInputReference | null {
-  if (!channelPlan) return null;
-  return channelPlan.inputs.find((input) => input.inputId === inputId) ?? null;
+function severityForDisplay(source: "persisted" | "default" | "invalid") {
+  switch (source) {
+    case "persisted":
+      return "ok" as const;
+    case "default":
+      return "info" as const;
+    case "invalid":
+      return "warn" as const;
+  }
+}
+
+function asMessagingAgent(name: string): MessagingAgentId | null {
+  return name === "openclaw" || name === "hermes" ? name : null;
 }
 
 /**

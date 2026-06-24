@@ -19,9 +19,10 @@ import { parseGatewayInference } from "../../inference/config";
 import { type ProviderHealthStatus, probeProviderHealth } from "../../inference/health";
 import {
   collectBuiltInMessagingChannelDiagnostics,
+  collectVisibleConfigRecords,
   type MessagingChannelDiagnosticSpec,
-  resolveVisibleConfigDisplay,
 } from "../../messaging/diagnostics";
+import type { MessagingAgentId } from "../../messaging/manifest";
 import { isLinuxDockerDriverGatewayEnabled } from "../../onboard/docker-driver-platform";
 import { resolveGatewayName, resolveSandboxGatewayName } from "../../onboard/gateway-binding";
 import { executeSandboxCommandForVerification } from "../../onboard/sandbox-verification-exec";
@@ -525,30 +526,47 @@ function messagingChannelConfigDoctorChecks(sandboxName: string, sb: SandboxEntr
   );
   if (activeChannels.length === 0) return [];
   const plan = registry.getMessagingPlanFromEntry(sb);
+  const agent = asMessagingAgent(sb.agent ?? null);
   const checks: DoctorCheck[] = [];
   for (const channelName of activeChannels) {
     const diagnostic = getChannelStatusDiagnostic(channelName);
-    const visible = diagnostic?.visibleConfigInputs ?? [];
-    if (visible.length === 0) continue;
-    const channelPlan = plan?.channels.find((channel) => channel.channelId === channelName) ?? null;
-    for (const input of visible) {
-      const planInput = channelPlan?.inputs.find((entry) => entry.inputId === input.inputId);
-      const display = resolveVisibleConfigDisplay(input, planInput?.value);
-      if (!display) continue;
+    if (!diagnostic || diagnostic.visibleConfigInputs.length === 0) continue;
+    const records = collectVisibleConfigRecords(diagnostic, plan, channelName, agent);
+    for (const { input, display } of records) {
       checks.push({
         group: "Messaging",
         label: input.label,
-        status: display.source === "persisted" ? "ok" : "info",
+        status: doctorStatusForDisplay(display.source),
         detail: display.detail,
         ...(display.source === "default"
           ? {
               hint: `run \`${CLI_NAME} ${sandboxName} channels status --channel ${channelName}\` to confirm the resolved value`,
             }
           : {}),
+        ...(display.source === "invalid"
+          ? {
+              hint: `run \`${CLI_NAME} ${sandboxName} channels add ${channelName}\` to re-enter a valid value`,
+            }
+          : {}),
       });
     }
   }
   return checks;
+}
+
+function doctorStatusForDisplay(source: "persisted" | "default" | "invalid"): DoctorStatus {
+  switch (source) {
+    case "persisted":
+      return "ok";
+    case "default":
+      return "info";
+    case "invalid":
+      return "warn";
+  }
+}
+
+function asMessagingAgent(name: string | null): MessagingAgentId | null {
+  return name === "openclaw" || name === "hermes" ? name : null;
 }
 
 function formatMessagingOverlapDoctorDetail(overlap: {

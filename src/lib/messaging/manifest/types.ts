@@ -114,6 +114,14 @@ export interface ChannelConfigInputSpec extends ChannelInputBaseSpec {
    * behavior they describe (for example `"1" -> "mention-only"`).
    */
   readonly valueDisplay?: Readonly<Record<string, string>>;
+  /**
+   * Optional list of agent runtimes the input applies to. When set, the
+   * diagnostics renderer skips the input for sandboxes whose agent is not
+   * in this list (for example a Hermes-targeted sandbox should not see an
+   * OpenClaw-only setting). Defaults to "applies to every supported agent"
+   * when omitted.
+   */
+  readonly agentApplicability?: readonly MessagingAgentId[];
 }
 
 /** Manifest input declaration, split so secrets cannot declare defaults or state paths. */

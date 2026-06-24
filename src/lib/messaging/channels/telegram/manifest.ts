@@ -66,6 +66,7 @@ export const telegramManifest = {
       validValues: ["open", "allowlist", "disabled"],
       defaultValue: "open",
       safeToPrintInDiagnostics: true,
+      agentApplicability: ["openclaw"],
       prompt: {
         label: "Telegram group policy",
         help: "Controls OpenClaw Telegram group access. Hermes does not expose an equivalent disable-groups policy.",
