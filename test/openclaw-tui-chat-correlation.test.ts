@@ -1,13 +1,15 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { execFileSync } from "node:child_process";
 import type { ExecFileSyncOptionsWithStringEncoding } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+
+import { containsReplyTokenAllowingWhitespace } from "./helpers/e2e-answer-assertions.ts";
 
 const LIVE_REPRO_ENV = "NEMOCLAW_ISSUE_2603_LIVE";
 const LIVE_SANDBOX_ENV = "NEMOCLAW_ISSUE_2603_SANDBOX";
@@ -111,14 +113,6 @@ function textFromMessage(message: unknown): string {
   return textFromContent(record.content);
 }
 
-function normalizeVisibleTokenText(value: string): string {
-  return value.replace(/\s+/gu, "");
-}
-
-function textContainsReplyToken(text: string, replyToken: string): boolean {
-  return normalizeVisibleTokenText(text).includes(normalizeVisibleTokenText(replyToken));
-}
-
 function compactChatEvents(events: GatewayEvent[]): CompactChatEvent[] {
   return events
     .filter((event) => event.event === "chat")
@@ -158,7 +152,7 @@ function analyzeIssue2603Trace({
   const finalReplyCounts = new Map<string, number>();
   for (const [replyToken, expectedRunId] of expectedRunByReplyToken) {
     for (const event of chatEvents) {
-      if (!textContainsReplyToken(event.text, replyToken)) continue;
+      if (!containsReplyTokenAllowingWhitespace(event.text, replyToken)) continue;
       visibleReplyCounts.set(replyToken, (visibleReplyCounts.get(replyToken) ?? 0) + 1);
       if (event.state === "final") {
         finalReplyCounts.set(replyToken, (finalReplyCounts.get(replyToken) ?? 0) + 1);
@@ -431,16 +425,12 @@ function textFromMessage(message) {
   return content.map((part) => part && typeof part === "object" && typeof part.text === "string" ? part.text : "").filter(Boolean).join("\n");
 }
 
-function normalizeVisibleTokenText(value) {
+function compactReplyTokenText(value) {
   return String(value || "").replace(/\s+/g, "");
 }
 
-function textContainsReplyToken(text, replyToken) {
-  return normalizeVisibleTokenText(text).includes(normalizeVisibleTokenText(replyToken));
-}
-
 function sawAllReplies(replyTokens) {
-  return replyTokens.every((token) => events.some((event) => event.event === "chat" && textContainsReplyToken(textFromMessage(event.payload?.message), token)));
+  return replyTokens.every((token) => events.some((event) => event.event === "chat" && compactReplyTokenText(textFromMessage(event.payload?.message)).includes(compactReplyTokenText(token))));
 }
 
 ws.on("message", (data) => {
@@ -625,6 +615,38 @@ describe("OpenClaw TUI chat correlation regression (#2603)", () => {
       { promptToken: "B2603", count: 2 },
       { promptToken: "C2603", count: 2 },
     ]);
+  });
+
+  it("matches deterministic reply tokens split by harmless model whitespace", () => {
+    const analysis = analyzeIssue2603Trace({
+      sentRuns: [
+        {
+          promptToken: "A2603",
+          replyToken: "A2603-REPLY",
+          runId: "split-reply-run",
+          message: "A2603: Reply exactly A2603-REPLY and nothing else.",
+        },
+      ],
+      events: [
+        {
+          event: "chat",
+          payload: {
+            runId: "split-reply-run",
+            state: "final",
+            message: { role: "assistant", content: [{ type: "text", text: "A\n2603-REPLY" }] },
+          },
+        },
+      ],
+      historyMessages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "A2603: Reply exactly A2603-REPLY and nothing else." }],
+        },
+      ],
+    });
+
+    expect(analysis.missingReplies).toEqual([]);
+    expect(analysis.uncorrelatedReplies).toEqual([]);
   });
 
   it("does not classify a streamed delta plus final for the same run as a duplicate reply", () => {
