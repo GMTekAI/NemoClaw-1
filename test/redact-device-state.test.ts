@@ -360,6 +360,33 @@ describe("scope-upgrade Phase 6 secret-bearing artifacts", () => {
   });
 });
 
+describe("scope-upgrade Phase 7 sandbox-B least-privilege onboarding", () => {
+  it("unsets hosted inference credentials and routing env before Ollama onboard", () => {
+    const script = readFileSync(SCOPE_UPGRADE_SCRIPT, "utf8");
+    const onboardCommand = "run_with_timeout 1500 nemoclaw onboard --non-interactive --fresh";
+    const onboardIndex = requireNonNegative(
+      script.indexOf(onboardCommand),
+      "sandbox-B onboard command not found",
+    );
+    const sandboxBStart = requireNonNegative(
+      script.lastIndexOf('export NEMOCLAW_PROVIDER=ollama', onboardIndex),
+      "sandbox-B Ollama provider export not found before onboard",
+    );
+    const sandboxBBlock = script.slice(sandboxBStart, onboardIndex);
+
+    for (const name of [
+      "NVIDIA_INFERENCE_API_KEY",
+      "COMPATIBLE_API_KEY",
+      "NEMOCLAW_ENDPOINT_URL",
+      "NEMOCLAW_COMPAT_MODEL",
+      "NEMOCLAW_PREFERRED_API",
+      "NEMOCLAW_E2E_USE_HOSTED_INFERENCE",
+    ]) {
+      expect(sandboxBBlock).toContain(`unset ${name}`);
+    }
+  });
+});
+
 describe("scope-upgrade Phase 7 hosted inference model wiring", () => {
   const script = readFileSync(SCOPE_UPGRADE_SCRIPT, "utf8");
 
