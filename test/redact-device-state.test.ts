@@ -19,10 +19,8 @@ function runRedactor(input: unknown): { rc: number; stdout: string; stderr: stri
   });
   const stdout = result.stdout ?? "";
   const stderr = result.stderr ?? "";
-  let doc: unknown = undefined;
-  if (result.status === 0 && stdout.trim().length > 0) {
-    doc = JSON.parse(stdout);
-  }
+  const doc: unknown =
+    result.status === 0 && stdout.trim().length > 0 ? JSON.parse(stdout) : undefined;
   return { rc: result.status ?? -1, stdout, stderr, doc };
 }
 

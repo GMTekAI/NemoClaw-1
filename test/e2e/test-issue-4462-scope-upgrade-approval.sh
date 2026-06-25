@@ -230,14 +230,14 @@ PY
 ' 2>&1)
   rc=$?
   if [ "$rc" -ne 0 ]; then
-    printf '%s\n' "$raw"
+    printf '[DEVICE_STATE_REDACTION_FAILED stage=sandbox-exec rc=%s]\n' "$rc"
     return "$rc"
   fi
   redacted=$(printf '%s\n' "$raw" | extract_json_doc \
     | python3 "${E2E_DIR}/lib/redact-device-state.py")
   rc=$?
   if [ "$rc" -ne 0 ]; then
-    printf '%s\n' "$raw"
+    printf '[DEVICE_STATE_REDACTION_FAILED stage=redactor rc=%s]\n' "$rc"
     return "$rc"
   fi
   printf '%s\n' "$redacted"
@@ -1349,17 +1349,38 @@ if [ -n "$provider_a" ] && [ "$provider_a" = "$provider_b" ]; then
   fail "two sandboxes share the same upstream provider (${provider_a}); differing-providers contract broken"
   provider_check_pass=0
 fi
+case "$base_url_a" in
+  *inference.local*)
+    pass "sandbox A model.base_url routes through inference.local (${base_url_a})"
+    ;;
+  *)
+    fail "sandbox A model.base_url must route through inference.local (got: ${base_url_a:-empty}, provider=${provider_a})"
+    provider_check_pass=0
+    ;;
+esac
+case "$base_url_b" in
+  *inference.local*)
+    pass "sandbox B model.base_url routes through inference.local (${base_url_b})"
+    ;;
+  *)
+    fail "sandbox B model.base_url must route through inference.local (got: ${base_url_b:-empty}, provider=${provider_b})"
+    provider_check_pass=0
+    ;;
+esac
+
+EXPECTED_MODEL_A="${NEMOCLAW_CLI_SCOPE_EXPECTED_MODEL_A:-nvidia/nemotron-3-super-120b-a12b}"
+EXPECTED_MODEL_B="${NEMOCLAW_CLI_SCOPE_EXPECTED_MODEL_B:-$OLLAMA_TWO_PROVIDER_MODEL}"
+if [ "$model_a" != "$EXPECTED_MODEL_A" ]; then
+  fail "sandbox A model mismatch: expected ${EXPECTED_MODEL_A}, got ${model_a:-empty}"
+  provider_check_pass=0
+fi
+if [ "$model_b" != "$EXPECTED_MODEL_B" ]; then
+  fail "sandbox B model mismatch: expected ${EXPECTED_MODEL_B}, got ${model_b:-empty}"
+  provider_check_pass=0
+fi
 if [ "$provider_check_pass" -ne 1 ]; then
   exit 1
 fi
-case "$base_url_a" in
-  *inference.local*) pass "sandbox A model.base_url routes through inference.local (${base_url_a})" ;;
-  *) info "sandbox A model.base_url did not contain inference.local (got: ${base_url_a:-empty}); recorded provider ${provider_a} still drives the gateway" ;;
-esac
-case "$base_url_b" in
-  *inference.local*) pass "sandbox B model.base_url routes through inference.local (${base_url_b})" ;;
-  *) info "sandbox B model.base_url did not contain inference.local (got: ${base_url_b:-empty}); recorded provider ${provider_b} still drives the gateway" ;;
-esac
 
 sandbox_b_exec_sh_script() {
   local seconds="$1"
