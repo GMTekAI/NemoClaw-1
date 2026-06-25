@@ -63,11 +63,11 @@ classDiagram
     auth: ChannelAuthSpec
     inputs: ChannelInputSpec[]
     credentials: ChannelCredentialSpec[]
-    policyPresets: ChannelPolicyPresetReference[]
+    policyPresets?: ChannelPolicyPresetReference[]
     render: ChannelRenderSpec[]
-    hostForward: ChannelHostForwardSpec
-    runtime: ChannelRuntimeByAgentSpec
-    agentPackages: ChannelAgentPackageSpec[]
+    hostForward?: ChannelHostForwardSpec
+    runtime?: ChannelRuntimeByAgentSpec
+    agentPackages?: ChannelAgentPackageSpec[]
     state: ChannelStateSpec
     hooks: ChannelHookSpec[]
   }
@@ -289,11 +289,11 @@ It is a serializable declaration for one channel and one set of supported agents
 | `auth` | High-level enrollment mode: `none`, `token-paste`, `host-qr`, or `in-sandbox-qr`. |
 | `inputs` | Secret and config inputs, env keys, prompts, validation, aliases, and persistence paths. |
 | `credentials` | Provider bindings derived from secret inputs. |
-| `policyPresets` | Network policy presets and policy keys required by the channel. |
+| `policyPresets` | Optional network policy presets and policy keys required by the channel. |
 | `render` | Agent config fragments or env-file lines to render when the channel is active. |
 | `hostForward` | Optional host-side forward for inbound webhooks. |
-| `runtime` | Runtime visibility, preload, env alias, and secret scan metadata. |
-| `agentPackages` | Build-time agent package installs. |
+| `runtime` | Optional runtime visibility, preload, env alias, and secret scan metadata. |
+| `agentPackages` | Optional build-time agent package installs. |
 | `state` | Persisted config keys and rebuild hydration rules. |
 | `hooks` | Hook references for enrollment, checks, render, apply, status, and diagnostics. |
 
