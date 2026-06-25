@@ -37,8 +37,11 @@ const store = D("credentials/store.js");
 const registry = D("state/registry.js");
 const onboardSession = D("state/onboard-session.js");
 const policies = D("policy/index.js");
-const { addSandboxPolicy, removeSandboxPolicy } = D("actions/sandbox/policy-channel.js") as {
+const { addSandboxPolicy, listSandboxPolicies, removeSandboxPolicy } = D(
+  "actions/sandbox/policy-channel.js",
+) as {
   addSandboxPolicy: (sandboxName: string, options?: PolicyAddOptions) => Promise<void>;
+  listSandboxPolicies: (sandboxName: string) => void;
   removeSandboxPolicy: (sandboxName: string, options?: PolicyRemoveOptions) => Promise<void>;
 };
 
@@ -329,5 +332,97 @@ describe("removeSandboxPolicy", () => {
 
     expect(printedText()).toContain("Non-interactive mode requires a preset name.");
     expect(removePresetMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("listSandboxPolicies", () => {
+  function arrangeListing({
+    appliedNames,
+    gatewayNames,
+    tier,
+    agent,
+  }: {
+    appliedNames: string[];
+    gatewayNames: string[] | null;
+    tier: string | null;
+    agent: string | null;
+  }): void {
+    getSandboxMock.mockReturnValue({
+      name: "test-sandbox",
+      agent,
+      policyTier: tier,
+      policies: appliedNames,
+    });
+    getAppliedPresetsMock.mockReturnValue(appliedNames);
+    vi.spyOn(policies, "getGatewayPresets").mockReturnValue(gatewayNames);
+  }
+
+  it("tags active tier-default presets with their tier provenance", () => {
+    arrangeListing({
+      appliedNames: ["npm", "pypi"],
+      gatewayNames: ["npm", "pypi"],
+      tier: "balanced",
+      agent: "openclaw",
+    });
+
+    listSandboxPolicies("test-sandbox");
+
+    const output = printedText();
+    expect(output).toContain("● npm [from balanced tier]");
+    expect(output).toContain("● pypi [from balanced tier]");
+  });
+
+  it("tags openclaw-pricing as an OpenClaw agent preset", () => {
+    arrangeListing({
+      appliedNames: ["openclaw-pricing"],
+      gatewayNames: ["openclaw-pricing"],
+      tier: "balanced",
+      agent: "openclaw",
+    });
+
+    listSandboxPolicies("test-sandbox");
+
+    expect(printedText()).toContain("● openclaw-pricing [from openclaw agent]");
+  });
+
+  it("tags nous-* presets as Hermes agent presets when applied to a Hermes sandbox", () => {
+    arrangeListing({
+      appliedNames: ["nous-web"],
+      gatewayNames: ["nous-web"],
+      tier: "open",
+      agent: "hermes",
+    });
+
+    listSandboxPolicies("test-sandbox");
+
+    expect(printedText()).toContain("● nous-web [from hermes agent]");
+  });
+
+  it("tags user-added presets that are neither tier nor agent defaults", () => {
+    arrangeListing({
+      appliedNames: ["discord"],
+      gatewayNames: ["discord"],
+      tier: "balanced",
+      agent: "openclaw",
+    });
+
+    listSandboxPolicies("test-sandbox");
+
+    expect(printedText()).toContain("● discord [user-added]");
+  });
+
+  it("omits the provenance tag for inactive presets", () => {
+    arrangeListing({
+      appliedNames: ["npm"],
+      gatewayNames: ["npm"],
+      tier: "balanced",
+      agent: "openclaw",
+    });
+
+    listSandboxPolicies("test-sandbox");
+
+    const output = printedText();
+    expect(output).toMatch(/○ pypi —/);
+    expect(output).not.toMatch(/○ pypi \[/);
   });
 });

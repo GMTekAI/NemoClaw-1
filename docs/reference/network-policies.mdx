@@ -77,6 +77,8 @@ Tier-default presets are pre-selected; additional presets can be added from the 
 NemoClaw filters tier defaults by the active agent's supported integrations.
 For example, Hermes onboarding omits the Brave Search preset because Hermes does not use NemoClaw's OpenClaw web-search configuration.
 Hermes managed-tool gateway selections can add Hermes-specific presets, such as Nous-hosted web, image, audio, browser, or code tools, without applying unsupported OpenClaw-only presets.
+OpenClaw onboarding also adds the `openclaw-pricing` preset on top of tier defaults so session-cost records can populate from LiteLLM and OpenRouter without manual configuration. When the OpenClaw OTEL diagnostics feature is enabled with a local endpoint, NemoClaw adds the `openclaw-diagnostics-otel-local` preset on the same basis.
+The applied set therefore reflects the chosen tier *plus* any agent-required presets, so `policy-list` may show one or more presets that do not appear in the tier table above.
 Claude Code direct egress is not included in any policy tier.
 If you install and run the Claude Code CLI inside the sandbox with its own credentials, apply the `claude-code` preset explicitly.
 Normal NemoClaw Anthropic inference still routes through the OpenShell gateway.

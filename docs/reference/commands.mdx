@@ -997,6 +997,12 @@ This catches desync caused by external edits to the gateway policy or stale regi
 Preset summaries come only from the YAML `preset.description` field.
 NemoClaw does not render network-policy rule bodies as prose in `policy-list` output.
 
+Each active preset is annotated with its provenance so you can tell why it is applied:
+
+- `[from <tier> tier]` — pre-selected by the chosen policy tier (see [Policy Tiers](../reference/network-policies#policy-tiers)).
+- `[from openclaw agent]` or `[from hermes agent]` — added by NemoClaw to satisfy the active agent's required integrations (for example `openclaw-pricing` for OpenClaw, or Nous-hosted gateway presets for Hermes).
+- `[user-added]` — applied later through `policy-add` or by including the preset during onboarding outside the tier defaults.
+
 ```bash
 $$nemoclaw my-assistant policy-list
 ```

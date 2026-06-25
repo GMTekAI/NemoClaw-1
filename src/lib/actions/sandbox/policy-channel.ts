@@ -36,6 +36,10 @@ const onboardProviders = require("../../onboard/providers");
 import { filterSetupPolicyPresetsForAgent } from "../../onboard/agent-policy-presets";
 import { getStoredMessagingChannelConfig } from "../../onboard/messaging-config";
 import * as policies from "../../policy";
+import {
+  classifyPresetProvenance,
+  formatPresetProvenanceTag,
+} from "../../policy/preset-provenance";
 
 const onboardSession =
   require("../../state/onboard-session") as typeof import("../../state/onboard-session");
@@ -268,6 +272,12 @@ export function listSandboxPolicies(sandboxName: string) {
   // array of matched preset names when reachable (possibly empty).
   const gatewayPresets = policies.getGatewayPresets(sandboxName);
 
+  const sandboxEntry = registry.getSandbox(sandboxName);
+  const provenanceContext = {
+    tierName: sandboxEntry?.policyTier ?? null,
+    agentName: sandboxEntry?.agent ?? null,
+  };
+
   console.log("");
   console.log(`  Policy presets for sandbox '${sandboxName}':`);
   allPresets.forEach((p: { name: string; description: string }) => {
@@ -291,7 +301,14 @@ export function listSandboxPolicies(sandboxName: string) {
       marker = "○";
       suffix = " (recorded locally, not active on gateway)";
     }
-    console.log(`    ${marker} ${p.name} — ${p.description}${suffix}`);
+
+    let provenanceTag = "";
+    if (marker === "●") {
+      provenanceTag = ` [${formatPresetProvenanceTag(
+        classifyPresetProvenance(p.name, provenanceContext),
+      )}]`;
+    }
+    console.log(`    ${marker} ${p.name}${provenanceTag} — ${p.description}${suffix}`);
   });
 
   if (gatewayPresets === null) {

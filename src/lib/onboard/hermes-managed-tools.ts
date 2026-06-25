@@ -3,6 +3,9 @@
 
 import type { HermesAuthMethod } from "../hermes-provider-auth";
 import * as hermesProviderAuth from "../hermes-provider-auth";
+import { HERMES_TOOL_GATEWAY_PRESET_NAMES } from "./hermes-tool-gateway-preset-names";
+
+export { HERMES_TOOL_GATEWAY_PRESET_NAMES };
 
 type PromptFn = (message: string) => Promise<string>;
 type RawInput = NodeJS.ReadStream & {
@@ -52,9 +55,13 @@ export const HERMES_TOOL_GATEWAY_PRESETS = [
   },
 ] as const;
 
-export const HERMES_TOOL_GATEWAY_PRESET_NAMES = new Set<string>(
-  HERMES_TOOL_GATEWAY_PRESETS.map((preset) => preset.name),
-);
+for (const preset of HERMES_TOOL_GATEWAY_PRESETS) {
+  if (!HERMES_TOOL_GATEWAY_PRESET_NAMES.has(preset.name)) {
+    throw new Error(
+      `HERMES_TOOL_GATEWAY_PRESETS contains '${preset.name}' which is missing from the canonical name list in hermes-tool-gateway-preset-names.ts. Update the leaf list.`,
+    );
+  }
+}
 
 export function parseHermesToolGatewayPresetEnv(raw: string | null | undefined): string[] {
   const values = String(raw || "")
