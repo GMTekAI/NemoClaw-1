@@ -10,6 +10,7 @@ import {
   buildDockerDriverGatewayConfigToml,
   prepareDockerDriverGatewayConfigEnv,
 } from "./docker-driver-gateway-config";
+import { assertDockerDriverGatewayBindAddressSafe } from "./docker-driver-gateway-env";
 import {
   buildDockerDriverGatewayLocalTlsEnv,
   ensureDockerDriverGatewayLocalTlsBundle,
@@ -246,6 +247,7 @@ export function buildDockerDriverGatewayLaunch(
   if (options.sandboxBin && !gatewayEnv.OPENSHELL_DOCKER_SUPERVISOR_BIN) {
     gatewayEnv.OPENSHELL_DOCKER_SUPERVISOR_BIN = options.sandboxBin;
   }
+  assertDockerDriverGatewayBindAddressSafe(gatewayEnv);
   prepareDockerDriverGatewayConfigEnv(
     gatewayEnv,
     options.stateDir,

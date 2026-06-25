@@ -241,6 +241,27 @@ describe("docker-driver-gateway-launch", () => {
     }).toThrow(/only supports 127\.0\.0\.1/);
   });
 
+  it("rejects wildcard binds for direct host gateway launches", () => {
+    expect(() => {
+      withTempBinaries(({ dir, gatewayBin }) => {
+        const stateDir = path.join(dir, "state");
+        fs.mkdirSync(stateDir);
+        buildDockerDriverGatewayLaunch({
+          gatewayBin,
+          stateDir,
+          platform: "linux",
+          env: {},
+          hostGlibcVersion: "2.39",
+          requiredGlibcVersions: ["2.39"],
+          gatewayEnv: {
+            OPENSHELL_BIND_ADDRESS: "0.0.0.0",
+            OPENSHELL_DRIVERS: "docker",
+          },
+        });
+      });
+    }).toThrow(/not supported for the OpenShell 0\.0\.67 Docker-driver gateway/);
+  });
+
   it("keeps the drift gateway binary null for the containerized compatibility gateway (#4520)", () => {
     withTempBinaries(({ dir, gatewayBin, sandboxBin }) => {
       const stateDir = path.join(dir, "state");
