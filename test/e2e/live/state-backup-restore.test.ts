@@ -141,8 +141,7 @@ test.skipIf(!shouldRunLiveE2E())(
     stateValidation,
   }) => {
     assertTestOwnedSandboxName();
-    const apiKey = secrets.required("NVIDIA_API_KEY");
-    expect(apiKey.startsWith("nvapi-"), "NVIDIA_API_KEY must start with nvapi-").toBe(true);
+    const apiKey = secrets.required("NVIDIA_INFERENCE_API_KEY");
     expect(fs.existsSync(path.join(REPO_ROOT, "scripts", "backup-workspace.sh"))).toBe(true);
 
     const dockerInfo = await host.command("docker", ["info"], {

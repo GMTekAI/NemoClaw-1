@@ -10,6 +10,7 @@ import { buildAvailabilityProbeEnv } from "../fixtures/availability-env.ts";
 import { trustedProviderEndpoint } from "../fixtures/clients/provider.ts";
 import { trustedSandboxShellScript, validateSandboxName } from "../fixtures/clients/sandbox.ts";
 import { expect, test } from "../fixtures/e2e-test.ts";
+import { requireHostedInferenceConfig } from "../fixtures/hosted-inference.ts";
 import { shouldRunLiveE2E } from "../fixtures/live-project-gate.ts";
 import type { ShellProbeResult } from "../fixtures/shell-probe.ts";
 
@@ -218,10 +219,8 @@ test.skipIf(!shouldRunLiveE2E())(
   "hermes-e2e: install.sh onboards Hermes and proves health plus live inference",
   { timeout: LIVE_TIMEOUT_MS },
   async ({ artifacts, cleanup, host, provider, sandbox, secrets }) => {
-    const apiKey = secrets.required("NVIDIA_INFERENCE_API_KEY");
-    expect(apiKey.startsWith("nvapi-"), "NVIDIA_INFERENCE_API_KEY must start with nvapi-").toBe(
-      true,
-    );
+    const hosted = requireHostedInferenceConfig(secrets);
+    const apiKey = hosted.apiKey;
 
     await artifacts.writeJson("target.json", {
       id: "hermes-e2e",

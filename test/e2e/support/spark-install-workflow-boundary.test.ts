@@ -61,7 +61,7 @@ describe("spark install workflow boundary", () => {
       E2E_ARTIFACT_DIR: "tmp/spark-install",
       NEMOCLAW_CLI_BIN: "/usr/bin/nemoclaw",
       NEMOCLAW_RUN_LIVE_E2E: "0",
-      NVIDIA_API_KEY: "${{ secrets.NVIDIA_API_KEY }}",
+      NVIDIA_INFERENCE_API_KEY: "${{ secrets.NVIDIA_INFERENCE_API_KEY }}",
       NEMOCLAW_NON_INTERACTIVE: "0",
       NEMOCLAW_ACCEPT_THIRD_PARTY_SOFTWARE: "0",
       NEMOCLAW_FRESH: "0",
@@ -86,7 +86,7 @@ describe("spark install workflow boundary", () => {
 
     const install = job.steps.find((step) => step.name === "Install root dependencies");
     expect(install).toBeDefined();
-    install!.env = { NVIDIA_API_KEY: "${{ secrets.NVIDIA_API_KEY }}" };
+    install!.env = { NVIDIA_INFERENCE_API_KEY: "${{ secrets.NVIDIA_INFERENCE_API_KEY }}" };
     install!.run = "npm install";
 
     const runSpark = job.steps.find((step) => step.name === "Run Spark install live test");
@@ -120,13 +120,13 @@ describe("spark install workflow boundary", () => {
           "spark-install job must use the stable e2e-spark-install sandbox name",
           "spark-install job must use the cloud provider",
           "spark-install job must force OPENSHELL_GATEWAY=nemoclaw",
-          "spark-install job env must not include NVIDIA_API_KEY",
+          "spark-install job env must not include NVIDIA_INFERENCE_API_KEY",
           "spark-install checkout action must be pinned to a full commit SHA",
           "spark-install checkout step must set persist-credentials=false",
           "spark-install setup-node action must be pinned to a full commit SHA",
-          "spark-install step 'Install root dependencies' env must not include NVIDIA_API_KEY",
+          "spark-install step 'Install root dependencies' env must not include NVIDIA_INFERENCE_API_KEY",
           "step 'Install root dependencies' run script must include npm ci --ignore-scripts",
-          "spark-install live E2E step must receive NVIDIA_API_KEY from secrets",
+          "spark-install live E2E step must receive NVIDIA_INFERENCE_API_KEY from secrets",
           "step 'Run Spark install live test' run script must include set -euo pipefail",
           "step 'Run Spark install live test' run script must include test/e2e/live/spark-install.test.ts",
           "spark-install artifact upload name must be stable",

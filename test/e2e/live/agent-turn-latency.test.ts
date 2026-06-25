@@ -3,6 +3,7 @@
 
 import fs from "node:fs";
 
+import { containsInteger42Answer } from "../../helpers/e2e-answer-assertions.ts";
 import { buildAvailabilityProbeEnv } from "../fixtures/availability-env.ts";
 import { resultText } from "../fixtures/clients/index.ts";
 import { trustedSandboxShellScript } from "../fixtures/clients/sandbox.ts";
@@ -85,9 +86,10 @@ test.skipIf(!shouldRunLiveE2E())(
     const openclaw = await openclawTurn(sandbox, apiKey);
     expect(openclaw.result.exitCode, resultText(openclaw.result)).toBe(0);
     assertNoOpenClawTransportErrors(resultText(openclaw.result));
-    expect(extractOpenClawAgentText(openclaw.result.stdout), resultText(openclaw.result)).toMatch(
-      /(^|[^0-9])42([^0-9]|$)/,
-    );
+    expect(
+      containsInteger42Answer(extractOpenClawAgentText(openclaw.result.stdout)),
+      resultText(openclaw.result),
+    ).toBe(true);
     expect(openclaw.elapsedMs).toBeLessThanOrEqual(MAX_TURN_SECONDS * 1000);
     results.openclaw = { elapsedMs: openclaw.elapsedMs };
 
@@ -149,7 +151,9 @@ test.skipIf(!shouldRunLiveE2E())(
     expect(hermesTurn.exitCode, resultText(hermesTurn)).toBe(0);
     const hermesResponse = responseBodyAndStatus(hermesTurn.stdout);
     expect(hermesResponse.status, resultText(hermesTurn)).toBe("200");
-    expect(chatContent(hermesResponse.body)).toMatch(/(^|[^0-9])42([^0-9]|$)/);
+    expect(containsInteger42Answer(chatContent(hermesResponse.body)), resultText(hermesTurn)).toBe(
+      true,
+    );
     expect(hermesMs).toBeLessThanOrEqual(MAX_TURN_SECONDS * 1000);
     results.hermes = { elapsedMs: hermesMs };
     await artifacts.writeJson("turn-latency-results.json", results);
