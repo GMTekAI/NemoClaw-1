@@ -111,6 +111,14 @@ function textFromMessage(message: unknown): string {
   return textFromContent(record.content);
 }
 
+function normalizeVisibleTokenText(value: string): string {
+  return value.replace(/\s+/gu, "");
+}
+
+function textContainsReplyToken(text: string, replyToken: string): boolean {
+  return normalizeVisibleTokenText(text).includes(normalizeVisibleTokenText(replyToken));
+}
+
 function compactChatEvents(events: GatewayEvent[]): CompactChatEvent[] {
   return events
     .filter((event) => event.event === "chat")
@@ -150,7 +158,7 @@ function analyzeIssue2603Trace({
   const finalReplyCounts = new Map<string, number>();
   for (const [replyToken, expectedRunId] of expectedRunByReplyToken) {
     for (const event of chatEvents) {
-      if (!event.text.includes(replyToken)) continue;
+      if (!textContainsReplyToken(event.text, replyToken)) continue;
       visibleReplyCounts.set(replyToken, (visibleReplyCounts.get(replyToken) ?? 0) + 1);
       if (event.state === "final") {
         finalReplyCounts.set(replyToken, (finalReplyCounts.get(replyToken) ?? 0) + 1);
@@ -423,8 +431,16 @@ function textFromMessage(message) {
   return content.map((part) => part && typeof part === "object" && typeof part.text === "string" ? part.text : "").filter(Boolean).join("\n");
 }
 
+function normalizeVisibleTokenText(value) {
+  return String(value || "").replace(/\s+/g, "");
+}
+
+function textContainsReplyToken(text, replyToken) {
+  return normalizeVisibleTokenText(text).includes(normalizeVisibleTokenText(replyToken));
+}
+
 function sawAllReplies(replyTokens) {
-  return replyTokens.every((token) => events.some((event) => event.event === "chat" && textFromMessage(event.payload?.message).includes(token)));
+  return replyTokens.every((token) => events.some((event) => event.event === "chat" && textContainsReplyToken(textFromMessage(event.payload?.message), token)));
 }
 
 ws.on("message", (data) => {
@@ -646,6 +662,45 @@ describe("OpenClaw TUI chat correlation regression (#2603)", () => {
             {
               type: "text",
               text: "B2603: Second task. Reply exactly B2603-REPLY and nothing else.",
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(analysis.missingReplies).toEqual([]);
+    expect(analysis.duplicateReplies).toEqual([]);
+    expect(analysis.uncorrelatedReplies).toEqual([]);
+  });
+
+  it("treats hosted-model line wrapping inside reply tokens as the same visible reply", () => {
+    const analysis = analyzeIssue2603Trace({
+      sentRuns: [
+        {
+          promptToken: "A2603",
+          replyToken: "A2603-REPLY",
+          runId: "run-a",
+          message:
+            "A2603: First task. Wait 8 seconds, then reply exactly A2603-REPLY and nothing else.",
+        },
+      ],
+      events: [
+        {
+          event: "chat",
+          payload: {
+            runId: "run-a",
+            state: "final",
+            message: { role: "assistant", content: [{ type: "text", text: "A2\n603-REPLY" }] },
+          },
+        },
+      ],
+      historyMessages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "A2603: First task. Wait 8 seconds, then reply exactly A2603-REPLY and nothing else.",
             },
           ],
         },
