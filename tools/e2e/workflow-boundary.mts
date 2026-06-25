@@ -388,6 +388,16 @@ function requireUploadPathContains(
   }
 }
 
+function requireUploadPathDoesNotContain(
+  errors: string[],
+  uploadPath: string,
+  forbidden: string,
+): void {
+  if (uploadPath.includes(forbidden)) {
+    errors.push(`artifact upload path must not include ${forbidden}`);
+  }
+}
+
 function requireEnvDoesNotExposeSecret(
   errors: string[],
   owner: string,
@@ -1518,7 +1528,7 @@ function validateShieldsConfigJob(
     uploadPath,
     "e2e-artifacts/live/shields-config/",
   );
-  requireUploadPathContains(
+  requireUploadPathDoesNotContain(
     errors,
     uploadPath,
     "/tmp/nemoclaw-e2e-shields-install.log",

@@ -34,7 +34,6 @@ const STATE_FILE = (sandboxName: string) =>
 const TIMER_FILE = (sandboxName: string) =>
   path.join(os.homedir(), ".nemoclaw", "state", `shields-timer-${sandboxName}.json`);
 const SANDBOX_NAME = process.env.NEMOCLAW_SANDBOX_NAME ?? "e2e-shields";
-const INSTALL_LOG = "/tmp/nemoclaw-e2e-shields-install.log";
 const RUN_SHIELDS_TEST = shouldRunLiveE2E() ? test : test.skip;
 
 const TEST_TIMEOUT_MS = 45 * 60_000;
@@ -255,7 +254,7 @@ RUN_SHIELDS_TEST(
 
     const install = await installedShellCommand(
       host,
-      `cd ${JSON.stringify(REPO_ROOT)} && bash install.sh --non-interactive > ${INSTALL_LOG} 2>&1`,
+      `cd ${JSON.stringify(REPO_ROOT)} && bash install.sh --non-interactive`,
       {
         artifactName: "phase-1-install-shields-config",
         env: commandEnv({
@@ -267,7 +266,6 @@ RUN_SHIELDS_TEST(
       },
     );
     expect(install.exitCode, resultText(install)).toBe(0);
-    expect(fs.existsSync(INSTALL_LOG), `${INSTALL_LOG} should be written`).toBe(true);
 
     const cliVersion = await installedShellCommand(
       host,

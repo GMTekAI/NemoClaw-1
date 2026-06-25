@@ -1,0 +1,45 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+import fs from "node:fs";
+import path from "node:path";
+
+import { describe, expect, it } from "vitest";
+
+const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
+const E2E_SUITE_DIR = path.join(REPO_ROOT, "test", "e2e");
+const WORKFLOWS_DIR = path.join(REPO_ROOT, ".github", "workflows");
+const FORBIDDEN_WORKFLOW_REFERENCES = [
+  ".github/workflows/e2e-script.yaml",
+  ".github/actions/run-e2e-script",
+  ".github/workflows/nightly-e2e.yaml",
+  "nightly-e2e.yaml",
+];
+
+function workflowFiles(): string[] {
+  return fs
+    .readdirSync(WORKFLOWS_DIR)
+    .filter((name) => /\.ya?ml$/u.test(name))
+    .map((name) => path.join(WORKFLOWS_DIR, name));
+}
+
+describe("retired shell E2E entrypoints", () => {
+  it("keeps top-level shell E2E entrypoints out of test/e2e", () => {
+    const topLevelScripts = fs
+      .readdirSync(E2E_SUITE_DIR)
+      .filter((name) => /^test-.*\.sh$/u.test(name));
+
+    expect(topLevelScripts).toEqual([]);
+  });
+
+  it("keeps workflows from referencing retired shell lanes", () => {
+    const workflowText = workflowFiles()
+      .map((file) => fs.readFileSync(file, "utf8"))
+      .join("\n");
+
+    for (const reference of FORBIDDEN_WORKFLOW_REFERENCES) {
+      expect(workflowText).not.toContain(reference);
+    }
+    expect(workflowText).not.toMatch(/test\/e2e\/test-[A-Za-z0-9_.-]+\.sh/u);
+  });
+});

@@ -540,7 +540,6 @@ function isE2eTargetRelevantFile(file: string): boolean {
   return (
     file === E2E_WORKFLOW_PATH ||
     file.startsWith("test/e2e/") ||
-    file.startsWith("tools/e2e") ||
     file.startsWith("tools/e2e")
   );
 }

@@ -1998,7 +1998,6 @@ jobs:
           name: e2e-shields-config
           path: |
             e2e-artifacts/live/shields-config/
-            /tmp/nemoclaw-e2e-shields-install.log
           include-hidden-files: false
           if-no-files-found: ignore
           retention-days: 14
