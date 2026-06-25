@@ -11,6 +11,9 @@
 #   - verifies the trajectory records safe exec tool execution without a
 #     combined shell command. Public Kimi output is intentionally accepted as
 #     non-canonical because the hosted model can choose fewer safe tool calls.
+#     Tighten live mode back to the strict hostname/date/uptime command-set
+#     checks once the hosted Kimi route/runtime provides stable split tool-call
+#     trajectories, or when the #2620/#3046 compatibility contract is redefined.
 #
 # Hermetic fallback:
 #   - set NEMOCLAW_KIMI_USE_MOCK=1 to use the local OpenAI-compatible mock
@@ -675,6 +678,8 @@ artifact_data = artifacts[-1].get("data", {}) if artifacts else {}
 completed_data = completed[-1].get("data", {}) if completed else {}
 metas = artifact_data.get("toolMetas", [])
 meta_commands = [meta.get("meta") for meta in metas]
+meta_commands_str = [command for command in meta_commands if isinstance(command, str)]
+invalid_meta_commands = [command for command in meta_commands if not isinstance(command, str)]
 expected_round = ["hostname", "date", "uptime"]
 assistant_tool_messages = [
     item.get("message", {})
@@ -704,8 +709,10 @@ if any(meta.get("toolName") != "exec" for meta in metas):
 if not source_commands:
     errors.append("source assistant did not record any exec commands")
 if strict_mock:
-    if sorted(set(meta_commands)) != ["date", "hostname", "uptime"]:
-        errors.append("toolMeta command set is %r" % sorted(meta_commands))
+    if invalid_meta_commands:
+        errors.append("toolMeta meta values are not all strings: %r" % invalid_meta_commands)
+    elif sorted(set(meta_commands_str)) != ["date", "hostname", "uptime"]:
+        errors.append("toolMeta command set is %r" % sorted(meta_commands_str))
     if len(source_commands) < len(expected_round) or len(source_commands) % len(expected_round) != 0:
         errors.append("source assistant command order is %r" % source_commands)
     else:
@@ -754,7 +761,8 @@ summary = {
     "strictMockExpectations": strict_mock,
     "toolMetasCount": len(metas),
     "toolMetaToolNames": [meta.get("toolName") for meta in metas],
-    "toolMetaCommandSet": sorted(meta.get("meta") for meta in metas),
+    "toolMetaCommandSet": sorted(set(meta_commands_str)),
+    "toolMetaInvalidValues": invalid_meta_commands,
     "sourceAssistantCommands": source_commands,
     "sourceHasCombinedSemicolonCommand": any(isinstance(command, str) and ";" in command for command in source_commands),
     "promptErrorSource": artifact_data.get("promptErrorSource"),
