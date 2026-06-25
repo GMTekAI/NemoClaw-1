@@ -36,7 +36,7 @@ it("rejects report-to-pr PR number validation drift", () => {
   );
   expect(reportStep?.with?.script).toEqual(expect.any(String));
   reportStep!.with!.script = String(reportStep!.with!.script)
-    .replace("/^[1-9][0-9]*$/.test(prNumberInput)", "prNumberInput.length > 0")
+    .replace(/\/\^\[1-9\]\[0-9\]\*\$\/\.test\(prNumberInput\)/, "prNumberInput.length > 0")
     .replace("Number(prNumberInput)", "Number.parseInt(prNumberInput, 10)")
     .replace("github.rest.pulls.get", "github.rest.issues.get");
   fs.writeFileSync(workflowPath, YAML.stringify(workflow));
