@@ -643,7 +643,7 @@ jobs:
     uses: ./.github/workflows/e2e-script.yaml
     with:
       ref: ${{ inputs.target_ref || github.ref }}
-      script: test/e2e/test-cli-scope-upgrade-approval.sh
+      script: test/e2e/test-issue-4462-scope-upgrade-approval.sh
       timeout_minutes: 60
       artifact_name: "cli-scope-upgrade-approval-logs"
       artifact_path: |
@@ -667,7 +667,7 @@ jobs:
     uses: ./.github/workflows/e2e-script.yaml
     with:
       ref: ${{ inputs.target_ref || github.ref }}
-      script: test/e2e/test-cli-scope-upgrade-approval.sh
+      script: test/e2e/test-issue-4462-scope-upgrade-approval.sh
       timeout_minutes: 60
       artifact_name: "cli-scope-upgrade-legacy-repro-logs"
       artifact_path: |

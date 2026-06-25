@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-/** Live Vitest replacement for test/e2e/test-cli-scope-upgrade-approval.sh. */
+/** Live Vitest replacement for test/e2e/test-issue-4462-scope-upgrade-approval.sh. */
 
 import os from "node:os";
 import path from "node:path";
@@ -232,7 +232,7 @@ liveTest(
     const apiKey = secrets.required("NVIDIA_INFERENCE_API_KEY");
     await artifacts.writeJson("scenario.json", {
       id: "issue-4462-scope-upgrade-approval",
-      legacySource: "test/e2e/test-cli-scope-upgrade-approval.sh",
+      legacySource: "test/e2e/test-issue-4462-scope-upgrade-approval.sh",
       sandboxName: SANDBOX_NAME,
       contracts: [
         "install.sh creates a real OpenClaw sandbox",
