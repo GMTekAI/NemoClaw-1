@@ -141,7 +141,7 @@ export const VLLM_MODELS: readonly VllmModelDef[] = [
       "--max-cudagraph-capture-size",
       "128",
       "--speculative-config",
-      `'{"method":"mtp","num_speculative_tokens":3,"rejection_sample_method":"synthetic"}'`,
+      `'{"method":"mtp","num_speculative_tokens":3}'`,
       "--max-num-batched-tokens",
       "8192",
       "--max-num-seqs",
