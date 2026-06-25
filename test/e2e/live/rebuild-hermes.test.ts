@@ -302,6 +302,13 @@ function seedRegistryAndSession(): SessionArtifactSummary {
     agentVersion: OLD_HERMES_REGISTRY_VERSION,
     messaging: { schemaVersion: 1, plan: messagingPlan },
   };
+  expect(
+    Object.prototype.hasOwnProperty.call(
+      registry.sandboxes[SANDBOX_NAME],
+      "providerCredentialHashes",
+    ),
+    "legacy providerCredentialHashes must stay out of the curated rebuild registry; credential fingerprints live on messaging plan bindings",
+  ).toBe(false);
   registry.defaultSandbox = SANDBOX_NAME;
   writeJsonFile(REGISTRY_FILE, registry);
 
