@@ -424,6 +424,34 @@ raise SystemExit(1)
 '
 }
 
+select_cli_paired_with_write_without_admin() {
+  python3 -c '
+import json
+import sys
+
+doc = json.load(sys.stdin)
+paired = [p for p in doc.get("paired") or [] if isinstance(p, dict)]
+
+def norm(value):
+    return str(value or "").strip()
+
+def is_cli(entry):
+    return norm(entry.get("clientMode")).lower() == "cli" or "cli" in norm(entry.get("clientId")).lower()
+
+def scopes(entry):
+    return {norm(scope) for scope in (entry.get("approvedScopes") or entry.get("scopes") or []) if norm(scope)}
+
+for device in sorted(paired, key=lambda item: item.get("approvedAtMs") or 0, reverse=True):
+    if not is_cli(device):
+        continue
+    approved = scopes(device)
+    if "operator.write" in approved and "operator.admin" not in approved:
+        print(norm(device.get("deviceId")) or "cli-device")
+        raise SystemExit(0)
+raise SystemExit(1)
+'
+}
+
 select_cli_paired_with_admin() {
   python3 -c '
 import json
@@ -447,6 +475,77 @@ for device in sorted(paired, key=lambda item: item.get("approvedAtMs") or 0, rev
         raise SystemExit(0)
 raise SystemExit(1)
 '
+}
+
+approve_gateway_request() {
+  local request_id="$1"
+  local label="$2"
+  local output rc approve_json approved_id before_url before_port before_token before_insecure_private_ws after_url after_port after_token after_insecure_private_ws
+  output=$(sandbox_exec_sh_script 90 '
+		set -u
+		request_id="$1"
+		if [ ! -r /tmp/nemoclaw-proxy-env.sh ]; then
+		  echo "missing /tmp/nemoclaw-proxy-env.sh" >&2
+		  exit 2
+		fi
+		# shellcheck source=/dev/null
+		. /tmp/nemoclaw-proxy-env.sh
+		printf "__URL_BEFORE__=%s\n" "${OPENCLAW_GATEWAY_URL-unset}"
+		printf "__PORT_BEFORE__=%s\n" "${OPENCLAW_GATEWAY_PORT-unset}"
+		printf "__TOKEN_BEFORE__=%s\n" "$([ "${OPENCLAW_GATEWAY_TOKEN+x}" = x ] && printf set || printf unset)"
+		printf "__INSECURE_PRIVATE_WS_BEFORE__=%s\n" "${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS-unset}"
+		set +e
+		approve_output="$(command openclaw devices approve "$request_id" --json 2>&1)"
+		approve_rc=$?
+		set -e
+		printf "__APPROVE_RC__=%s\n" "$approve_rc"
+		printf "__APPROVE_OUTPUT_BEGIN__\n%s\n__APPROVE_OUTPUT_END__\n" "$approve_output"
+		printf "__URL_AFTER__=%s\n" "${OPENCLAW_GATEWAY_URL-unset}"
+		printf "__PORT_AFTER__=%s\n" "${OPENCLAW_GATEWAY_PORT-unset}"
+		printf "__TOKEN_AFTER__=%s\n" "$([ "${OPENCLAW_GATEWAY_TOKEN+x}" = x ] && printf set || printf unset)"
+		printf "__INSECURE_PRIVATE_WS_AFTER__=%s\n" "${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS-unset}"
+		exit "$approve_rc"
+		' "$request_id" 2>&1)
+  rc=$?
+  {
+    printf '=== gateway approve %s request=%s rc=%s ===\n' "$label" "$request_id" "$rc"
+    printf '%s\n' "$output"
+  } >>"$APPROVAL_LOG"
+  if [ "$rc" -ne 0 ]; then
+    fail "${label}: gateway-backed openclaw devices approve failed for ${request_id}: ${output:0:500}"
+    return 1
+  fi
+  before_url=$(sed -n 's/^__URL_BEFORE__=//p' <<<"$output" | tail -1)
+  before_port=$(sed -n 's/^__PORT_BEFORE__=//p' <<<"$output" | tail -1)
+  before_token=$(sed -n 's/^__TOKEN_BEFORE__=//p' <<<"$output" | tail -1)
+  before_insecure_private_ws=$(sed -n 's/^__INSECURE_PRIVATE_WS_BEFORE__=//p' <<<"$output" | tail -1)
+  after_url=$(sed -n 's/^__URL_AFTER__=//p' <<<"$output" | tail -1)
+  after_port=$(sed -n 's/^__PORT_AFTER__=//p' <<<"$output" | tail -1)
+  after_token=$(sed -n 's/^__TOKEN_AFTER__=//p' <<<"$output" | tail -1)
+  after_insecure_private_ws=$(sed -n 's/^__INSECURE_PRIVATE_WS_AFTER__=//p' <<<"$output" | tail -1)
+  if ! gateway_url_is_allowed "$before_url" "$before_insecure_private_ws"; then
+    fail "${label}: gateway approve did not expose an allowed OPENCLAW_GATEWAY_URL (url=${before_url:-empty} insecure_private_ws=${before_insecure_private_ws:-empty})"
+    return 1
+  fi
+  if [ -z "$before_port" ] || [ "$before_port" = "unset" ] || [ "$before_token" != "set" ]; then
+    fail "${label}: gateway approve did not expose OPENCLAW_GATEWAY_PORT/TOKEN (port=${before_port:-empty} token_state=${before_token:-empty})"
+    return 1
+  fi
+  if [ "$after_url" != "$before_url" ] || [ "$after_port" != "$before_port" ] || [ "$after_token" != "$before_token" ] || [ "$after_insecure_private_ws" != "$before_insecure_private_ws" ]; then
+    fail "${label}: gateway approve mutated caller gateway env"
+    return 1
+  fi
+  approve_json=$(sed -n '/^__APPROVE_OUTPUT_BEGIN__$/,/^__APPROVE_OUTPUT_END__$/p' <<<"$output" | sed '1d;$d' | extract_json_doc 2>/dev/null) || approve_json=""
+  if [ -z "$approve_json" ]; then
+    fail "${label}: gateway approve output did not contain JSON: ${output:0:500}"
+    return 1
+  fi
+  approved_id=$(printf '%s' "$approve_json" | json_field requestId)
+  if [ "$approved_id" != "$request_id" ]; then
+    fail "${label}: gateway approve returned requestId=${approved_id:-empty}, expected ${request_id}"
+    return 1
+  fi
+  pass "${label}: gateway-backed openclaw devices approve ${request_id} --json succeeded"
 }
 
 approve_request() {
@@ -919,8 +1018,8 @@ info "$summary"
 
 initial_request_id=$(printf '%s' "$state" | select_cli_request new 2>/dev/null) || initial_request_id=""
 if [ -n "$initial_request_id" ]; then
-  pass "pending low-scope CLI pairing request exists (${initial_request_id})"
-  approve_request "$initial_request_id" "initial CLI pairing" || exit 1
+  pass "pending CLI pairing request exists (${initial_request_id})"
+  approve_gateway_request "$initial_request_id" "initial CLI pairing" || exit 1
 else
   paired_without_write=$(printf '%s' "$state" | select_cli_paired_without_write 2>/dev/null) || paired_without_write=""
   if [ -n "$paired_without_write" ]; then
@@ -950,8 +1049,18 @@ else
   if [ -n "$paired_without_write" ]; then
     pass "CLI device is paired with operator.pairing but not operator.write"
   else
-    fail "Initial approval did not leave a low-scope CLI device: $(printf '%s' "$state" | summarize_device_state)"
-    exit 1
+    paired_with_agent_scopes=$(printf '%s' "$state" | select_cli_paired_with_agent_scopes 2>/dev/null) || paired_with_agent_scopes=""
+    paired_with_write=$(printf '%s' "$state" | select_cli_paired_with_write_without_admin 2>/dev/null) || paired_with_write=""
+    paired_with_admin=$(printf '%s' "$state" | select_cli_paired_with_admin 2>/dev/null) || paired_with_admin=""
+    if [ -n "$paired_with_agent_scopes" ] && [ -z "$paired_with_admin" ]; then
+      pass "CLI device already has operator.read/operator.write without operator.admin (${paired_with_agent_scopes})"
+      SCOPE_UPGRADE_ALREADY_SATISFIED=1
+    elif [ -n "$paired_with_write" ]; then
+      pass "CLI device is paired with operator.write and without operator.admin (${paired_with_write})"
+    else
+      fail "Initial approval did not leave an acceptable CLI device state: $(printf '%s' "$state" | summarize_device_state)"
+      exit 1
+    fi
   fi
 fi
 
