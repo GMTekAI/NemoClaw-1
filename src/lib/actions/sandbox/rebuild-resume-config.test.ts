@@ -38,7 +38,7 @@ describe("isLocalInferenceProvider", () => {
 
 describe("getRebuildCredentialEnvFromRegistry", () => {
   it("returns the canonical credential env for a known remote provider", () => {
-    expect(getRebuildCredentialEnvFromRegistry("nvidia-prod")).toBe("NVIDIA_INFERENCE_API_KEY");
+    expect(getRebuildCredentialEnvFromRegistry("nvidia-prod")).toBe("NVIDIA_API_KEY");
   });
   it("returns null for local and unset providers", () => {
     expect(getRebuildCredentialEnvFromRegistry("ollama-local")).toBeNull();
@@ -84,7 +84,7 @@ describe("prepareRebuildResumeConfig", () => {
     expect(config).toMatchObject({
       provider: "nvidia-prod",
       model: "m",
-      credentialEnv: "NVIDIA_INFERENCE_API_KEY",
+      credentialEnv: "NVIDIA_API_KEY",
       pinEndpoint: false,
     });
   });
