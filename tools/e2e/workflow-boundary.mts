@@ -7911,6 +7911,37 @@ export function validateE2eWorkflowBoundary(
         "step 'Post E2E target results to PR' run script must include process.env.JOB_TARGETS",
       );
     }
+    if (reportScript.includes("Number.parseInt(prNumberInput")) {
+      errors.push(
+        "step 'Post E2E target results to PR' run script must not parse JOB_PR_NUMBER with Number.parseInt",
+      );
+    }
+    if (!reportScript.includes("/^[1-9][0-9]*$/.test(prNumberInput)")) {
+      errors.push(
+        "step 'Post E2E target results to PR' run script must validate JOB_PR_NUMBER with an all-digits regex before parsing",
+      );
+    }
+    if (!reportScript.includes("Number.isSafeInteger(prNumber)")) {
+      errors.push(
+        "step 'Post E2E target results to PR' run script must reject unsafe JOB_PR_NUMBER values before commenting",
+      );
+    }
+    if (
+      !reportScript.includes("github.rest.pulls.get") ||
+      !reportScript.includes("pull_number: prNumber")
+    ) {
+      errors.push(
+        "step 'Post E2E target results to PR' run script must verify JOB_PR_NUMBER identifies a pull request before commenting",
+      );
+    }
+    if (
+      !reportScript.includes("github.rest.pulls.list") ||
+      !reportScript.includes("head: `${context.repo.owner}:${workflowBranch}`")
+    ) {
+      errors.push(
+        "step 'Post E2E target results to PR' run script must fall back to branch PR lookup when JOB_PR_NUMBER is empty",
+      );
+    }
     if (!reportScript.includes("selectorValidationPassed")) {
       errors.push(
         "step 'Post E2E target results to PR' run script must check selector validation before echoing selectors",

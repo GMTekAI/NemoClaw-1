@@ -5506,8 +5506,35 @@ jobs:
             const targetsRejected = rawRequestedTargets && !selectorValidationPassed;
             const jobsRejected = rawRequestedJobs && !selectorValidationPassed;
 
-            let prNumber = prNumberInput ? Number.parseInt(prNumberInput, 10) : undefined;
-            if (!prNumber) {
+            let prNumber;
+            if (prNumberInput) {
+              if (!/^[1-9][0-9]*$/.test(prNumberInput)) {
+                core.setFailed(`Invalid pr_number input: ${prNumberInput}. Use a positive pull request number.`);
+                return;
+              }
+              prNumber = Number(prNumberInput);
+              if (!Number.isSafeInteger(prNumber)) {
+                core.setFailed(`Invalid pr_number input: ${prNumberInput}. Use a safe positive integer.`);
+                return;
+              }
+              try {
+                const { data: suppliedPr } = await github.rest.pulls.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: prNumber,
+                });
+                if (suppliedPr.state !== 'open') {
+                  core.setFailed(`PR #${prNumber} is ${suppliedPr.state}; E2E reports only comment on open PRs.`);
+                  return;
+                }
+              } catch (error) {
+                if (error.status === 404) {
+                  core.setFailed(`pr_number ${prNumber} does not identify a pull request in ${context.repo.owner}/${context.repo.repo}.`);
+                  return;
+                }
+                throw error;
+              }
+            } else {
               const { data: prs } = await github.rest.pulls.list({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
