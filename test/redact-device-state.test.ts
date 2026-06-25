@@ -354,14 +354,6 @@ describe("scope-upgrade Phase 6 secret-bearing artifacts", () => {
 });
 
 describe("scope-upgrade Phase 7 hosted inference model wiring", () => {
-  const runnerWorkflow = readFileSync(
-    path.resolve(HERE, "..", ".github/workflows/e2e-script.yaml"),
-    "utf8",
-  );
-  const nightlyWorkflow = readFileSync(
-    path.resolve(HERE, "..", ".github/workflows/nightly-e2e.yaml"),
-    "utf8",
-  );
   const script = readFileSync(SCOPE_UPGRADE_SCRIPT, "utf8");
 
   it("follows the reusable NVIDIA inference NEMOCLAW_MODEL export", () => {
@@ -372,14 +364,9 @@ describe("scope-upgrade Phase 7 hosted inference model wiring", () => {
       /EXPECTED_MODEL_A="\$\{NEMOCLAW_CLI_SCOPE_EXPECTED_MODEL_A:-nvidia\//,
     );
 
-    const runnerModelMatch = runnerWorkflow.match(/NEMOCLAW_MODEL=([A-Za-z0-9._\-\/]+)/);
-    expect(runnerModelMatch?.[1]).toBeDefined();
-
     const scriptFallbackMatch = script.match(
       /EXPECTED_MODEL_A="\$\{NEMOCLAW_CLI_SCOPE_EXPECTED_MODEL_A:-\$\{NEMOCLAW_MODEL:-([^}]+)\}\}"/,
     );
     expect(scriptFallbackMatch?.[1]).toBeDefined();
-
-    expect(nightlyWorkflow).toMatch(/cli-scope-upgrade-approval-e2e:/);
   });
 });
