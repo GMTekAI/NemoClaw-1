@@ -11,22 +11,41 @@ import { describe, expect, it } from "vitest";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REDACTOR = path.resolve(HERE, "e2e/lib/redact-device-state.py");
+const TEXT_REDACTOR = path.resolve(HERE, "e2e/lib/redact-text.py");
 const SCOPE_UPGRADE_SCRIPT = path.resolve(HERE, "e2e/test-issue-4462-scope-upgrade-approval.sh");
-const E2E_LIB_DIR = path.resolve(HERE, "e2e");
 const REDACTED = "[REDACTED]";
+
+function requireNonNegative(value: number, message: string): number {
+  return value >= 0
+    ? value
+    : (() => {
+        throw new Error(message);
+      })();
+}
 
 function extractShellFunction(scriptPath: string, name: string): string {
   const body = readFileSync(scriptPath, "utf8");
   const startMarker = `${name}() {`;
-  const start = body.indexOf(startMarker);
-  if (start < 0) throw new Error(`function ${name} not found in ${scriptPath}`);
+  const start = requireNonNegative(
+    body.indexOf(startMarker),
+    `function ${name} not found in ${scriptPath}`,
+  );
   const lines = body.slice(start).split("\n");
-  const collected: string[] = [];
-  for (const line of lines) {
-    collected.push(line);
-    if (collected.length > 1 && line === "}") break;
-  }
-  return collected.join("\n");
+  const endIndex = requireNonNegative(
+    lines.findIndex((line, index) => index > 0 && line === "}"),
+    `function ${name} missing closing brace in ${scriptPath}`,
+  );
+  return lines.slice(0, endIndex + 1).join("\n");
+}
+
+function materializeRedactor(redactorScriptOverride: string | undefined): string {
+  const overrideRoot = mkdtempSync(path.join(tmpdir(), "scope-upgrade-shell-"));
+  mkdirSync(path.join(overrideRoot, "lib"), { recursive: true });
+  const redactorSource = redactorScriptOverride ?? readFileSync(REDACTOR, "utf8");
+  writeFileSync(path.join(overrideRoot, "lib", "redact-device-state.py"), redactorSource, {
+    mode: 0o755,
+  });
+  return overrideRoot;
 }
 
 function runScopeUpgradeDeviceStateWrapper(stubs: {
@@ -35,18 +54,7 @@ function runScopeUpgradeDeviceStateWrapper(stubs: {
   redactorScriptOverride?: string;
 }): { rc: number; stdout: string; stderr: string } {
   const functionBody = extractShellFunction(SCOPE_UPGRADE_SCRIPT, "device_state_json");
-  let e2eDir = E2E_LIB_DIR;
-  let overrideRoot: string | null = null;
-  if (stubs.redactorScriptOverride) {
-    overrideRoot = mkdtempSync(path.join(tmpdir(), "scope-upgrade-shell-"));
-    mkdirSync(path.join(overrideRoot, "lib"), { recursive: true });
-    writeFileSync(
-      path.join(overrideRoot, "lib", "redact-device-state.py"),
-      stubs.redactorScriptOverride,
-      { mode: 0o755 },
-    );
-    e2eDir = overrideRoot;
-  }
+  const e2eDir = materializeRedactor(stubs.redactorScriptOverride);
   const harness = `
 set -u
 sandbox_exec_sh_script() {
@@ -74,7 +82,7 @@ device_state_json
       stderr: result.stderr ?? "",
     };
   } finally {
-    if (overrideRoot) rmSync(overrideRoot, { recursive: true, force: true });
+    rmSync(e2eDir, { recursive: true, force: true });
   }
 }
 
@@ -259,5 +267,119 @@ describe("scope-upgrade device_state_json shell wrapper", () => {
     expect(result.stdout).toContain(REDACTED);
     expect(result.stdout).not.toContain("[DEVICE_STATE_REDACTION_FAILED");
     expect(result.stderr).not.toContain(TOKEN_LEAK);
+  });
+});
+
+function runTextRedactor(input: string): { rc: number; stdout: string; stderr: string } {
+  const result = spawnSync("python3", [TEXT_REDACTOR], {
+    input,
+    encoding: "utf-8",
+    timeout: 20_000,
+  });
+  return {
+    rc: result.status ?? -1,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+  };
+}
+
+describe("scope-upgrade diagnostic text redactor", () => {
+  it("scrubs token-shaped substrings from raw gateway and auto-pair log excerpts", () => {
+    const input = [
+      "Authorization: Bearer nvapi-abc.def_ghi-jkl-mnopqrstu",
+      "Cookie: session=eyJabcdefg.payload.signature123",
+      "github-token=ghp_aaaaaaaaaaaaaaaaaa11",
+      "X-API-Key: sk-projXYZ1234567890abcd",
+      "request: token=github_pat_abcdefghijklmnopqrstu",
+      "huggingface key hf_aaaaaaaaaaaaaaaaaa logged",
+      "aws AKIAABCDEFGHIJKLMNOP",
+      "slack xoxb-1111-2222-aaaaa",
+      "plain gateway connect: ok",
+      "",
+    ].join("\n");
+
+    const result = runTextRedactor(input);
+    expect(result.rc).toBe(0);
+    expect(result.stdout).not.toContain("nvapi-abc.def_ghi");
+    expect(result.stdout).not.toContain("eyJabcdefg.payload");
+    expect(result.stdout).not.toContain("ghp_aaaaa");
+    expect(result.stdout).not.toContain("sk-projXYZ");
+    expect(result.stdout).not.toContain("github_pat_abcdefg");
+    expect(result.stdout).not.toContain("hf_aaaaa");
+    expect(result.stdout).not.toContain("AKIAABCDEFG");
+    expect(result.stdout).not.toContain("xoxb-1111");
+    expect(result.stdout).toContain("plain gateway connect: ok");
+    expect(result.stdout).toContain(REDACTED);
+  });
+
+  it("preserves structural prefixes while substituting only the secret value", () => {
+    const result = runTextRedactor("Authorization: Bearer raw-bearer-token\n");
+    expect(result.rc).toBe(0);
+    expect(result.stdout).toContain("Authorization:");
+    expect(result.stdout).toContain("Bearer ");
+    expect(result.stdout).not.toContain("raw-bearer-token");
+    expect(result.stdout).toContain(REDACTED);
+  });
+
+  it("passes through input free of token-shaped substrings unchanged", () => {
+    const input = "ls -la /tmp/auto-pair.log\nslow-mode keepalive transition observed\n";
+    const result = runTextRedactor(input);
+    expect(result.rc).toBe(0);
+    expect(result.stdout).toBe(input);
+  });
+});
+
+describe("scope-upgrade Phase 6 secret-bearing artifacts", () => {
+  it("pipes auto-pair and gateway diagnostics through the text redactor before appending to STATE_LOG", () => {
+    const script = readFileSync(SCOPE_UPGRADE_SCRIPT, "utf8");
+
+    expect(script).toContain('python3 "${E2E_DIR}/lib/redact-text.py"');
+    expect(script).toContain(
+      "auto_pair_diag_redacted=$(printf '%s' \"$auto_pair_diag\" | redact_text_for_state_log)",
+    );
+    expect(script).toContain(
+      "auto_pair_snapshot_redacted=$(printf '%s' \"$auto_pair_log_snapshot\" | redact_text_for_state_log)",
+    );
+    expect(script).toContain(
+      'printf \'=== auto-pair diagnostic ===\\n%s\\n\' "$auto_pair_diag_redacted" >>"$STATE_LOG"',
+    );
+    expect(script).toContain(
+      'printf \'=== /tmp/auto-pair.log snapshot (waited %ss) ===\\n%s\\n\' "$((SECONDS - slow_mode_start))" "$auto_pair_snapshot_redacted" >>"$STATE_LOG"',
+    );
+    expect(script).toContain("[STATE_LOG_REDACTION_FAILED stage=text rc=");
+    expect(script).not.toMatch(
+      /printf '=== auto-pair diagnostic ===[^']+'\s+"\$auto_pair_diag"\s+>>"\$STATE_LOG"/,
+    );
+  });
+});
+
+describe("scope-upgrade Phase 7 hosted inference model wiring", () => {
+  const runnerWorkflow = readFileSync(
+    path.resolve(HERE, "..", ".github/workflows/e2e-script.yaml"),
+    "utf8",
+  );
+  const nightlyWorkflow = readFileSync(
+    path.resolve(HERE, "..", ".github/workflows/nightly-e2e.yaml"),
+    "utf8",
+  );
+  const script = readFileSync(SCOPE_UPGRADE_SCRIPT, "utf8");
+
+  it("follows the reusable NVIDIA inference NEMOCLAW_MODEL export", () => {
+    expect(script).toContain(
+      'EXPECTED_MODEL_A="${NEMOCLAW_CLI_SCOPE_EXPECTED_MODEL_A:-${NEMOCLAW_MODEL:-',
+    );
+    expect(script).not.toMatch(
+      /EXPECTED_MODEL_A="\$\{NEMOCLAW_CLI_SCOPE_EXPECTED_MODEL_A:-nvidia\//,
+    );
+
+    const runnerModelMatch = runnerWorkflow.match(/NEMOCLAW_MODEL=([A-Za-z0-9._\-\/]+)/);
+    expect(runnerModelMatch?.[1]).toBeDefined();
+
+    const scriptFallbackMatch = script.match(
+      /EXPECTED_MODEL_A="\$\{NEMOCLAW_CLI_SCOPE_EXPECTED_MODEL_A:-\$\{NEMOCLAW_MODEL:-([^}]+)\}\}"/,
+    );
+    expect(scriptFallbackMatch?.[1]).toBeDefined();
+
+    expect(nightlyWorkflow).toMatch(/cli-scope-upgrade-approval-e2e:/);
   });
 });

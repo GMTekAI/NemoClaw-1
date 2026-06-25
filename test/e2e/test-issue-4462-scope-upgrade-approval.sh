@@ -1184,8 +1184,21 @@ pgrep -af python3 2>&1 || true
 echo "--- last 80 lines /tmp/gateway.log ---"
 tail -n 80 /tmp/gateway.log 2>&1 || true
 ' 2>&1)
-printf '=== auto-pair diagnostic ===\n%s\n' "$auto_pair_diag" >>"$STATE_LOG"
-printf '=== /tmp/auto-pair.log snapshot (waited %ss) ===\n%s\n' "$((SECONDS - slow_mode_start))" "$auto_pair_log_snapshot" >>"$STATE_LOG"
+redact_text_for_state_log() {
+  python3 "${E2E_DIR}/lib/redact-text.py"
+}
+auto_pair_diag_redacted=$(printf '%s' "$auto_pair_diag" | redact_text_for_state_log)
+auto_pair_diag_redact_rc=$?
+if [ "$auto_pair_diag_redact_rc" -ne 0 ]; then
+  auto_pair_diag_redacted="[STATE_LOG_REDACTION_FAILED stage=text rc=${auto_pair_diag_redact_rc}]"
+fi
+auto_pair_snapshot_redacted=$(printf '%s' "$auto_pair_log_snapshot" | redact_text_for_state_log)
+auto_pair_snapshot_redact_rc=$?
+if [ "$auto_pair_snapshot_redact_rc" -ne 0 ]; then
+  auto_pair_snapshot_redacted="[STATE_LOG_REDACTION_FAILED stage=text rc=${auto_pair_snapshot_redact_rc}]"
+fi
+printf '=== auto-pair diagnostic ===\n%s\n' "$auto_pair_diag_redacted" >>"$STATE_LOG"
+printf '=== /tmp/auto-pair.log snapshot (waited %ss) ===\n%s\n' "$((SECONDS - slow_mode_start))" "$auto_pair_snapshot_redacted" >>"$STATE_LOG"
 
 if [ "$slow_mode_observed" -eq 1 ]; then
   pass "watcher reached slow-mode keepalive within ${slow_mode_wait_secs}s"
@@ -1411,7 +1424,9 @@ case "$base_url_b" in
     ;;
 esac
 
-EXPECTED_MODEL_A="${NEMOCLAW_CLI_SCOPE_EXPECTED_MODEL_A:-nvidia/nemotron-3-super-120b-a12b}"
+# Track the hosted inference model the reusable runner actually exports so the
+# Phase 7 assertion follows the configured lane instead of a stale literal.
+EXPECTED_MODEL_A="${NEMOCLAW_CLI_SCOPE_EXPECTED_MODEL_A:-${NEMOCLAW_MODEL:-nvidia/nemotron-3-super-120b-a12b}}"
 EXPECTED_MODEL_B="${NEMOCLAW_CLI_SCOPE_EXPECTED_MODEL_B:-$OLLAMA_TWO_PROVIDER_MODEL}"
 if [ "$model_a" != "$EXPECTED_MODEL_A" ]; then
   fail "sandbox A model mismatch: expected ${EXPECTED_MODEL_A}, got ${model_a:-empty}"
