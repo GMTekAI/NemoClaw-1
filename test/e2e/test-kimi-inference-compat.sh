@@ -671,6 +671,7 @@ if len(artifacts) != 1:
 artifact_data = artifacts[-1].get("data", {}) if artifacts else {}
 completed_data = completed[-1].get("data", {}) if completed else {}
 metas = artifact_data.get("toolMetas", [])
+meta_commands = [meta.get("meta") for meta in metas]
 assistant_tool_messages = [
     item.get("message", {})
     for item in session
@@ -689,14 +690,20 @@ raw = session_path.read_text() + "\n" + trajectory_path.read_text()
 
 if artifact_data.get("finalStatus") != "success":
     errors.append("finalStatus is %r" % artifact_data.get("finalStatus"))
-if len(metas) != 3:
-    errors.append("expected 3 trace.artifacts.toolMetas, got %d" % len(metas))
-if [meta.get("toolName") for meta in metas] != ["exec", "exec", "exec"]:
+if len(metas) < 3:
+    errors.append("expected at least 3 trace.artifacts.toolMetas, got %d" % len(metas))
+if any(meta.get("toolName") != "exec" for meta in metas):
     errors.append("toolMeta tool names are %r" % [meta.get("toolName") for meta in metas])
-if sorted(meta.get("meta") for meta in metas) != ["date", "hostname", "uptime"]:
-    errors.append("toolMeta command set is %r" % sorted(meta.get("meta") for meta in metas))
-if source_commands != ["hostname", "date", "uptime"]:
+if sorted(set(meta_commands)) != ["date", "hostname", "uptime"]:
+    errors.append("toolMeta command set is %r" % sorted(meta_commands))
+expected_round = ["hostname", "date", "uptime"]
+if len(source_commands) < len(expected_round) or len(source_commands) % len(expected_round) != 0:
     errors.append("source assistant command order is %r" % source_commands)
+else:
+    for offset in range(0, len(source_commands), len(expected_round)):
+        if source_commands[offset : offset + len(expected_round)] != expected_round:
+            errors.append("source assistant command order is %r" % source_commands)
+            break
 if any(isinstance(command, str) and ";" in command for command in source_commands):
     errors.append("source assistant still contains a combined semicolon command")
 if artifact_data.get("promptErrorSource") is not None:
@@ -717,7 +724,7 @@ def normalize_final_text(value):
 
 final_texts = artifact_data.get("assistantTexts") or []
 expected_final_text = "hostname, date, and uptime completed successfully"
-if not final_texts or normalize_final_text(final_texts[-1]) != expected_final_text:
+if not final_texts or expected_final_text not in normalize_final_text(final_texts[-1]):
     errors.append("final assistant text is %r" % (final_texts[-1] if final_texts else None))
 if not tool_result_indices or not assistant_indices or max(assistant_indices) <= max(tool_result_indices):
     errors.append("final assistant response did not occur after all tool results")

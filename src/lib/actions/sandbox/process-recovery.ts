@@ -50,6 +50,11 @@ export type SandboxCommandResult = {
   stderr: string;
 };
 
+type SandboxProcessRecoveryAttempt = {
+  recovered: boolean;
+  mayHaveStarted: boolean;
+};
+
 type SandboxPortAgent = { forwardPort?: unknown; runtime?: { kind?: unknown } } | null;
 
 type SandboxPortDeps = {
@@ -380,7 +385,23 @@ export async function probeSandboxInferenceGatewayHealth(
  * Cleans stale lock/temp files, sources proxy config, and launches the gateway
  * in the background. Returns true on success.
  */
-function recoverSandboxProcesses(sandboxName: string): boolean {
+function sandboxRecoveryAttempt(
+  recovered: boolean,
+  mayHaveStarted = false,
+): SandboxProcessRecoveryAttempt {
+  return { recovered, mayHaveStarted };
+}
+
+function outputLooksLikeMarkerlessGatewayLaunch(result: SandboxCommandResult | null): boolean {
+  if (!result || result.status !== 0) return false;
+  const output = `${result.stdout}\n${result.stderr}`;
+  if (/RECOVERY_FAILED|GATEWAY_FAILED|OPENCLAW_MISSING|GATEWAY_STALE_PROCESSES/i.test(output)) {
+    return false;
+  }
+  return /\b(gateway|openclaw|launcher|started|nohup)\b/i.test(output);
+}
+
+function recoverSandboxProcesses(sandboxName: string): SandboxProcessRecoveryAttempt {
   const agent = agentRuntime.getSessionAgent(sandboxName);
   const dashboardPort = resolveSandboxDashboardPort(sandboxName);
   const agentScript = agentRuntime.buildRecoveryScript(agent, dashboardPort, {
@@ -394,19 +415,21 @@ function recoverSandboxProcesses(sandboxName: string): boolean {
   const recoveredSsh = (result: SandboxCommandResult | null) =>
     !!(result && result.status === 0 && hasRecoveryMarker(result));
 
-  if (agentRuntime.isTerminalAgentRecoveryScript(agentScript)) return false;
+  if (agentRuntime.isTerminalAgentRecoveryScript(agentScript)) return sandboxRecoveryAttempt(false);
   if (agentScript) {
     // Non-OpenClaw manifests do not yet declare a runtime user for root
     // sandbox exec. Recover them over SSH so the launch inherits the sandbox
     // login user instead of creating root-owned agent state under /sandbox.
-    return recoveredSsh(executeSandboxCommand(sandboxName, agentScript));
+    return sandboxRecoveryAttempt(recoveredSsh(executeSandboxCommand(sandboxName, agentScript)));
   }
 
   const script = agentRuntime.buildOpenClawRecoveryScript(dashboardPort);
   const execResult = executeSandboxExecCommand(sandboxName, script, 30000);
-  if (hasRecoveryMarker(execResult)) return true;
-  if (execResult !== null) return false;
-  return recoveredSsh(executeSandboxCommand(sandboxName, script));
+  if (hasRecoveryMarker(execResult)) return sandboxRecoveryAttempt(true);
+  if (execResult !== null) {
+    return sandboxRecoveryAttempt(false, outputLooksLikeMarkerlessGatewayLaunch(execResult));
+  }
+  return sandboxRecoveryAttempt(recoveredSsh(executeSandboxCommand(sandboxName, script)));
 }
 
 function recoverDeclaredAgentForwardPorts(
@@ -855,11 +878,21 @@ export function checkAndRecoverSandboxProcesses(
     console.log("  Recovering...");
   }
 
-  const recovered = recoverSandboxProcesses(sandboxName);
+  const recoveryAttempt = recoverSandboxProcesses(sandboxName);
+  let recovered = recoveryAttempt.recovered;
+  let recoveredHealthVerified = false;
+  if (
+    !recovered &&
+    recoveryAttempt.mayHaveStarted &&
+    waitForRecoveredSandboxGateway(sandboxName, { quiet })
+  ) {
+    recovered = true;
+    recoveredHealthVerified = true;
+  }
   if (recovered) {
     // Wait for gateway to bind its HTTP port before declaring success. The
     // recovered process can be alive before the OpenAI-compatible API is ready.
-    if (!waitForRecoveredSandboxGateway(sandboxName, { quiet })) {
+    if (!recoveredHealthVerified && !waitForRecoveredSandboxGateway(sandboxName, { quiet })) {
       if (!quiet) {
         console.error("  Gateway process started but is not responding.");
         printGatewayWedgeDiagnostics(sandboxName, executeSandboxExecCommand);
