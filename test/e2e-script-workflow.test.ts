@@ -1144,4 +1144,17 @@ describe("E2E reusable workflow contract", () => {
     );
     expect(script).toContain("substituting for GPU-only spec model");
   });
+
+  it("Phase 7 requires sandbox-B provider metadata to identify Ollama, not a qwen model", () => {
+    const script = readFileSync(
+      new URL("./e2e/test-issue-4462-scope-upgrade-approval.sh", import.meta.url),
+      "utf8",
+    );
+    const providerBlock = script.match(/case "\$provider_b" in[\s\S]*?esac/)?.[0];
+
+    expect(providerBlock).toBeDefined();
+    expect(providerBlock).toContain("*ollama*)");
+    expect(providerBlock).not.toContain("*qwen*");
+    expect(script).toContain('if [ "$model_b" != "$EXPECTED_MODEL_B" ]; then');
+  });
 });

@@ -1398,7 +1398,7 @@ case "$provider_a" in
     ;;
 esac
 case "$provider_b" in
-  *ollama* | *qwen*)
+  *ollama*)
     pass "sandbox B recorded Ollama provider (${provider_b}, model=${model_b})"
     ;;
   *)
