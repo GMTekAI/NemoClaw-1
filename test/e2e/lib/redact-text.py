@@ -18,7 +18,7 @@ TOKEN_VALUE_RE = re.compile(
     r"eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_.-]+"
     r"|gh[pousr]_[A-Za-z0-9]{16,}"
     r"|github_pat_[A-Za-z0-9_]{20,}"
-    r"|sk-[A-Za-z0-9_-]{12,}"
+    r"|\bsk-[A-Za-z0-9_-]{12,}"
     r"|nvapi-[A-Za-z0-9._-]{12,}"
     r"|hf_[A-Za-z0-9]{16,}"
     r"|AKIA[0-9A-Z]{12,}"

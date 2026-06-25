@@ -327,6 +327,13 @@ describe("scope-upgrade diagnostic text redactor", () => {
     expect(result.rc).toBe(0);
     expect(result.stdout).toBe(input);
   });
+
+  it("preserves ordinary hyphenated diagnostic text containing sk-", () => {
+    const input = "task-management-system-deployment completed without fallback\n";
+    const result = runTextRedactor(input);
+    expect(result.rc).toBe(0);
+    expect(result.stdout).toBe(input);
+  });
 });
 
 describe("scope-upgrade Phase 6 secret-bearing artifacts", () => {
