@@ -1339,9 +1339,11 @@ pass "second sandbox onboarded with Ollama provider"
 
 extract_openclaw_upstream() {
   local sandbox="$1"
-  run_with_timeout 30 "$OPENSHELL_BIN" sandbox exec --name "$sandbox" -- \
-    sh -lc 'python3 - <<'"'"'PY'"'"'
-import json
+  local py_script encoded remote_cmd
+  # openshell sandbox exec rejects multiline gRPC arguments; base64-encode the
+  # Python script and decode it into a temp file on the sandbox side, matching
+  # the sandbox_exec_sh_script pattern used elsewhere in this file.
+  py_script='import json
 import sys
 from pathlib import Path
 
@@ -1359,9 +1361,10 @@ model = str(upstream.get("model") or model_block.get("default") or "").strip()
 base_url = ""
 if isinstance(model_block, dict):
     base_url = str(model_block.get("base_url") or "").strip()
-print(json.dumps({"provider": provider, "model": model, "base_url": base_url}, sort_keys=True))
-PY
-'
+print(json.dumps({"provider": provider, "model": model, "base_url": base_url}, sort_keys=True))'
+  encoded="$(printf '%s' "$py_script" | base64 | tr -d '\n')"
+  remote_cmd="tmp=\$(mktemp); trap 'rm -f \"\$tmp\"' EXIT; printf %s $(quote_for_remote_sh "$encoded") | base64 -d > \"\$tmp\"; python3 \"\$tmp\""
+  run_with_timeout 30 "$OPENSHELL_BIN" sandbox exec --name "$sandbox" -- sh -lc "$remote_cmd"
 }
 
 upstream_a_json="$(extract_openclaw_upstream "$SANDBOX_NAME" 2>&1)" || {
