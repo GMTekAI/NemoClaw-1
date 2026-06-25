@@ -341,7 +341,13 @@ def roles(entry):
     return out
 
 def scopes(entry):
-    return {norm(scope) for scope in (entry.get("scopes") or []) if norm(scope)}
+    out = set()
+    for key in ("scopes", "requestedScopes"):
+        for scope in entry.get(key) or []:
+            scope = norm(scope)
+            if scope:
+                out.add(scope)
+    return out
 
 def approved_scopes(entry):
     return {norm(scope) for scope in (entry.get("approvedScopes") or entry.get("scopes") or []) if norm(scope)}
@@ -1121,7 +1127,7 @@ else
   exit 1
 fi
 
-section "Phase 3: Establish low-scope CLI device approval"
+section "Phase 3: Establish CLI device approval"
 
 info "Creating initial CLI pairing request with openclaw devices list"
 initial_list=$(sandbox_exec_sh_script 60 '
@@ -1148,7 +1154,7 @@ info "$summary"
 initial_request_id=$(printf '%s' "$state" | select_cli_request new 2>/dev/null) || initial_request_id=""
 if [ -n "$initial_request_id" ]; then
   pass "pending CLI pairing request exists (${initial_request_id})"
-  seed_initial_cli_pairing "$initial_request_id" "initial CLI pairing" || exit 1
+  approve_request "$initial_request_id" "initial CLI pairing" 1 || exit 1
 else
   paired_without_write=$(printf '%s' "$state" | select_cli_paired_without_write 2>/dev/null) || paired_without_write=""
   if [ -n "$paired_without_write" ]; then
@@ -1347,7 +1353,7 @@ openclaw agent --agent main --json --session-id "$session_id" \
     last_agent_detail="agent exited ${final_rc}: ${final_output:0:500}"
   elif ! grep -q '^__URL_FOR_FINAL_AGENT__=ws://' <<<"$final_output"; then
     last_agent_detail="agent command did not preserve OPENCLAW_GATEWAY_URL: ${final_output:0:500}"
-  elif grep -qE '(^|[^0-9])42([^0-9]|$)' <<<"$reply"; then
+  elif openclaw_agent_text_has_integer_42 <<<"$reply"; then
     agent_ok=1
     pass "approved openclaw agent turn answered through gateway mode"
     break
