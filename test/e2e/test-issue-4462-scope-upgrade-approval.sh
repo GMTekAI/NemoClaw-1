@@ -486,7 +486,7 @@ raise SystemExit(1)
 seed_initial_cli_pairing() {
   local request_id="$1"
   local label="$2"
-  local output rc approve_json approved_id before_url before_port before_token before_insecure_private_ws after_url after_port after_token after_insecure_private_ws
+  local output rc approve_json approved_id requested_id before_url before_port before_token before_insecure_private_ws after_url after_port after_token after_insecure_private_ws state_after_seed paired_after_seed pending_after_seed low_scope_after_seed
   output=$(sandbox_exec_sh_script 90 '
 		set -u
 		request_id="$1"
@@ -510,6 +510,7 @@ import time
 from pathlib import Path
 
 request_id = sys.argv[1]
+requested_request_id = request_id
 state_dir = Path(os.environ.get("OPENCLAW_STATE_DIR") or "/sandbox/.openclaw")
 devices_dir = state_dir / "devices"
 identity_dir = state_dir / "identity"
@@ -544,6 +545,20 @@ pending = load(pending_path)
 paired = load(paired_path)
 request_key = None
 request = None
+
+def is_cli_operator_request(item):
+    if not isinstance(item, dict):
+        return False
+    client_id = norm(item.get("clientId")).lower()
+    client_mode = norm(item.get("clientMode")).lower()
+    roles = [norm(role) for role in (item.get("roles") or [item.get("role")]) if norm(role)]
+    requested_scopes = {norm(scope) for scope in (item.get("scopes") or item.get("requestedScopes") or []) if norm(scope)}
+    if "operator" not in roles or (client_mode != "cli" and "cli" not in client_id):
+        return False
+    if "operator.admin" in requested_scopes:
+        return False
+    return bool(norm(item.get("requestId")) and norm(item.get("deviceId")))
+
 for key, item in pending.items():
     if isinstance(item, dict) and norm(item.get("requestId")) == request_id:
         request_key = key
@@ -551,8 +566,18 @@ for key, item in pending.items():
         break
 
 if not request:
-    print(f"missing pending request {request_id}", file=sys.stderr)
-    raise SystemExit(1)
+    candidates = [
+        (item.get("ts") or 0, key, item)
+        for key, item in pending.items()
+        if is_cli_operator_request(item)
+    ]
+    if candidates:
+        _ts, request_key, request = sorted(candidates, key=lambda row: row[0], reverse=True)[0]
+        request_id = norm(request.get("requestId"))
+        print(f"pending request {requested_request_id} was replaced by {request_id}; seeding replacement", file=sys.stderr)
+    else:
+        print(f"missing pending request {requested_request_id}", file=sys.stderr)
+        raise SystemExit(1)
 
 client_id = norm(request.get("clientId")).lower()
 client_mode = norm(request.get("clientMode")).lower()
@@ -621,12 +646,15 @@ auth = {
 write_json(pending_path, pending, 0o660)
 write_json(paired_path, paired, 0o660)
 write_json(auth_path, auth, 0o600)
-print(json.dumps({
+result = {
     "requestId": request_id,
     "deviceId": device_id,
     "approvedScopes": approved_scopes,
     "compatibility": "test-low-scope-bootstrap",
-}, sort_keys=True))
+}
+if requested_request_id != request_id:
+    result["requestedRequestId"] = requested_request_id
+print(json.dumps(result, sort_keys=True))
 PY
 )"
 		approve_rc=$?
@@ -645,6 +673,22 @@ PY
     printf '%s\n' "$output"
   } >>"$APPROVAL_LOG"
   if [ "$rc" -ne 0 ]; then
+    state_after_seed="$(device_state_json 2>&1)" || state_after_seed=""
+    if [ -n "$state_after_seed" ]; then
+      printf '=== state after failed seed %s request=%s ===\n%s\n' "$label" "$request_id" "$state_after_seed" >>"$STATE_LOG"
+      paired_after_seed=$(printf '%s' "$state_after_seed" | select_cli_paired_with_agent_scopes 2>/dev/null) || paired_after_seed=""
+      low_scope_after_seed=$(printf '%s' "$state_after_seed" | select_cli_paired_without_write 2>/dev/null) || low_scope_after_seed=""
+      pending_after_seed=$(printf '%s' "$state_after_seed" | select_cli_request new 2>/dev/null) || pending_after_seed=""
+      if [ -n "$paired_after_seed" ] && [ -z "$pending_after_seed" ]; then
+        SCOPE_UPGRADE_ALREADY_SATISFIED=1
+        pass "${label}: CLI request already has operator.write/operator.read without operator.admin (${paired_after_seed})"
+        return 0
+      fi
+      if [ -n "$low_scope_after_seed" ] && [ -z "$pending_after_seed" ]; then
+        pass "${label}: CLI device is already paired with low scope (${low_scope_after_seed})"
+        return 0
+      fi
+    fi
     fail "${label}: could not seed low-scope CLI pairing for ${request_id}: ${output:0:500}"
     return 1
   fi
@@ -674,11 +718,16 @@ PY
     return 1
   fi
   approved_id=$(printf '%s' "$approve_json" | json_field requestId)
-  if [ "$approved_id" != "$request_id" ]; then
+  requested_id=$(printf '%s' "$approve_json" | json_field requestedRequestId)
+  if [ "$approved_id" != "$request_id" ] && [ "$requested_id" != "$request_id" ]; then
     fail "${label}: seed returned requestId=${approved_id:-empty}, expected ${request_id}"
     return 1
   fi
-  pass "${label}: seeded low-scope CLI pairing for ${request_id}"
+  if [ "$approved_id" != "$request_id" ]; then
+    pass "${label}: seeded low-scope CLI pairing for replacement ${approved_id} (original ${request_id})"
+  else
+    pass "${label}: seeded low-scope CLI pairing for ${request_id}"
+  fi
 }
 
 approve_request() {
@@ -1154,7 +1203,7 @@ info "$summary"
 initial_request_id=$(printf '%s' "$state" | select_cli_request new 2>/dev/null) || initial_request_id=""
 if [ -n "$initial_request_id" ]; then
   pass "pending CLI pairing request exists (${initial_request_id})"
-  approve_request "$initial_request_id" "initial CLI pairing" 1 || exit 1
+  seed_initial_cli_pairing "$initial_request_id" "initial CLI pairing" || exit 1
 else
   paired_without_write=$(printf '%s' "$state" | select_cli_paired_without_write 2>/dev/null) || paired_without_write=""
   if [ -n "$paired_without_write" ]; then
