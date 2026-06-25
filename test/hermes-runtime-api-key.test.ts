@@ -70,7 +70,11 @@ function runHermesRuntimeApiServerKeyMint(
     symlink: () => fs.symlinkSync(configTarget, configPath),
   } satisfies Record<NonNullable<typeof opts.configPathKind>, () => void>;
   writeConfigPath[opts.configPathKind ?? "regular"]();
-  if ((opts.configPathKind ?? "regular") === "regular") fs.chmodSync(configPath, 0o640);
+  const chmodConfigPath = {
+    regular: () => fs.chmodSync(configPath, 0o640),
+    symlink: () => undefined,
+  } satisfies Record<NonNullable<typeof opts.configPathKind>, () => void>;
+  chmodConfigPath[opts.configPathKind ?? "regular"]();
 
   const writeEnvPath = {
     regular: () => fs.writeFileSync(envPath, initialEnvFile, { mode: 0o640 }),
