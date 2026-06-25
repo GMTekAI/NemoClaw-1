@@ -538,6 +538,13 @@ function validateFreeStandingInventoryBoundary(
           `${jobName} step '${step.name ?? step.uses}'`,
         );
       }
+      if (stringValue(step.uses).startsWith("actions/upload-artifact@")) {
+        requireUploadPathDoesNotContain(
+          errors,
+          stringValue(asRecord(step.with).path),
+          "/tmp/",
+        );
+      }
       if (/\$\{\{\s*secrets\./.test(stringValue(step.run))) {
         errors.push(
           `${jobName} step '${step.name ?? step.uses ?? "<unnamed>"}' run script must not interpolate secrets directly`,

@@ -16,6 +16,7 @@ const REPO_ROOT = path.resolve(import.meta.dirname, "..");
 interface WorkflowStep {
   name?: string;
   run?: string;
+  uses?: string;
 }
 
 interface WorkflowJob {
@@ -23,15 +24,24 @@ interface WorkflowJob {
 }
 
 interface Workflow {
-  jobs?: {
-    advise?: WorkflowJob;
-  };
+  jobs?: Record<string, WorkflowJob | undefined>;
+}
+
+function readAdvisorWorkflow(): Workflow {
+  return YAML.parse(
+    fs.readFileSync(path.join(REPO_ROOT, ".github/workflows/e2e-advisor.yaml"), "utf8"),
+  ) as Workflow;
+}
+
+function advisorWorkflowActionUses(): string[] {
+  return Object.values(readAdvisorWorkflow().jobs ?? {})
+    .flatMap((job) => job?.steps ?? [])
+    .map((step) => step.uses)
+    .filter((uses): uses is string => typeof uses === "string");
 }
 
 function prepareTargetCheckoutScript(): string {
-  const workflow = YAML.parse(
-    fs.readFileSync(path.join(REPO_ROOT, ".github/workflows/e2e-advisor.yaml"), "utf8"),
-  ) as Workflow;
+  const workflow = readAdvisorWorkflow();
   const step = workflow.jobs?.advise?.steps?.find(
     (entry) => entry.name === "Prepare target PR checkout",
   );
@@ -81,6 +91,17 @@ describe("E2E recommendation advisor prompt", () => {
     expect(prompt).toContain("onboard-resume-e2e");
     expect(prompt).toContain("onboard-repair-e2e");
     expect(prompt).toContain("src/lib/onboard/machine");
+  });
+
+  it("pins advisor workflow actions to full commit SHAs", () => {
+    const actionUses = advisorWorkflowActionUses();
+
+    expect(actionUses).toEqual(
+      expect.arrayContaining(["actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e"]),
+    );
+    expect(actionUses).toEqual(
+      actionUses.map(() => expect.stringMatching(/^[^@\s]+@[0-9a-f]{40}$/u)),
+    );
   });
 
   it("validates manual target checkout inputs before git fetch", () => {

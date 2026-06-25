@@ -83,6 +83,37 @@ describe("e2e workflow boundary", () => {
     expect(validateE2eWorkflowBoundary()).toEqual([]);
   });
 
+  it("rejects free-standing E2E artifact uploads from raw temp paths", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "e2e-workflow-"));
+    const workflowPath = path.join(tmp, "workflow.yaml");
+    const workflow = readWorkflow() as {
+      jobs: Record<
+        string,
+        {
+          steps: Array<{
+            name?: string;
+            with?: Record<string, unknown>;
+          }>;
+        }
+      >;
+    };
+    const upload = workflow.jobs["openclaw-inference-switch"].steps.find(
+      (step) => step.name === "Upload OpenClaw inference switch artifacts",
+    );
+    expect(upload?.with).toEqual(expect.any(Object));
+    upload!.with!.path =
+      `${String(upload!.with!.path)}\n/tmp/nemoclaw-e2e-openclaw-inference-switch-install.log`;
+    fs.writeFileSync(workflowPath, YAML.stringify(workflow));
+
+    try {
+      expect(validateE2eWorkflowBoundary(workflowPath)).toContain(
+        "artifact upload path must not include /tmp/",
+      );
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it(
     "evaluates high-risk dispatch selector behavior before secret-bearing jobs run",
     testTimeoutOptions(30_000),

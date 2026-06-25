@@ -4318,7 +4318,6 @@ jobs:
           name: e2e-openclaw-inference-switch
           path: |
             e2e-artifacts/live/openclaw-inference-switch/
-            /tmp/nemoclaw-e2e-openclaw-inference-switch-install.log
           include-hidden-files: false
           if-no-files-found: ignore
           retention-days: 14
