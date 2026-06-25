@@ -1199,25 +1199,38 @@ else
   info "watcher did not log a fast-reentry marker (explicit approve_request won the race against the watcher poll cadence; the user-facing path is gated by Phase 5 and unit test/nemoclaw-start.test.ts)"
 fi
 
-section "Phase 7: Verify two-sandbox concurrent differing-provider gateway-backed agent turns"
+section "Phase 7 (CPU-substitute lane): Verify two-sandbox concurrent differing-provider gateway-backed agent turns"
 
 # Sandbox A keeps the NVIDIA Cloud provider configured by Phase 1; sandbox B
 # is onboarded against a host-side Ollama daemon that serves a small local
-# model (qwen3:0.6b is sized for CPU CI runners — the production-spec
-# qwen3.5:9b needs GPU memory). Both sandboxes run concurrent allowlisted
-# CLI clients through their per-sandbox OpenShell gateways and must each
-# get their late scope upgrade approved by their own in-sandbox auto-pair
-# watcher with no scope-upgrade, pairing, or embedded-fallback markers.
-# The recorded provider/model in `/sandbox/.openclaw/openclaw.json` must
-# differ between the two sandboxes (NVIDIA Cloud vs Ollama-local) and each
-# must route inference through `inference.local`, while per-sandbox gateway
-# URL pinning (sandbox A → :18789, sandbox B → :18790) keeps the routing
-# isolation intact under concurrency.
+# model. Default model qwen3:0.6b is sized for CPU CI runners; the
+# production-spec qwen3.5:9b from #5343 needs GPU memory and is exercised
+# only when NEMOCLAW_CLI_SCOPE_OLLAMA_MODEL is overridden on a GPU lane.
+# This default lane therefore proves differing-provider isolation and the
+# `inference.local` route on a CPU-sized substitute; it does not assert the
+# literal #5343 sandbox-B model identity. Both sandboxes run concurrent
+# allowlisted CLI clients through their per-sandbox OpenShell gateways and
+# must each get their late scope upgrade approved by their own in-sandbox
+# auto-pair watcher with no scope-upgrade, pairing, or embedded-fallback
+# markers. The recorded provider/model in `/sandbox/.openclaw/openclaw.json`
+# must differ between the two sandboxes (NVIDIA Cloud vs Ollama-local) and
+# each must route inference through `inference.local`, while per-sandbox
+# gateway URL pinning (sandbox A → :18789, sandbox B → :18790) keeps the
+# routing isolation intact under concurrency.
 
 OLLAMA_TWO_PROVIDER_MODEL="${NEMOCLAW_CLI_SCOPE_OLLAMA_MODEL:-qwen3:0.6b}"
 OLLAMA_SPEC_MODEL_5343="qwen3.5:9b"
-OLLAMA_PINNED_VERSION="${NEMOCLAW_CLI_SCOPE_OLLAMA_VERSION:-0.7.4}"
-OLLAMA_PINNED_SHA256="${NEMOCLAW_CLI_SCOPE_OLLAMA_SHA256:-}"
+# Pin Ollama to a real upstream release whose linux-amd64 tarball checksum
+# is committed below. Override the version only when overriding the sha256
+# in lockstep.
+OLLAMA_PINNED_VERSION_DEFAULT="0.13.5"
+OLLAMA_PINNED_SHA256_DEFAULT="41fb93ff8be35e4d2d22bafd1c42b487efb15b766076d976766bd1ee4db3f8e2"
+OLLAMA_PINNED_VERSION="${NEMOCLAW_CLI_SCOPE_OLLAMA_VERSION:-$OLLAMA_PINNED_VERSION_DEFAULT}"
+if [ "$OLLAMA_PINNED_VERSION" = "$OLLAMA_PINNED_VERSION_DEFAULT" ]; then
+  OLLAMA_PINNED_SHA256="${NEMOCLAW_CLI_SCOPE_OLLAMA_SHA256:-$OLLAMA_PINNED_SHA256_DEFAULT}"
+else
+  OLLAMA_PINNED_SHA256="${NEMOCLAW_CLI_SCOPE_OLLAMA_SHA256:-}"
+fi
 OLLAMA_PINNED_TGZ_URL="https://github.com/ollama/ollama/releases/download/v${OLLAMA_PINNED_VERSION}/ollama-linux-amd64.tgz"
 
 if [ "$OLLAMA_TWO_PROVIDER_MODEL" != "$OLLAMA_SPEC_MODEL_5343" ]; then
@@ -1226,6 +1239,10 @@ fi
 
 info "Ensuring host-side Ollama is available for sandbox B"
 if ! command -v ollama >/dev/null 2>&1; then
+  if [ -z "$OLLAMA_PINNED_SHA256" ]; then
+    fail "Ollama install requires NEMOCLAW_CLI_SCOPE_OLLAMA_SHA256 when NEMOCLAW_CLI_SCOPE_OLLAMA_VERSION overrides the pinned default v${OLLAMA_PINNED_VERSION_DEFAULT}"
+    exit 1
+  fi
   info "Installing pinned Ollama ${OLLAMA_PINNED_VERSION} release artifact"
   install_tmp="$(mktemp -d)"
   if ! run_with_timeout 600 curl -fsSL --proto '=https' --tlsv1.2 \
@@ -1234,17 +1251,13 @@ if ! command -v ollama >/dev/null 2>&1; then
     rm -rf "$install_tmp"
     exit 1
   fi
-  if [ -n "$OLLAMA_PINNED_SHA256" ]; then
-    computed_sha="$(sha256sum "${install_tmp}/ollama.tgz" | awk '{print $1}')"
-    if [ "$computed_sha" != "$OLLAMA_PINNED_SHA256" ]; then
-      fail "Ollama tarball sha256 mismatch: expected ${OLLAMA_PINNED_SHA256}, got ${computed_sha}"
-      rm -rf "$install_tmp"
-      exit 1
-    fi
-    pass "Ollama tarball sha256 verified (${computed_sha})"
-  else
-    info "Skipping Ollama tarball sha256 verification (set NEMOCLAW_CLI_SCOPE_OLLAMA_SHA256 to enable); tag-immutability and GitHub TLS limit drift"
+  computed_sha="$(sha256sum "${install_tmp}/ollama.tgz" | awk '{print $1}')"
+  if [ "$computed_sha" != "$OLLAMA_PINNED_SHA256" ]; then
+    fail "Ollama tarball sha256 mismatch: expected ${OLLAMA_PINNED_SHA256}, got ${computed_sha}"
+    rm -rf "$install_tmp"
+    exit 1
   fi
+  pass "Ollama tarball sha256 verified (${computed_sha})"
   tar_out=$(sudo tar -C /usr/local -xzf "${install_tmp}/ollama.tgz" 2>&1)
   tar_rc=$?
   printf '%s\n' "$tar_out" >>"$INSTALL_LOG"

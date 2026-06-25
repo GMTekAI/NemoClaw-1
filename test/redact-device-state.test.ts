@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -9,7 +11,72 @@ import { describe, expect, it } from "vitest";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REDACTOR = path.resolve(HERE, "e2e/lib/redact-device-state.py");
+const SCOPE_UPGRADE_SCRIPT = path.resolve(HERE, "e2e/test-issue-4462-scope-upgrade-approval.sh");
+const E2E_LIB_DIR = path.resolve(HERE, "e2e");
 const REDACTED = "[REDACTED]";
+
+function extractShellFunction(scriptPath: string, name: string): string {
+  const body = readFileSync(scriptPath, "utf8");
+  const startMarker = `${name}() {`;
+  const start = body.indexOf(startMarker);
+  if (start < 0) throw new Error(`function ${name} not found in ${scriptPath}`);
+  const lines = body.slice(start).split("\n");
+  const collected: string[] = [];
+  for (const line of lines) {
+    collected.push(line);
+    if (collected.length > 1 && line === "}") break;
+  }
+  return collected.join("\n");
+}
+
+function runScopeUpgradeDeviceStateWrapper(stubs: {
+  sandboxRawOutput: string;
+  sandboxRc: number;
+  redactorScriptOverride?: string;
+}): { rc: number; stdout: string; stderr: string } {
+  const functionBody = extractShellFunction(SCOPE_UPGRADE_SCRIPT, "device_state_json");
+  let e2eDir = E2E_LIB_DIR;
+  let overrideRoot: string | null = null;
+  if (stubs.redactorScriptOverride) {
+    overrideRoot = mkdtempSync(path.join(tmpdir(), "scope-upgrade-shell-"));
+    mkdirSync(path.join(overrideRoot, "lib"), { recursive: true });
+    writeFileSync(
+      path.join(overrideRoot, "lib", "redact-device-state.py"),
+      stubs.redactorScriptOverride,
+      { mode: 0o755 },
+    );
+    e2eDir = overrideRoot;
+  }
+  const harness = `
+set -u
+sandbox_exec_sh_script() {
+  printf '%s' "$E2E_TEST_SANDBOX_RAW"
+  return "$E2E_TEST_SANDBOX_RC"
+}
+extract_json_doc() { cat; }
+E2E_DIR=${JSON.stringify(e2eDir)}
+${functionBody}
+device_state_json
+`;
+  try {
+    const result = spawnSync("bash", ["-c", harness], {
+      encoding: "utf-8",
+      timeout: 20_000,
+      env: {
+        ...process.env,
+        E2E_TEST_SANDBOX_RAW: stubs.sandboxRawOutput,
+        E2E_TEST_SANDBOX_RC: String(stubs.sandboxRc),
+      },
+    });
+    return {
+      rc: result.status ?? -1,
+      stdout: result.stdout ?? "",
+      stderr: result.stderr ?? "",
+    };
+  } finally {
+    if (overrideRoot) rmSync(overrideRoot, { recursive: true, force: true });
+  }
+}
 
 function runRedactor(input: unknown): { rc: number; stdout: string; stderr: string; doc: unknown } {
   const result = spawnSync("python3", [REDACTOR], {
@@ -145,5 +212,52 @@ describe("device-state JSON redactor", () => {
     });
     expect(invalid.status).toBe(1);
     expect(invalid.stderr).toContain("invalid JSON");
+  });
+});
+
+describe("scope-upgrade device_state_json shell wrapper", () => {
+  const TOKEN_LEAK = "nvapi-abc.def_ghi-jkl-mnopqrstu";
+  const RAW_TOKEN_PAYLOAD = `{"pending":[{"deviceId":"dev-1","tokens":{"operator":{"value":"${TOKEN_LEAK}"}}}],"paired":[],"paths":{"pending":"/sandbox/.openclaw/devices/pending.json","paired":"/sandbox/.openclaw/devices/paired.json"}}`;
+
+  it("emits only the sandbox-exec failure marker when sandbox_exec_sh_script returns non-zero", () => {
+    const result = runScopeUpgradeDeviceStateWrapper({
+      sandboxRawOutput: `${RAW_TOKEN_PAYLOAD}\n`,
+      sandboxRc: 5,
+    });
+
+    expect(result.rc).toBe(5);
+    expect(result.stdout).toContain("[DEVICE_STATE_REDACTION_FAILED stage=sandbox-exec rc=5]");
+    expect(result.stdout).not.toContain(TOKEN_LEAK);
+    expect(result.stdout).not.toContain('"tokens"');
+    expect(result.stderr).not.toContain(TOKEN_LEAK);
+  });
+
+  it("emits only the redactor failure marker when the redactor exits non-zero on token-bearing input", () => {
+    const failingRedactor = "#!/usr/bin/env python3\nimport sys\nsys.stdin.read()\nsys.exit(7)\n";
+
+    const result = runScopeUpgradeDeviceStateWrapper({
+      sandboxRawOutput: `${RAW_TOKEN_PAYLOAD}\n`,
+      sandboxRc: 0,
+      redactorScriptOverride: failingRedactor,
+    });
+
+    expect(result.rc).toBe(7);
+    expect(result.stdout).toContain("[DEVICE_STATE_REDACTION_FAILED stage=redactor rc=7]");
+    expect(result.stdout).not.toContain(TOKEN_LEAK);
+    expect(result.stdout).not.toContain('"tokens"');
+    expect(result.stderr).not.toContain(TOKEN_LEAK);
+  });
+
+  it("emits redacted JSON without leaking raw token-bearing input on the success path", () => {
+    const result = runScopeUpgradeDeviceStateWrapper({
+      sandboxRawOutput: `${RAW_TOKEN_PAYLOAD}\n`,
+      sandboxRc: 0,
+    });
+
+    expect(result.rc).toBe(0);
+    expect(result.stdout).not.toContain(TOKEN_LEAK);
+    expect(result.stdout).toContain(REDACTED);
+    expect(result.stdout).not.toContain("[DEVICE_STATE_REDACTION_FAILED");
+    expect(result.stderr).not.toContain(TOKEN_LEAK);
   });
 });
