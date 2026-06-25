@@ -1358,8 +1358,8 @@ upstream = cfg.get("_nemoclaw_upstream") or {}
 model_block = cfg.get("model") or {}
 provider = str(upstream.get("provider") or "").strip()
 model = str(upstream.get("model") or model_block.get("default") or "").strip()
-base_url = ""
-if isinstance(model_block, dict):
+base_url = str(upstream.get("base_url") or "").strip()
+if not base_url and isinstance(model_block, dict):
     base_url = str(model_block.get("base_url") or "").strip()
 print(json.dumps({"provider": provider, "model": model, "base_url": base_url}, sort_keys=True))'
   encoded="$(printf '%s' "$py_script" | base64 | tr -d '\n')"
