@@ -369,7 +369,7 @@ describe("scope-upgrade Phase 7 sandbox-B least-privilege onboarding", () => {
       "sandbox-B onboard command not found",
     );
     const sandboxBStart = requireNonNegative(
-      script.lastIndexOf('export NEMOCLAW_PROVIDER=ollama', onboardIndex),
+      script.lastIndexOf("export NEMOCLAW_PROVIDER=ollama", onboardIndex),
       "sandbox-B Ollama provider export not found before onboard",
     );
     const sandboxBBlock = script.slice(sandboxBStart, onboardIndex);
