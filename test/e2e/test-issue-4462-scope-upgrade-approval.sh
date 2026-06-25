@@ -852,7 +852,7 @@ PROBESH
 
 legacy_gateway_pinned_approval_characterization() {
   local request_id="$1"
-  local output legacy_rc before_url before_insecure_private_ws legacy_approve_output legacy_failure_request_id state pending_after approved_after recovery_request_id
+  local output legacy_rc before_url before_insecure_private_ws legacy_approve_output legacy_failure_request_id state pending_after approved_after recovery_request_id retry_output retry_request_id
   output=$(sandbox_exec_sh_script 90 '
 set -u
 request_id="$1"
@@ -950,6 +950,45 @@ exit 0
   fi
   if [ -n "$approved_after" ]; then
     pass "legacy gateway-pinned approve returned failure after applying the scope upgrade (${approved_after})"
+    return 0
+  fi
+  pass "legacy gateway-pinned approve consumed the pending scope-upgrade without granting it"
+  retry_output=$(sandbox_exec_sh_script 120 '
+set -u
+if [ ! -r /tmp/nemoclaw-proxy-env.sh ]; then
+  echo "missing /tmp/nemoclaw-proxy-env.sh" >&2
+  exit 2
+fi
+# shellcheck source=/dev/null
+. /tmp/nemoclaw-proxy-env.sh
+session_id="issue-4462-recovery-trigger-$(date +%s)-$$"
+rm -f "/sandbox/.openclaw/agents/main/sessions/${session_id}.jsonl.lock" \
+      "/sandbox/.openclaw/agents/main/sessions/${session_id}.trajectory.jsonl" 2>/dev/null || true
+printf "__URL_FOR_RECOVERY_TRIGGER__=%s\n" "${OPENCLAW_GATEWAY_URL-unset}"
+set +e
+openclaw agent --agent main --json --session-id "$session_id" \
+  -m "What is 6 multiplied by 7? Reply with only the integer, no extra words."
+agent_rc=$?
+set -e
+printf "__RECOVERY_TRIGGER_AGENT_RC__=%s\n" "$agent_rc"
+exit 0
+' 2>&1)
+  printf '=== recovery trigger after legacy consumed request ===\n%s\n' "$retry_output" >>"$AGENT_LOG"
+  state="$(device_state_json 2>&1)" || {
+    fail "Could not read OpenClaw device state after legacy recovery trigger: ${state:0:500}"
+    return 1
+  }
+  printf '=== state after legacy recovery trigger ===\n%s\n' "$state" >>"$STATE_LOG"
+  retry_request_id=$(printf '%s' "$state" | select_cli_request scope-upgrade 2>/dev/null) || retry_request_id=""
+  approved_after=$(printf '%s' "$state" | select_cli_paired_with_agent_scopes 2>/dev/null) || approved_after=""
+  if [ -n "$retry_request_id" ]; then
+    pass "legacy recovery trigger recreated the CLI scope-upgrade request (${retry_request_id})"
+    approve_request "$retry_request_id" "recovery after legacy consumed request" 1 || return 1
+    pass "fixed devices approve path recovers after legacy consumed the request"
+    return 0
+  fi
+  if [ -n "$approved_after" ]; then
+    pass "legacy recovery trigger left the CLI scope-upgrade approved (${approved_after})"
     return 0
   fi
   fail "legacy gateway-pinned characterization left neither pending nor approved CLI scope-upgrade state: $(printf '%s' "$state" | summarize_device_state)"
