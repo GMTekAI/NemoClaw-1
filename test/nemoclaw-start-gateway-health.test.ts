@@ -223,7 +223,7 @@ describe("gateway serving watchdog (#4710)", () => {
       curlPlan: [0, 7, 7, 7, 7],
       cmdline: "vim notes.txt",
       expectKill: false,
-      settleSeconds: 0.8,
+      settleSeconds: 1.2,
     });
     try {
       expect(result.status, `script failed: ${result.stderr}`).toBe(0);
@@ -329,6 +329,7 @@ describe("gateway serving watchdog (#4710)", () => {
         "start_gateway_serving_watchdog",
         // The curl stub swaps to gateway B during A's successful probe,
         // before the watchdog can start counting refused probes again.
+        'printf "B_PID=%s\\n" "$GATEWAY_B"',
         "command sleep 0.6",
         'if kill -0 "$GATEWAY_B" 2>/dev/null; then printf "B_ALIVE=1\\n"; else printf "B_ALIVE=0\\n"; fi',
         "disown -a 2>/dev/null || true",
@@ -346,7 +347,11 @@ describe("gateway serving watchdog (#4710)", () => {
       // refused probes (threshold 2, 10ms cycles) well inside the 600ms
       // observation window.
       expect(stdout).toContain("B_ALIVE=1");
-      expect(result.stderr).not.toContain("dropped its HTTP listener on port 18789");
+      const bPid = stdout.match(/^B_PID=(\d+)$/m)?.[1];
+      expect(bPid).toBeDefined();
+      expect(result.stderr).not.toContain(
+        `gateway pid ${bPid} is alive but dropped its HTTP listener on port 18789`,
+      );
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

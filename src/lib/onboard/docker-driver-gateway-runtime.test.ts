@@ -128,7 +128,7 @@ describe("docker-driver gateway runtime helpers", () => {
         writeDockerDriverGatewayRuntimeMarkerForStateDir(stateDir, {
           pid,
           desiredEnv,
-          endpoint: "http://127.0.0.1:8080",
+          endpoint: "https://127.0.0.1:8080",
           platform: "linux",
           arch: process.arch,
         });

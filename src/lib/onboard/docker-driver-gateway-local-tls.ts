@@ -1,0 +1,109 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+import { spawnSync, type SpawnSyncOptions } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+
+export const DOCKER_DRIVER_GATEWAY_LOCAL_TLS_DIR_NAME = "tls";
+
+export type DockerDriverGatewayLocalTlsBundle = {
+  localTlsDir: string;
+  caPath: string;
+  serverCertPath: string;
+  serverKeyPath: string;
+  clientCertPath: string;
+  clientKeyPath: string;
+};
+
+export interface EnsureDockerDriverGatewayLocalTlsBundleOptions {
+  env?: NodeJS.ProcessEnv;
+  gatewayBin: string;
+  spawnSyncImpl?: typeof spawnSync;
+  stateDir: string;
+}
+
+export function getDockerDriverGatewayLocalTlsDir(stateDir: string): string {
+  return path.join(stateDir, DOCKER_DRIVER_GATEWAY_LOCAL_TLS_DIR_NAME);
+}
+
+export function getDockerDriverGatewayLocalTlsBundle(
+  stateDir: string,
+): DockerDriverGatewayLocalTlsBundle {
+  const localTlsDir = getDockerDriverGatewayLocalTlsDir(stateDir);
+  return {
+    localTlsDir,
+    caPath: path.join(localTlsDir, "ca.crt"),
+    serverCertPath: path.join(localTlsDir, "server", "tls.crt"),
+    serverKeyPath: path.join(localTlsDir, "server", "tls.key"),
+    clientCertPath: path.join(localTlsDir, "client", "tls.crt"),
+    clientKeyPath: path.join(localTlsDir, "client", "tls.key"),
+  };
+}
+
+export function dockerDriverGatewayLocalTlsBundleIsComplete(stateDir: string): boolean {
+  const bundle = getDockerDriverGatewayLocalTlsBundle(stateDir);
+  return [
+    bundle.caPath,
+    bundle.serverCertPath,
+    bundle.serverKeyPath,
+    bundle.clientCertPath,
+    bundle.clientKeyPath,
+  ].every((candidate) => fs.existsSync(candidate));
+}
+
+export function buildDockerDriverGatewayLocalTlsEnv(stateDir: string): Record<string, string> {
+  return {
+    OPENSHELL_LOCAL_TLS_DIR: getDockerDriverGatewayLocalTlsDir(stateDir),
+  };
+}
+
+function text(value: Buffer | string | null | undefined): string {
+  if (typeof value === "string") return value;
+  if (Buffer.isBuffer(value)) return value.toString("utf-8");
+  return "";
+}
+
+export function ensureDockerDriverGatewayLocalTlsBundle({
+  env = process.env,
+  gatewayBin,
+  spawnSyncImpl = spawnSync,
+  stateDir,
+}: EnsureDockerDriverGatewayLocalTlsBundleOptions): DockerDriverGatewayLocalTlsBundle {
+  const bundle = getDockerDriverGatewayLocalTlsBundle(stateDir);
+  fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  fs.chmodSync(stateDir, 0o700);
+
+  const result = spawnSyncImpl(
+    gatewayBin,
+    [
+      "generate-certs",
+      "--output-dir",
+      bundle.localTlsDir,
+      "--server-san",
+      "host.openshell.internal",
+    ],
+    {
+      encoding: "utf-8",
+      env: {
+        ...env,
+        OPENSHELL_LOCAL_TLS_DIR: bundle.localTlsDir,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    } satisfies SpawnSyncOptions,
+  );
+  if (result.error) {
+    throw new Error(`OpenShell gateway certificate generation failed: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    const detail = text(result.stderr).trim() || text(result.stdout).trim() || "unknown error";
+    throw new Error(`OpenShell gateway certificate generation failed: ${detail}`);
+  }
+  if (!dockerDriverGatewayLocalTlsBundleIsComplete(stateDir)) {
+    throw new Error(
+      `OpenShell gateway certificate generation did not create a complete mTLS bundle in ${bundle.localTlsDir}`,
+    );
+  }
+
+  return bundle;
+}

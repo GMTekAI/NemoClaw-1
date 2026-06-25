@@ -131,10 +131,20 @@ describe("docker-driver-gateway-launch", () => {
       if (!configPath) throw new Error("expected generated gateway config path");
       const toml = fs.readFileSync(configPath, "utf-8");
       expect(toml).toContain(`supervisor_bin = "${sandboxBin}"`);
+      expect(toml).toContain("disable_tls = false");
+      expect(toml).toContain("[openshell.gateway.tls]");
+      expect(toml).toContain(`cert_path = "${path.join(stateDir, "tls", "server", "tls.crt")}"`);
+      expect(toml).toContain(`client_ca_path = "${path.join(stateDir, "tls", "ca.crt")}"`);
+      expect(toml).toContain("[openshell.gateway.mtls_auth]");
+      expect(toml).toContain("enabled = true");
       expect(toml).toContain("[openshell.gateway.gateway_jwt]");
       expect(toml).toContain(`signing_key_path = "${path.join(stateDir, "jwt", "signing.pem")}"`);
       expect(toml).toContain("[openshell.gateway.auth]");
-      expect(toml).toContain("allow_unauthenticated_users = true");
+      expect(toml).toContain("allow_unauthenticated_users = false");
+      expect(toml).toContain(`guest_tls_ca = "${path.join(stateDir, "tls", "ca.crt")}"`);
+      expect(toml).toContain(
+        `guest_tls_cert = "${path.join(stateDir, "tls", "client", "tls.crt")}"`,
+      );
       expect(launch.env.OPENSHELL_DISABLE_GATEWAY_AUTH).toBeUndefined();
       expect(launch.args).not.toContain("OPENSHELL_DISABLE_GATEWAY_AUTH");
       expect(fs.existsSync(path.join(stateDir, "jwt", "public.pem"))).toBe(true);
@@ -186,14 +196,15 @@ describe("docker-driver-gateway-launch", () => {
       "  Compatibility gateway bind: 127.0.0.1 main listener plus OpenShell Docker-driver bridge reachability.",
     );
     expect(messages).toContain(
-      "  Gateway auth boundary: host-side OpenShell CLI user calls remain available; sandbox callbacks use OpenShell gateway JWT.",
+      "  Gateway auth boundary: host-side OpenShell CLI uses local mTLS; sandbox callbacks use mTLS plus OpenShell gateway JWT.",
     );
   });
 
   it("writes Docker driver settings in gateway TOML because OpenShell driver config is not env-backed", () => {
     const toml = buildDockerDriverGatewayConfigToml(
       {
-        OPENSHELL_GRPC_ENDPOINT: "http://127.0.0.1:8080",
+        OPENSHELL_GRPC_ENDPOINT: "https://127.0.0.1:8080",
+        OPENSHELL_LOCAL_TLS_DIR: "/tmp/openshell-tls",
         OPENSHELL_DOCKER_NETWORK_NAME: "openshell-docker",
         OPENSHELL_DOCKER_SUPERVISOR_IMAGE: "ghcr.io/nvidia/openshell/supervisor:0.0.44",
       },
@@ -201,7 +212,7 @@ describe("docker-driver-gateway-launch", () => {
     );
 
     expect(toml).toContain('compute_drivers = ["docker"]');
-    expect(toml).toContain('grpc_endpoint = "http://127.0.0.1:8080"');
+    expect(toml).toContain('grpc_endpoint = "https://127.0.0.1:8080"');
     expect(toml).toContain('network_name = "openshell-docker"');
     expect(toml).toContain('supervisor_image = "ghcr.io/nvidia/openshell/supervisor:0.0.44"');
     expect(toml).toContain('supervisor_bin = "/home/shadeform/.local/bin/openshell-sandbox"');

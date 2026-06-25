@@ -9,11 +9,11 @@ import {
   GATEWAY_BIND_ADDRESS,
   WILDCARD_GATEWAY_BIND_ADDRESS,
   getGatewayConnectHost,
-  getGatewayHttpEndpoint,
   getGatewayHttpsEndpoint,
 } from "../core/gateway-address";
 import { GATEWAY_PORT } from "../core/ports";
 import { prepareDockerDriverGatewayConfigEnv } from "./docker-driver-gateway-config";
+import { buildDockerDriverGatewayLocalTlsEnv } from "./docker-driver-gateway-local-tls";
 import {
   hasOpenShellGatewayUserService,
   startPackageManagedDockerDriverGateway,
@@ -29,6 +29,7 @@ export const DOCKER_DRIVER_GATEWAY_RUNTIME_ENV_KEYS = [
   "OPENSHELL_SERVER_PORT",
   "OPENSHELL_DISABLE_TLS",
   "OPENSHELL_DISABLE_GATEWAY_AUTH",
+  "OPENSHELL_LOCAL_TLS_DIR",
   "OPENSHELL_DB_URL",
   "OPENSHELL_GRPC_ENDPOINT",
   "OPENSHELL_SSH_GATEWAY_HOST",
@@ -77,7 +78,7 @@ export function assertDockerDriverGatewayBindAddressSafe(gatewayEnv: Record<stri
 }
 
 export function getDockerDriverGatewayEndpoint(): string {
-  return getGatewayHttpEndpoint();
+  return getGatewayHttpsEndpoint();
 }
 
 export function warnIfGatewayWildcardBindAddress(): void {
@@ -97,7 +98,7 @@ export function buildDockerDriverGatewayEnv({
   const env: Record<string, string> = {
     OPENSHELL_DRIVERS: "docker",
     ...getGatewayStartNetworkEnv(),
-    OPENSHELL_DISABLE_TLS: "true",
+    ...buildDockerDriverGatewayLocalTlsEnv(stateDir),
     OPENSHELL_DB_URL: `sqlite:${path.join(stateDir, "openshell.db")}`,
     OPENSHELL_GRPC_ENDPOINT: getDockerDriverGatewayEndpoint(),
     OPENSHELL_DOCKER_NETWORK_NAME: dockerNetworkName,

@@ -10,6 +10,7 @@ import {
   buildDockerDriverGatewayConfigToml,
   prepareDockerDriverGatewayConfigEnv,
 } from "./docker-driver-gateway-config";
+import { buildDockerDriverGatewayLocalTlsEnv } from "./docker-driver-gateway-local-tls";
 
 const DEFAULT_COMPAT_IMAGE =
   "ubuntu:24.04@sha256:786a8b558f7be160c6c8c4a54f9a57274f3b4fb1491cf65146521ae77ff1dc54";
@@ -229,6 +230,9 @@ export function buildDockerDriverGatewayLaunch(
   options: BuildGatewayLaunchOptions,
 ): DockerDriverGatewayLaunch {
   const gatewayEnv = { ...options.gatewayEnv };
+  if (!gatewayEnv.OPENSHELL_LOCAL_TLS_DIR) {
+    Object.assign(gatewayEnv, buildDockerDriverGatewayLocalTlsEnv(options.stateDir));
+  }
   if (options.sandboxBin && !gatewayEnv.OPENSHELL_DOCKER_SUPERVISOR_BIN) {
     gatewayEnv.OPENSHELL_DOCKER_SUPERVISOR_BIN = options.sandboxBin;
   }
@@ -379,7 +383,7 @@ export function prepareAndLogDockerDriverGatewayLaunch(
     "  Compatibility gateway bind: 127.0.0.1 main listener plus OpenShell Docker-driver bridge reachability.",
   );
   log(
-    "  Gateway auth boundary: host-side OpenShell CLI user calls remain available; sandbox callbacks use OpenShell gateway JWT.",
+    "  Gateway auth boundary: host-side OpenShell CLI uses local mTLS; sandbox callbacks use mTLS plus OpenShell gateway JWT.",
   );
   prepareDockerDriverGatewayLaunch(launch);
 }

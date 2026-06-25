@@ -106,17 +106,29 @@ function gatewayIdForStateDir(stateDir: string): string {
   return leaf ? `nemoclaw-${leaf}` : "nemoclaw";
 }
 
+function gatewayLocalTlsDir(gatewayEnv: Record<string, string>): string {
+  const localTlsDir = gatewayEnv.OPENSHELL_LOCAL_TLS_DIR?.trim();
+  if (!localTlsDir) {
+    throw new Error("OpenShell Docker-driver gateway mTLS requires OPENSHELL_LOCAL_TLS_DIR");
+  }
+  return localTlsDir;
+}
+
 export function buildDockerDriverGatewayConfigToml(
   gatewayEnv: Record<string, string>,
   sandboxBin?: string | null,
   jwtBundle?: DockerDriverGatewayJwtBundle | null,
   gatewayId = "nemoclaw",
 ): string {
+  const localTlsDir = jwtBundle ? gatewayLocalTlsDir(gatewayEnv) : undefined;
   const dockerEntries: [string, string | undefined][] = [
     ["grpc_endpoint", gatewayEnv.OPENSHELL_GRPC_ENDPOINT],
     ["network_name", gatewayEnv.OPENSHELL_DOCKER_NETWORK_NAME],
     ["supervisor_image", gatewayEnv.OPENSHELL_DOCKER_SUPERVISOR_IMAGE],
     ["supervisor_bin", sandboxBin ?? undefined],
+    ["guest_tls_ca", localTlsDir ? path.join(localTlsDir, "ca.crt") : undefined],
+    ["guest_tls_cert", localTlsDir ? path.join(localTlsDir, "client", "tls.crt") : undefined],
+    ["guest_tls_key", localTlsDir ? path.join(localTlsDir, "client", "tls.key") : undefined],
   ];
   const dockerConfig = dockerEntries
     .filter(
@@ -131,14 +143,22 @@ export function buildDockerDriverGatewayConfigToml(
     "",
     "[openshell.gateway]",
     'compute_drivers = ["docker"]',
+    "disable_tls = false",
     "",
   ];
 
   if (jwtBundle) {
-    // OpenShell v0.0.67 still relies on the unauthenticated local-user fallback
-    // for host-side CLI calls such as sandbox list/delete. Keep that compatibility
-    // path while using gateway_jwt for sandbox supervisor callbacks.
+    const tlsDir = localTlsDir ?? gatewayLocalTlsDir(gatewayEnv);
     sections.push(
+      "[openshell.gateway.tls]",
+      `cert_path = ${tomlString(path.join(tlsDir, "server", "tls.crt"))}`,
+      `key_path = ${tomlString(path.join(tlsDir, "server", "tls.key"))}`,
+      `client_ca_path = ${tomlString(path.join(tlsDir, "ca.crt"))}`,
+      "require_client_auth = true",
+      "",
+      "[openshell.gateway.mtls_auth]",
+      "enabled = true",
+      "",
       "[openshell.gateway.gateway_jwt]",
       `signing_key_path = ${tomlString(jwtBundle.signingKeyPath)}`,
       `public_key_path = ${tomlString(jwtBundle.publicKeyPath)}`,
@@ -147,7 +167,7 @@ export function buildDockerDriverGatewayConfigToml(
       `ttl_secs = ${DOCKER_DRIVER_GATEWAY_JWT_TTL_SECS}`,
       "",
       "[openshell.gateway.auth]",
-      "allow_unauthenticated_users = true",
+      "allow_unauthenticated_users = false",
       "",
     );
   }
