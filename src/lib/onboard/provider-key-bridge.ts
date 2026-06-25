@@ -30,11 +30,9 @@ export function stageRouterProviderKeyBridge(routerCredentialEnv: string): void 
 export function stageBuildProviderKeyBridge(): void {
   const providerKeyHint = getProviderKeyBridgeHint();
   if (!isProviderKeyCredentialCandidate(providerKeyHint)) return;
-  const existingNvidiaKey =
-    resolveProviderCredential("NVIDIA_INFERENCE_API_KEY") ||
-    resolveProviderCredential("NVIDIA_API_KEY");
+  const existingNvidiaKey = resolveProviderCredential("NVIDIA_API_KEY");
   if (existingNvidiaKey) return;
-  process.env.NVIDIA_INFERENCE_API_KEY = providerKeyHint;
+  saveCredential("NVIDIA_API_KEY", providerKeyHint);
 }
 
 export function stageRemoteProviderKeyBridge(credentialEnv: string | null): void {

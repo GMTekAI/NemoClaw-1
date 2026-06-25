@@ -152,7 +152,7 @@ const canonicalTargetInputs: CanonicalTargetInput[] = [
     environment: ubuntuRepoDockerLifecycle("cloud-openclaw", "rebuild-current-version"),
     expectedStateId: "cloud-openclaw-ready",
     suiteIds: ["smoke", "rebuild", "upgrade"],
-    requiredSecrets: ["NVIDIA_INFERENCE_API_KEY"],
+    requiredSecrets: ["NVIDIA_API_KEY"],
   },
   {
     // Failing-test-first regression scaffold for #4423. After

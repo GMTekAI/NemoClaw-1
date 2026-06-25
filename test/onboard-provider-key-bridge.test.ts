@@ -160,6 +160,23 @@ describe("onboard provider-key compatibility bridges", () => {
   );
 
   it(
+    "copies credential-like NEMOCLAW_PROVIDER_KEY into the Build credential env",
+    testTimeoutOptions(90_000),
+    () => {
+      const payload = runSetupNimBridgeScenario({
+        NEMOCLAW_PROVIDER: "build",
+        NEMOCLAW_PROVIDER_KEY: "nvapi-build-fallback",
+      });
+
+      assert.equal(payload.outcome, "completed");
+      assert.equal(payload.result?.provider, "nvidia-prod");
+      assert.equal(payload.result?.credentialEnv, "NVIDIA_API_KEY");
+      assert.equal(payload.env.NVIDIA_API_KEY, "nvapi-build-fallback");
+      assert.equal(payload.env.NVIDIA_INFERENCE_API_KEY, null);
+    },
+  );
+
+  it(
     "does not copy selector-like NEMOCLAW_PROVIDER_KEY into the Build credential env",
     testTimeoutOptions(90_000),
     () => {
@@ -170,10 +187,10 @@ describe("onboard provider-key compatibility bridges", () => {
 
       assert.equal(payload.outcome, "exit");
       assert.equal(payload.exitCode, 1);
-      assert.equal(payload.env.NVIDIA_INFERENCE_API_KEY, null);
+      assert.equal(payload.env.NVIDIA_API_KEY, null);
       assert.ok(
         payload.lines.some((line) =>
-          line.includes("NVIDIA_INFERENCE_API_KEY (or NEMOCLAW_PROVIDER_KEY) is required"),
+          line.includes("NVIDIA_API_KEY (or NEMOCLAW_PROVIDER_KEY) is required"),
         ),
       );
     },

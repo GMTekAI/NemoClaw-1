@@ -1601,6 +1601,12 @@ function validateRebuildOpenClawJob(
     errors,
     "rebuild-openclaw job",
     jobEnv,
+    "NVIDIA_API_KEY",
+  );
+  requireEnvDoesNotExposeSecret(
+    errors,
+    "rebuild-openclaw job",
+    jobEnv,
     "NVIDIA_INFERENCE_API_KEY",
   );
 
@@ -1608,6 +1614,12 @@ function validateRebuildOpenClawJob(
   requireNoDispatchInputInterpolation(errors, steps);
   for (const step of steps) {
     if (step.name !== "Run OpenClaw rebuild live test") {
+      requireEnvDoesNotExposeSecret(
+        errors,
+        `rebuild-openclaw step '${step.name ?? step.uses ?? "<unnamed>"}'`,
+        asRecord(step.env),
+        "NVIDIA_API_KEY",
+      );
       requireEnvDoesNotExposeSecret(
         errors,
         `rebuild-openclaw step '${step.name ?? step.uses ?? "<unnamed>"}'`,
@@ -1698,12 +1710,9 @@ function validateRebuildOpenClawJob(
     "Run OpenClaw rebuild live test",
   );
   const runVitestEnv = asRecord(runVitest?.env);
-  if (
-    runVitestEnv.NVIDIA_INFERENCE_API_KEY !==
-    "${{ secrets.NVIDIA_INFERENCE_API_KEY }}"
-  ) {
+  if (runVitestEnv.NVIDIA_API_KEY !== "${{ secrets.NVIDIA_API_KEY }}") {
     errors.push(
-      "rebuild-openclaw step must receive NVIDIA_INFERENCE_API_KEY from secrets",
+      "rebuild-openclaw step must receive NVIDIA_API_KEY from secrets",
     );
   }
   requireRunContains(errors, runVitest, "OPENSHELL_BIN");

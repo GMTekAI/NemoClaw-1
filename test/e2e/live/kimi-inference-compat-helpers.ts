@@ -93,9 +93,7 @@ export function env(
       ...common,
       NEMOCLAW_E2E_INFERENCE_MODE: "public-nvidia",
       NEMOCLAW_PROVIDER: "cloud",
-      ...(options.includeSecret && options.apiKey
-        ? { NVIDIA_API_KEY: options.apiKey, NVIDIA_INFERENCE_API_KEY: options.apiKey }
-        : {}),
+      ...(options.includeSecret && options.apiKey ? { NVIDIA_API_KEY: options.apiKey } : {}),
       ...extra,
     };
   }

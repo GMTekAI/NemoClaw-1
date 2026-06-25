@@ -61,6 +61,7 @@ const {
 function withProviderEnv(next: Record<string, string | undefined>, testBody: () => void): void {
   const keys = new Set([
     "NVIDIA_INFERENCE_API_KEY",
+    "NVIDIA_API_KEY",
     "NEMOCLAW_AGENT",
     "NEMOCLAW_PROVIDER_KEY",
     "NEMOCLAW_PROVIDER",
@@ -285,9 +286,9 @@ describe("onboard provider helpers", () => {
     upsertProvider(
       "nvidia-prod",
       "openai",
-      "NVIDIA_INFERENCE_API_KEY",
+      "NVIDIA_API_KEY",
       null,
-      { NVIDIA_INFERENCE_API_KEY: "nvapi-staged" },
+      { NVIDIA_API_KEY: "nvapi-staged" },
       (command) => {
         commands.push(command.join(" "));
         return { status: 0, stdout: "", stderr: "" };
@@ -296,7 +297,7 @@ describe("onboard provider helpers", () => {
 
     expect(commands).toHaveLength(2);
     expect(commands[1]).toMatch(/^provider update nvidia-prod /);
-    expect(commands[1]).toMatch(/--credential NVIDIA_INFERENCE_API_KEY/);
+    expect(commands[1]).toMatch(/--credential NVIDIA_API_KEY/);
   });
 
   it("stages non-nvapi NVIDIA_INFERENCE_API_KEY as hosted custom inference", () => {

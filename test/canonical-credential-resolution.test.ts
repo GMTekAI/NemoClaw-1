@@ -150,30 +150,34 @@ describe("resolveProviderCredential — canonical credential resolution (#2306)"
     expect(fs.existsSync(legacyFile)).toBe(true);
   });
 
-  it("maps NVIDIA provider env to NVIDIA_INFERENCE_API_KEY for hosted-inference runs", async () => {
+  it("does not map NVIDIA provider env to hosted-inference env", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-2306-env-alias-"));
     tmpFixtures.push(tmpDir);
     delete process.env["NVIDIA_INFERENCE_API_KEY"];
     vi.stubEnv("NVIDIA_API_KEY", "nvapi-provider-env");
 
     const credentials = await importCredentialsModule(tmpDir);
-    const result = credentials.resolveProviderCredential("NVIDIA_INFERENCE_API_KEY");
+    const hostedResult = credentials.resolveProviderCredential("NVIDIA_INFERENCE_API_KEY");
+    const nvidiaResult = credentials.resolveProviderCredential("NVIDIA_API_KEY");
 
-    expect(result).toBe("nvapi-provider-env");
-    expect(process.env["NVIDIA_INFERENCE_API_KEY"]).toBe("nvapi-provider-env");
+    expect(hostedResult).toBeNull();
+    expect(process.env["NVIDIA_INFERENCE_API_KEY"]).toBeUndefined();
+    expect(nvidiaResult).toBe("nvapi-provider-env");
   });
 
-  it("maps NVIDIA provider credentials.json entries to NVIDIA_INFERENCE_API_KEY", async () => {
+  it("does not map NVIDIA provider credentials.json entries to hosted-inference env", async () => {
     const tmpDir = createFixtureHome("NVIDIA_API_KEY", "nvapi-provider-file");
     const legacyFile = path.join(tmpDir, ".nemoclaw", "credentials.json");
     delete process.env["NVIDIA_INFERENCE_API_KEY"];
     delete process.env["NVIDIA_API_KEY"];
 
     const credentials = await importCredentialsModule(tmpDir);
-    const result = credentials.resolveProviderCredential("NVIDIA_INFERENCE_API_KEY");
+    const hostedResult = credentials.resolveProviderCredential("NVIDIA_INFERENCE_API_KEY");
+    const nvidiaResult = credentials.resolveProviderCredential("NVIDIA_API_KEY");
 
-    expect(result).toBe("nvapi-provider-file");
-    expect(process.env["NVIDIA_INFERENCE_API_KEY"]).toBe("nvapi-provider-file");
+    expect(hostedResult).toBeNull();
+    expect(process.env["NVIDIA_INFERENCE_API_KEY"]).toBeUndefined();
+    expect(nvidiaResult).toBe("nvapi-provider-file");
     expect(process.env["NVIDIA_API_KEY"]).toBe("nvapi-provider-file");
     expect(fs.existsSync(legacyFile)).toBe(true);
   });

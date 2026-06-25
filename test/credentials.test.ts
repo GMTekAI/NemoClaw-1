@@ -779,9 +779,9 @@ createCredentialPromptHelpers(() => { throw new Error("unexpected exit"); }).rea
 
     const script = `
 const { ensureApiKey } = require(${JSON.stringify(path.join(import.meta.dirname, "..", "dist", "lib", "credentials", "store.js"))});
-delete process.env.NVIDIA_INFERENCE_API_KEY;
+delete process.env.NVIDIA_API_KEY;
 ensureApiKey()
-  .then(() => console.log('STAGED=' + process.env.NVIDIA_INFERENCE_API_KEY))
+  .then(() => console.log('STAGED=' + process.env.NVIDIA_API_KEY))
   .catch((err) => { console.error(err && err.stack ? err.stack : String(err)); process.exit(1); });
 `;
     const scriptFile = path.join(os.tmpdir(), `nemoclaw-ensure-api-key-${process.pid}.js`);
@@ -798,7 +798,7 @@ ${JSON.stringify(process.execPath)} ${JSON.stringify(scriptFile)} < "$pipe"
     try {
       result = spawnSync("bash", ["--noprofile", "--norc"], {
         encoding: "utf-8",
-        env: { ...process.env, NVIDIA_INFERENCE_API_KEY: "" },
+        env: { ...process.env, NVIDIA_API_KEY: "" },
         input: bash,
         timeout: 5000,
       });
@@ -819,15 +819,15 @@ ${JSON.stringify(process.execPath)} ${JSON.stringify(scriptFile)} < "$pipe"
   it("returns navigation from the NVIDIA API key prompt without staging it", () => {
     const script = `
 const { ensureApiKey } = require(${JSON.stringify(path.join(import.meta.dirname, "..", "dist", "lib", "credentials", "store.js"))});
-delete process.env.NVIDIA_INFERENCE_API_KEY;
+delete process.env.NVIDIA_API_KEY;
 ensureApiKey()
-  .then((result) => console.log(JSON.stringify({ result, key: process.env.NVIDIA_INFERENCE_API_KEY || null })))
+  .then((result) => console.log(JSON.stringify({ result, key: process.env.NVIDIA_API_KEY || null })))
   .catch((err) => { console.error(err && err.stack ? err.stack : String(err)); process.exit(1); });
 `;
     const result = spawnSync(process.execPath, ["-e", script], {
       encoding: "utf-8",
       input: "back\n",
-      env: { ...process.env, NVIDIA_INFERENCE_API_KEY: "" },
+      env: { ...process.env, NVIDIA_API_KEY: "" },
       timeout: 5000,
     });
 
@@ -839,15 +839,15 @@ ensureApiKey()
   it("returns exit from the NVIDIA API key prompt without staging it", () => {
     const script = `
 const { ensureApiKey } = require(${JSON.stringify(path.join(import.meta.dirname, "..", "dist", "lib", "credentials", "store.js"))});
-delete process.env.NVIDIA_INFERENCE_API_KEY;
+delete process.env.NVIDIA_API_KEY;
 ensureApiKey()
-  .then((result) => console.log(JSON.stringify({ result, key: process.env.NVIDIA_INFERENCE_API_KEY || null })))
+  .then((result) => console.log(JSON.stringify({ result, key: process.env.NVIDIA_API_KEY || null })))
   .catch((err) => { console.error(err && err.stack ? err.stack : String(err)); process.exit(1); });
 `;
     const result = spawnSync(process.execPath, ["-e", script], {
       encoding: "utf-8",
       input: "exit\n",
-      env: { ...process.env, NVIDIA_INFERENCE_API_KEY: "" },
+      env: { ...process.env, NVIDIA_API_KEY: "" },
       timeout: 5000,
     });
 

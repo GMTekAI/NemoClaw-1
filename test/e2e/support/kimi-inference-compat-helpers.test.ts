@@ -39,7 +39,7 @@ describe("Kimi inference compatibility mode selection", () => {
       },
     );
     expect(cfg.NVIDIA_API_KEY).toBe("nvapi-public-test-key");
-    expect(cfg.NVIDIA_INFERENCE_API_KEY).toBe("nvapi-public-test-key");
+    expect(cfg.NVIDIA_INFERENCE_API_KEY).toBeUndefined();
     expect(kimiOnboardEnv(undefined, "public-nvidia", "nvapi-public-test-key").NVIDIA_API_KEY).toBe(
       "nvapi-public-test-key",
     );

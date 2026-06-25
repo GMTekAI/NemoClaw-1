@@ -50,8 +50,7 @@ runConnectRlimitTest(
   "connect shell enforces sandbox rlimits through rebuilt OpenClaw runtime (#2173)",
   { timeout: LIVE_TIMEOUT_MS },
   async ({ artifacts, cleanup, host, secrets }) => {
-    const apiKey =
-      secrets.optional("NVIDIA_API_KEY") ?? secrets.required("NVIDIA_INFERENCE_API_KEY");
+    const apiKey = secrets.required("NVIDIA_API_KEY");
     const redactionValues = secrets.redactionValues([apiKey]);
     await artifacts.writeJson("target.json", {
       id: "sandbox-rlimits-connect",
@@ -95,7 +94,6 @@ runConnectRlimitTest(
         env: {
           ...buildAvailabilityProbeEnv(),
           NVIDIA_API_KEY: apiKey,
-          NVIDIA_INFERENCE_API_KEY: apiKey,
           NEMOCLAW_ACCEPT_THIRD_PARTY_SOFTWARE: "1",
           NEMOCLAW_AGENT: "openclaw",
           NEMOCLAW_POLICY_MODE: "suggested",

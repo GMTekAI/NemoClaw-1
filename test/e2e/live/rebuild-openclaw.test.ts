@@ -132,7 +132,7 @@ function dockerContextEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 
 function cliEnv(apiKey: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return dockerContextEnv({
-    NVIDIA_INFERENCE_API_KEY: apiKey,
+    NVIDIA_API_KEY: apiKey,
     NEMOCLAW_SANDBOX_NAME: SANDBOX_NAME,
     ...extra,
   });
@@ -201,9 +201,9 @@ async function configureGatewayInferenceRoute(
       [
         "set -euo pipefail",
         "if openshell provider get nvidia-prod >/dev/null 2>&1; then",
-        "  openshell provider update nvidia-prod --credential NVIDIA_INFERENCE_API_KEY",
+        "  openshell provider update nvidia-prod --credential NVIDIA_API_KEY",
         "else",
-        "  openshell provider create --name nvidia-prod --type nvidia --credential NVIDIA_INFERENCE_API_KEY",
+        "  openshell provider create --name nvidia-prod --type nvidia --credential NVIDIA_API_KEY",
         "fi",
         `openshell inference set --no-verify --provider nvidia-prod --model ${model}`,
       ].join("\n"),
@@ -256,7 +256,7 @@ function seedRegistryAndSession(): void {
     failure: null,
     provider: "nvidia-prod",
     model: DEFAULT_MODEL,
-    credentialEnv: "NVIDIA_INFERENCE_API_KEY",
+    credentialEnv: "NVIDIA_API_KEY",
     agent: null,
     steps: {
       preflight: complete,
@@ -342,7 +342,7 @@ function backupCredentialLeakPaths(backupDir: string, oldGatewayToken: string): 
 test.skipIf(!shouldRunLiveE2E())(
   "rebuild-openclaw: old OpenClaw sandbox rebuild preserves state and rotates gateway token",
   async ({ artifacts, cleanup, host, sandbox, secrets, skip }) => {
-    const apiKey = secrets.required("NVIDIA_INFERENCE_API_KEY");
+    const apiKey = secrets.required("NVIDIA_API_KEY");
     expect(
       fs.existsSync(CLI_ENTRYPOINT),
       "bin/nemoclaw.js missing — run npm ci && npm run build:cli before live rebuild coverage",
