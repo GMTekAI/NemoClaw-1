@@ -676,6 +676,30 @@ describe("verifySandboxBridgeGatewayReachableOrExit host-gateway retry", () => {
     }
   });
 
+  it("uses the bounded production retry budget when retry options are not overridden", async () => {
+    const reachabilityImpl = vi.fn().mockResolvedValue(hostGatewayTcpFailure);
+    const sleepMsImpl = vi.fn().mockResolvedValue(undefined);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await expect(
+        verifySandboxBridgeGatewayReachableOrExit(false, {
+          reachabilityImpl,
+          sleepMsImpl,
+        }),
+      ).rejects.toThrow("sandbox-bridge unreachable");
+      expect(reachabilityImpl).toHaveBeenCalledTimes(10);
+      expect(sleepMsImpl).toHaveBeenCalledTimes(9);
+      expect(sleepMsImpl).toHaveBeenCalledWith(1000);
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining("probe attempt 9/10 failed (tcp_failed)"),
+      );
+    } finally {
+      log.mockRestore();
+      error.mockRestore();
+    }
+  });
+
   it("does not retry bridge-gateway tcp failures so UFW remediation remains responsible", async () => {
     const bridgeGatewayTcpFailure = {
       ...hostGatewayTcpFailure,

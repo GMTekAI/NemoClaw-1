@@ -15,7 +15,6 @@ import os from "node:os";
 import { dockerCapture, dockerRun } from "../adapters/docker/run";
 import { GATEWAY_PORT } from "../core/ports";
 import { cliDisplayName, cliName } from "./branding";
-import { envInt } from "./env";
 import {
   DOCKER_DESKTOP_WSL_INTEGRATION_HINT,
   ensureProbeImageCached,
@@ -34,8 +33,6 @@ const HOST_INTERNAL_NAME = "host.openshell.internal";
 const HOST_DOCKER_INTERNAL_NAME = "host.docker.internal";
 const DEFAULT_PROBE_TIMEOUT_SEC = 5;
 const PROBE_RUN_OVERHEAD_MS = 10_000;
-const HOST_GATEWAY_RETRY_ATTEMPTS_ENV = "NEMOCLAW_GATEWAY_BRIDGE_RETRY_ATTEMPTS";
-const HOST_GATEWAY_RETRY_DELAY_MS_ENV = "NEMOCLAW_GATEWAY_BRIDGE_RETRY_DELAY_MS";
 const DEFAULT_HOST_GATEWAY_RETRY_ATTEMPTS = 10;
 const DEFAULT_HOST_GATEWAY_RETRY_DELAY_MS = 1000;
 
@@ -528,12 +525,8 @@ export async function verifySandboxBridgeGatewayReachableOrExit(
 
   let reach = await reachability();
   if (reach.ok) return;
-  const retryAttempts =
-    options.retryAttempts ??
-    envInt(HOST_GATEWAY_RETRY_ATTEMPTS_ENV, DEFAULT_HOST_GATEWAY_RETRY_ATTEMPTS);
-  const retryDelayMs =
-    options.retryDelayMs ??
-    envInt(HOST_GATEWAY_RETRY_DELAY_MS_ENV, DEFAULT_HOST_GATEWAY_RETRY_DELAY_MS);
+  const retryAttempts = options.retryAttempts ?? DEFAULT_HOST_GATEWAY_RETRY_ATTEMPTS;
+  const retryDelayMs = options.retryDelayMs ?? DEFAULT_HOST_GATEWAY_RETRY_DELAY_MS;
   const sleep = options.sleepMsImpl ?? sleepMs;
   for (
     let attempt = 2;
