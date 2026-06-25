@@ -189,6 +189,30 @@ extract_scope_request_id_from_output() {
   sed -nE 's/.*requestId: ([[:alnum:]_-]+).*/\1/p' | head -1
 }
 
+gateway_url_is_loopback() {
+  local url="${1:-}"
+  [[ "$url" == ws://127.0.0.1:* || "$url" == ws://localhost:* ]]
+}
+
+gateway_url_is_private_sandbox_interface() {
+  local url="${1:-}"
+  [[ "$url" =~ ^ws://10\. ]] \
+    || [[ "$url" =~ ^ws://172\.(1[6-9]|2[0-9]|3[0-1])\. ]] \
+    || [[ "$url" =~ ^ws://192\.168\. ]]
+}
+
+gateway_url_is_allowed() {
+  local url="${1:-}"
+  local allow_insecure_private_ws="${2:-}"
+  if gateway_url_is_loopback "$url"; then
+    return 0
+  fi
+  if gateway_url_is_private_sandbox_interface "$url" && [ "$allow_insecure_private_ws" = "1" ]; then
+    return 0
+  fi
+  return 1
+}
+
 device_state_json() {
   local output rc
   output=$(sandbox_exec_sh_script 60 '
@@ -429,10 +453,10 @@ approve_request() {
   local request_id="$1"
   local label="$2"
   local allow_already_approved="${3:-0}"
-  local output rc approve_json approved_id before_url before_port before_token after_url after_port after_token approve_env state_after_approve approved_after_approve pending_after_approve
+  local output rc approve_json approved_id before_url before_port before_token before_insecure_private_ws after_url after_port after_token after_insecure_private_ws approve_env state_after_approve approved_after_approve pending_after_approve
   output=$(sandbox_exec_sh_script 90 '
-	set -u
-	request_id="$1"
+		set -u
+		request_id="$1"
 	real_openclaw="$(command -v openclaw || true)"
 	if [ -z "$real_openclaw" ]; then
 	  echo "missing real openclaw binary" >&2
@@ -456,12 +480,13 @@ PROBESH
 	export NEMOCLAW_4462_REAL_OPENCLAW="$real_openclaw"
 	export NEMOCLAW_4462_APPROVE_ENV_LOG="$probe_log"
 	PATH="$probe_dir:$PATH"
-	printf "__URL_BEFORE__=%s\n" "${OPENCLAW_GATEWAY_URL-unset}"
-	printf "__PORT_BEFORE__=%s\n" "${OPENCLAW_GATEWAY_PORT-unset}"
-	printf "__TOKEN_BEFORE__=%s\n" "$([ "${OPENCLAW_GATEWAY_TOKEN+x}" = x ] && printf set || printf unset)"
-	set +e
-	approve_output="$(openclaw devices approve "$request_id" --json 2>&1)"
-	approve_rc=$?
+		printf "__URL_BEFORE__=%s\n" "${OPENCLAW_GATEWAY_URL-unset}"
+		printf "__PORT_BEFORE__=%s\n" "${OPENCLAW_GATEWAY_PORT-unset}"
+		printf "__TOKEN_BEFORE__=%s\n" "$([ "${OPENCLAW_GATEWAY_TOKEN+x}" = x ] && printf set || printf unset)"
+		printf "__INSECURE_PRIVATE_WS_BEFORE__=%s\n" "${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS-unset}"
+		set +e
+		approve_output="$(openclaw devices approve "$request_id" --json 2>&1)"
+		approve_rc=$?
 	set -e
 	printf "__APPROVE_RC__=%s\n" "$approve_rc"
 	printf "__APPROVE_OUTPUT_BEGIN__\n%s\n__APPROVE_OUTPUT_END__\n" "$approve_output"
@@ -470,12 +495,13 @@ PROBESH
 	else
 	  printf "__APPROVE_SUBPROCESS_ENV__=missing:missing:missing\n"
 	fi
-	printf "__URL_AFTER__=%s\n" "${OPENCLAW_GATEWAY_URL-unset}"
-	printf "__PORT_AFTER__=%s\n" "${OPENCLAW_GATEWAY_PORT-unset}"
-	printf "__TOKEN_AFTER__=%s\n" "$([ "${OPENCLAW_GATEWAY_TOKEN+x}" = x ] && printf set || printf unset)"
-	rm -rf "$probe_dir"
-	exit "$approve_rc"
-	' "$request_id" 2>&1)
+		printf "__URL_AFTER__=%s\n" "${OPENCLAW_GATEWAY_URL-unset}"
+		printf "__PORT_AFTER__=%s\n" "${OPENCLAW_GATEWAY_PORT-unset}"
+		printf "__TOKEN_AFTER__=%s\n" "$([ "${OPENCLAW_GATEWAY_TOKEN+x}" = x ] && printf set || printf unset)"
+		printf "__INSECURE_PRIVATE_WS_AFTER__=%s\n" "${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS-unset}"
+		rm -rf "$probe_dir"
+		exit "$approve_rc"
+		' "$request_id" 2>&1)
   rc=$?
   {
     printf '=== approve %s request=%s rc=%s ===\n' "$label" "$request_id" "$rc"
@@ -500,12 +526,14 @@ PROBESH
   before_url=$(sed -n 's/^__URL_BEFORE__=//p' <<<"$output" | tail -1)
   before_port=$(sed -n 's/^__PORT_BEFORE__=//p' <<<"$output" | tail -1)
   before_token=$(sed -n 's/^__TOKEN_BEFORE__=//p' <<<"$output" | tail -1)
+  before_insecure_private_ws=$(sed -n 's/^__INSECURE_PRIVATE_WS_BEFORE__=//p' <<<"$output" | tail -1)
   after_url=$(sed -n 's/^__URL_AFTER__=//p' <<<"$output" | tail -1)
   after_port=$(sed -n 's/^__PORT_AFTER__=//p' <<<"$output" | tail -1)
   after_token=$(sed -n 's/^__TOKEN_AFTER__=//p' <<<"$output" | tail -1)
+  after_insecure_private_ws=$(sed -n 's/^__INSECURE_PRIVATE_WS_AFTER__=//p' <<<"$output" | tail -1)
   approve_env=$(sed -n 's/^__APPROVE_SUBPROCESS_ENV__=//p' <<<"$output" | tail -1)
-  if [[ "$before_url" != ws://127.0.0.1:* ]] && [[ "$before_url" != ws://localhost:* ]]; then
-    fail "${label}: proxy env did not expose a loopback OPENCLAW_GATEWAY_URL before approve (${before_url:-empty})"
+  if ! gateway_url_is_allowed "$before_url" "$before_insecure_private_ws"; then
+    fail "${label}: proxy env did not expose an allowed OPENCLAW_GATEWAY_URL before approve (url=${before_url:-empty} insecure_private_ws=${before_insecure_private_ws:-empty})"
     return 1
   fi
   if [ -z "$before_port" ] || [ "$before_port" = "unset" ] || [ "$before_token" != "set" ]; then
@@ -518,6 +546,10 @@ PROBESH
   fi
   if [ "$after_port" != "$before_port" ] || [ "$after_token" != "$before_token" ]; then
     fail "${label}: devices approve leaked gateway port/token mutation into caller shell (port ${before_port} -> ${after_port}; token changed=$([ "$after_token" != "$before_token" ] && printf yes || printf no))"
+    return 1
+  fi
+  if [ "$after_insecure_private_ws" != "$before_insecure_private_ws" ]; then
+    fail "${label}: devices approve leaked insecure private WS marker mutation into caller shell (${before_insecure_private_ws:-empty} -> ${after_insecure_private_ws:-empty})"
     return 1
   fi
   if [ "$approve_env" != "unset:unset:unset" ]; then
@@ -840,6 +872,7 @@ fi
 # shellcheck source=/dev/null
 . /tmp/nemoclaw-proxy-env.sh
 printf "OPENCLAW_GATEWAY_URL=%s\n" "${OPENCLAW_GATEWAY_URL-unset}"
+printf "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=%s\n" "${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS-unset}"
 type openclaw 2>/dev/null | sed -n "1,12p"
 grep -F "unset OPENCLAW_GATEWAY_URL OPENCLAW_GATEWAY_PORT OPENCLAW_GATEWAY_TOKEN; command openclaw" /tmp/nemoclaw-proxy-env.sh >/dev/null \
   && echo "APPROVE_GUARD_PRESENT"
@@ -850,7 +883,9 @@ if [ "$guard_rc" -ne 0 ]; then
   fail "Could not source /tmp/nemoclaw-proxy-env.sh: ${guard_probe:0:400}"
   exit 1
 fi
-if grep -q '^OPENCLAW_GATEWAY_URL=ws://127\.0\.0\.1:' <<<"$guard_probe" \
+guard_url=$(sed -n 's/^OPENCLAW_GATEWAY_URL=//p' <<<"$guard_probe" | tail -1)
+guard_insecure_private_ws=$(sed -n 's/^OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=//p' <<<"$guard_probe" | tail -1)
+if gateway_url_is_allowed "$guard_url" "$guard_insecure_private_ws" \
   && grep -q '^APPROVE_GUARD_PRESENT$' <<<"$guard_probe"; then
   pass "proxy env preserves gateway URL and contains devices approve guard"
 else
