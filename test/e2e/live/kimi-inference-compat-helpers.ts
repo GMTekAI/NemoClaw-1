@@ -41,10 +41,6 @@ export function resolveKimiInferenceMode(env: NodeJS.ProcessEnv = process.env): 
       `NEMOCLAW_E2E_INFERENCE_MODE must be one of: mock, public-nvidia; got ${env.NEMOCLAW_E2E_INFERENCE_MODE}`,
     );
   }
-  // Temporary compatibility alias for legacy shell-lane invocations copied from
-  // test/e2e/test-kimi-inference-compat.sh. NEMOCLAW_E2E_INFERENCE_MODE is the
-  // canonical selector; remove this alias when the legacy shell lane retires.
-  if (env.NEMOCLAW_KIMI_USE_MOCK === "0") return "public-nvidia";
   return "mock";
 }
 

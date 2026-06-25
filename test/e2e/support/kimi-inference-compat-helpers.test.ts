@@ -71,7 +71,7 @@ describe("Kimi inference compatibility mode selection", () => {
     );
   });
 
-  it("keeps legacy NEMOCLAW_KIMI_USE_MOCK=0 as temporary public-nvidia alias", () => {
-    expect(resolveKimiInferenceMode({ NEMOCLAW_KIMI_USE_MOCK: "0" })).toBe("public-nvidia");
+  it("ignores the retired shell-lane NEMOCLAW_KIMI_USE_MOCK alias", () => {
+    expect(resolveKimiInferenceMode({ NEMOCLAW_KIMI_USE_MOCK: "0" })).toBe("mock");
   });
 });
