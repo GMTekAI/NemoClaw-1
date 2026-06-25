@@ -35,10 +35,8 @@ function prepareTargetCheckoutScript(): string {
   const step = workflow.jobs?.advise?.steps?.find(
     (entry) => entry.name === "Prepare target PR checkout",
   );
-  if (!step?.run) {
-    throw new Error("missing Prepare target PR checkout step");
-  }
-  return step.run;
+  expect(step?.run).toEqual(expect.any(String));
+  return step?.run as string;
 }
 
 function runPrepareTargetCheckout(env: {
