@@ -202,9 +202,39 @@ fi
 python3 - <<'"'"'PY'"'"'
 import json
 import os
+import re
 from pathlib import Path
 
 root = Path(os.environ.get("OPENCLAW_STATE_DIR") or "/sandbox/.openclaw") / "devices"
+
+SECRET_FIELD_RE = re.compile(
+    r"(?:^|[._-])(token|tokens|secret|secrets|credential|credentials|"
+    r"authorization|authorisation|auth|password|passwd|apikey|api_key|"
+    r"access_key|refresh|cookie|cookies|header|headers|bearer)(?:$|[._-])",
+    re.IGNORECASE,
+)
+SECRET_VALUE_RE = re.compile(
+    r"^(?:eyJ[A-Za-z0-9_-]{6,}|gh[pousr]_[A-Za-z0-9]{16,}|"
+    r"github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{12,}|"
+    r"nvapi-[A-Za-z0-9_-]{12,}|hf_[A-Za-z0-9]{16,}|"
+    r"AKIA[0-9A-Z]{12,}|ASIA[0-9A-Z]{12,}|xox[abprs]-[A-Za-z0-9-]{8,})"
+)
+REDACTED = "[REDACTED]"
+
+def redact(value):
+    if isinstance(value, dict):
+        clean = {}
+        for k, v in value.items():
+            if isinstance(k, str) and SECRET_FIELD_RE.search(k):
+                clean[k] = REDACTED
+            else:
+                clean[k] = redact(v)
+        return clean
+    if isinstance(value, list):
+        return [redact(item) for item in value]
+    if isinstance(value, str) and SECRET_VALUE_RE.match(value):
+        return REDACTED
+    return value
 
 def load(name):
     path = root / name
@@ -219,8 +249,8 @@ def load(name):
 pending = load("pending.json")
 paired = load("paired.json")
 print(json.dumps({
-    "pending": list(pending.values()),
-    "paired": list(paired.values()),
+    "pending": [redact(entry) for entry in pending.values()],
+    "paired": [redact(entry) for entry in paired.values()],
     "paths": {
         "pending": str(root / "pending.json"),
         "paired": str(root / "paired.json"),
