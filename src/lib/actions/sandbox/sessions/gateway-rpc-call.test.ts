@@ -119,4 +119,20 @@ describe("callOpenclawGateway", () => {
     expect(autoPairMock).toHaveBeenCalledTimes(1);
     expect(captureMock).toHaveBeenCalledTimes(1);
   });
+
+  it("rejects unsupported admin RPC methods before sandbox exec", () => {
+    expect(() =>
+      callOpenclawGateway({
+        sandboxName: "alpha",
+        method: "sandbox.delete",
+        params: { name: "alpha" },
+      }),
+    ).toThrow(/process\.exit:1/);
+
+    expect(autoPairMock).not.toHaveBeenCalled();
+    expect(captureMock).not.toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Unsupported OpenClaw sessions admin RPC method 'sandbox.delete'"),
+    );
+  });
 });

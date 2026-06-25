@@ -23,6 +23,7 @@ export interface GatewayCallResult<T extends GatewayCallPayload = GatewayCallPay
 
 const RETRYABLE_PAIRING_FAILURE =
   /scope upgrade pending|pairing required|device is not approved|GatewayClientRequestError/i;
+const SUPPORTED_GATEWAY_ADMIN_RPC_METHODS = new Set(["sessions.delete", "sessions.reset"]);
 
 const GATEWAY_ADMIN_RPC_SCRIPT = `
 import { Buffer } from "node:buffer";
@@ -111,9 +112,26 @@ function captureGatewayCall(opts: GatewayCallOptions) {
   );
 }
 
+function assertSupportedGatewayAdminRpcMethod(method: string): void {
+  if (SUPPORTED_GATEWAY_ADMIN_RPC_METHODS.has(method)) return;
+  // Source boundary: this helper is the host-side sessions admin bridge. It
+  // intentionally routes only the session reset/delete calls that need
+  // operator.admin while preserving the existing loopback token and auto-pair
+  // boundaries. Add new methods only with a caller and regression test.
+  console.error(
+    `  Unsupported OpenClaw sessions admin RPC method '${method}'. Supported methods: ${[
+      ...SUPPORTED_GATEWAY_ADMIN_RPC_METHODS,
+    ]
+      .sort()
+      .join(", ")}.`,
+  );
+  process.exit(1);
+}
+
 export function callOpenclawGateway<T extends GatewayCallPayload = GatewayCallPayload>(
   opts: GatewayCallOptions,
 ): GatewayCallResult<T> {
+  assertSupportedGatewayAdminRpcMethod(opts.method);
   // Drain allowlisted CLI/webchat pairing or scope-upgrade requests before
   // host-side gateway RPCs. The RPC itself uses OpenClaw's SDK in backend mode
   // with loopback + the shared gateway token, so sessions reset/delete do not

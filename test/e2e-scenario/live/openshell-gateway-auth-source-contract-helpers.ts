@@ -20,6 +20,8 @@ import type { HostCliClient } from "../fixtures/clients/index.ts";
 import { expect } from "../fixtures/e2e-test.ts";
 
 const SANDBOX_JWT_SUBJECT_PREFIX = "spiffe://openshell/sandbox/";
+const DOCKER_GRPC_PROBE_IMAGE =
+  "node:22-trixie-slim@sha256:2d9f5c76c8f4dd36e8f253bee5d828a83a6c09f36188f0b0414325232e0b175d";
 
 type SkipFn = (message?: string) => void;
 
@@ -339,7 +341,115 @@ req.end(Buffer.alloc(5));
     networkName,
     "--add-host",
     "host.openshell.internal:host-gateway",
-    "node:20-alpine",
+    DOCKER_GRPC_PROBE_IMAGE,
+    "node",
+    "-e",
+    script,
+  ]);
+}
+
+function sandboxTokenContainerProbe(options: {
+  authorization: string;
+  dockerBin: string;
+  networkName: string;
+  payload: Buffer;
+  port: number;
+  stateDir: string;
+}): SpawnResult {
+  const bundle = getDockerDriverGatewayLocalTlsBundle(options.stateDir);
+  const script = `
+const fs = require("node:fs");
+const http2 = require("node:http2");
+
+const port = process.env.PROBE_GATEWAY_PORT;
+const path = process.env.PROBE_GRPC_PATH;
+const authorization = process.env.PROBE_AUTHORIZATION;
+const payload = Buffer.from(process.env.PROBE_PAYLOAD_B64 || "", "base64");
+
+let settled = false;
+const done = (status, value) => {
+  if (settled) return;
+  settled = true;
+  console.log(JSON.stringify(value));
+  process.exit(status);
+};
+const grpcFrame = Buffer.alloc(5 + payload.length);
+grpcFrame.writeUInt8(0, 0);
+grpcFrame.writeUInt32BE(payload.length, 1);
+payload.copy(grpcFrame, 5);
+
+const endpoint = \`https://host.openshell.internal:\${port}\`;
+const client = http2.connect(endpoint, {
+  ca: fs.readFileSync(process.env.PROBE_CA_PATH),
+  cert: fs.readFileSync(process.env.PROBE_CLIENT_CERT_PATH),
+  key: fs.readFileSync(process.env.PROBE_CLIENT_KEY_PATH),
+  rejectUnauthorized: true,
+  servername: "host.openshell.internal"
+});
+const chunks = [];
+const result = { httpStatus: 0 };
+const timer = setTimeout(() => done(3, { error: "timeout" }), 5000);
+
+client.on("error", (error) => {
+  clearTimeout(timer);
+  done(2, { error: error.message });
+});
+const headers = {
+  ":method": "POST",
+  ":path": path,
+  ":scheme": "https",
+  ":authority": \`host.openshell.internal:\${port}\`,
+  "content-type": "application/grpc",
+  "te": "trailers"
+};
+if (authorization) headers.authorization = authorization;
+const req = client.request(headers);
+req.on("response", (headers) => {
+  result.httpStatus = Number(headers[":status"] || 0);
+  if (headers["grpc-status"]) result.grpcStatus = String(headers["grpc-status"]);
+  if (headers["grpc-message"]) result.grpcMessage = String(headers["grpc-message"]);
+});
+req.on("trailers", (headers) => {
+  if (headers["grpc-status"]) result.grpcStatus = String(headers["grpc-status"]);
+  if (headers["grpc-message"]) result.grpcMessage = String(headers["grpc-message"]);
+});
+req.on("data", (chunk) => chunks.push(chunk));
+req.on("error", (error) => {
+  clearTimeout(timer);
+  done(2, { error: error.message });
+});
+req.on("end", () => {
+  clearTimeout(timer);
+  client.close();
+  result.body = Buffer.concat(chunks).toString("base64");
+  done(0, result);
+});
+req.end(grpcFrame);
+`;
+  return run(options.dockerBin, [
+    "run",
+    "--rm",
+    "--network",
+    options.networkName,
+    "--add-host",
+    "host.openshell.internal:host-gateway",
+    "--volume",
+    `${path.resolve(options.stateDir)}:${path.resolve(options.stateDir)}:ro`,
+    "--env",
+    `PROBE_AUTHORIZATION=${options.authorization}`,
+    "--env",
+    "PROBE_GRPC_PATH=/openshell.v1.OpenShell/GetSandboxConfig",
+    "--env",
+    `PROBE_GATEWAY_PORT=${String(options.port)}`,
+    "--env",
+    `PROBE_PAYLOAD_B64=${options.payload.toString("base64")}`,
+    "--env",
+    `PROBE_CA_PATH=${bundle.caPath}`,
+    "--env",
+    `PROBE_CLIENT_CERT_PATH=${bundle.clientCertPath}`,
+    "--env",
+    `PROBE_CLIENT_KEY_PATH=${bundle.clientKeyPath}`,
+    DOCKER_GRPC_PROBE_IMAGE,
     "node",
     "-e",
     script,
@@ -476,7 +586,7 @@ export async function runOpenShellGatewayAuthSourceContractScenario({
       "NemoClaw-generated OPENSHELL_GATEWAY_CONFIG enables local mTLS and sandbox JWT auth",
       "inherited OPENSHELL_DISABLE_GATEWAY_AUTH is scrubbed before launch",
       "no-token Docker-origin access to user-callable gateway APIs is rejected or unreachable",
-      "valid sandbox JWT access to sandbox-allowlisted APIs reaches OpenShell auth",
+      "valid sandbox JWT access from Docker origin to sandbox-allowlisted APIs reaches OpenShell auth",
     ],
     gatewayBin,
     networkName,
@@ -524,6 +634,22 @@ export async function runOpenShellGatewayAuthSourceContractScenario({
   expect(sandboxCall.httpStatus, JSON.stringify(sandboxCall)).toBe(200);
   expect(sandboxCall.grpcStatus, JSON.stringify(sandboxCall)).toBeDefined();
   expect(["7", "16"]).not.toContain(sandboxCall.grpcStatus);
+
+  const sandboxContainerCall = sandboxTokenContainerProbe({
+    authorization: `Bearer ${sandboxToken}`,
+    dockerBin,
+    networkName,
+    payload: getSandboxConfigRequest(sandboxId),
+    port,
+    stateDir,
+  });
+  await artifacts.writeJson("sandbox-jwt-container-probe.json", sandboxContainerCall);
+  skipUnavailableProbeImage(sandboxContainerCall, skip);
+  expect(sandboxContainerCall.status, commandOutput(sandboxContainerCall)).toBe(0);
+  const sandboxContainerResult = JSON.parse(sandboxContainerCall.stdout.trim()) as GrpcResult;
+  expect(sandboxContainerResult.httpStatus, JSON.stringify(sandboxContainerResult)).toBe(200);
+  expect(sandboxContainerResult.grpcStatus, JSON.stringify(sandboxContainerResult)).toBeDefined();
+  expect(["7", "16"]).not.toContain(sandboxContainerResult.grpcStatus);
 
   await artifacts.writeText("openshell-gateway.log", gatewayLog);
 }

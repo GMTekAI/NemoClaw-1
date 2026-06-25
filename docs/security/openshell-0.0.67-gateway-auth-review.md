@@ -4,6 +4,22 @@ Review date: 2026-06-24
 
 Scope: NemoClaw Docker-driver gateway config generated for OpenShell `0.0.67`.
 
+## Source-of-Truth Boundaries
+
+- OpenShell gateway auth source contract: invalid state is an OpenShell `0.0.67` Docker-driver gateway launched from NemoClaw without the upstream config-file auth policy, local mTLS bundle, sandbox JWT bundle, or Docker bridge callback route that OpenShell expects. Source boundary is upstream OpenShell config/auth/listener/Docker-driver behavior; NemoClaw only generates config, local TLS/JWT material, bind policy, and launch env. Regression coverage is the live `openshell-gateway-auth-source-contract` scenario plus local config/env/launch tests. Remove the NemoClaw-local compatibility notes when OpenShell exposes a stable SDK/config contract that makes this generated config surface unnecessary.
+- Markerless sandbox gateway recovery output: invalid state is newer OpenShell sandbox exec/relaunch output that starts the gateway launcher but omits NemoClaw's legacy `GATEWAY_PID=` or `ALREADY_RUNNING` markers. Source boundary is OpenShell exec/recovery output format; NemoClaw treats the text as "may have started" only and still requires a healthy gateway probe. Regression coverage lives in `test/cli/connect-recovery-markerless.test.ts`. Remove the markerless heuristic when OpenShell provides a stable machine-readable recovery marker.
+- Sessions admin gateway RPC helper: invalid state is a host CLI session reset/delete action that needs OpenClaw backend/operator scope while preserving gateway token, loopback, and auto-pair boundaries. Source boundary is OpenClaw's gateway-runtime API; NemoClaw's helper is limited to `sessions.reset` and `sessions.delete`. Regression coverage lives in `src/lib/actions/sandbox/sessions/gateway-rpc-call.test.ts`. Add new methods only with a caller, allowlist entry, and negative test.
+
+## Acceptance Mapping
+
+Issue #5591 is the dependency-update umbrella. Its literal proposed-design clauses map across the split dependency PRs:
+
+- `Latest stable version of Hermes`: handled by PR #5594 (`dep/hermes-v2026.6.19`), not by this OpenShell PR.
+- `Latest version of OpenShell`: this PR pins and validates OpenShell `0.0.67`.
+- `Latest stable version of OpenClaw`: handled by PR #5595 (`dep/openclaw-2026.6.9`), not by this OpenShell PR.
+
+Issue #2478 is not an acceptance target for this OpenShell version-pin PR. Its crash-loop clauses include "Every time it boots, it crashes on the same line" and "`connect` doesn't auto-recover" because `@homebridge/ciao` calls `os.networkInterfaces()` under sandbox netlink restrictions. The source fix remains the existing guard-chain/preload work validated by `test/e2e-scenario/live/issue-2478-crash-loop-recovery.test.ts`. This PR only updates markerless recovery wrapper behavior: newer OpenShell relaunch output can be accepted after, and only after, the gateway health probe succeeds.
+
 ## Source Review
 
 Reviewed upstream source at `NVIDIA/OpenShell@v0.0.67` (`ce788b50f9b1f977a4327e4484c5b663013dd9a5`):
@@ -32,7 +48,7 @@ Package-managed Docker-driver gateways also reject `NEMOCLAW_GATEWAY_BIND_ADDRES
 `test/e2e-scenario/live/openshell-gateway-auth-source-contract.test.ts` is the live/source-contract scenario for this PR. It uses OpenShell 0.0.67 plus NemoClaw-generated `OPENSHELL_GATEWAY_CONFIG` and verifies:
 
 - no-token Docker sandbox-origin access to a user-callable gateway API is rejected or unreachable;
-- valid sandbox JWT access to an allowlisted sandbox method reaches OpenShell auth and is not rejected as unauthenticated or cross-sandbox;
+- valid sandbox JWT access from Docker origin to an allowlisted sandbox method reaches OpenShell auth over `host.openshell.internal` with the generated guest mTLS material, and is not rejected as unauthenticated or cross-sandbox;
 - inherited `OPENSHELL_DISABLE_GATEWAY_AUTH=true` remains scrubbed from the launch env.
 
 Local run against `NVIDIA/OpenShell@v0.0.67`:

@@ -193,6 +193,14 @@ describe("docker-driver-gateway-config", () => {
     );
     expect(reviewNote).toContain("reject `NEMOCLAW_GATEWAY_BIND_ADDRESS=0.0.0.0`");
     expect(reviewNote).toContain("host-side OpenShell CLI user calls use local mTLS");
+    expect(reviewNote).toContain("Source-of-Truth Boundaries");
+    expect(reviewNote).toContain("OpenShell gateway auth source contract");
+    expect(reviewNote).toContain("Markerless sandbox gateway recovery output");
+    expect(reviewNote).toContain("Sessions admin gateway RPC helper");
+    expect(reviewNote).toContain("Issue #5591 is the dependency-update umbrella");
+    expect(reviewNote).toContain("this PR pins and validates OpenShell `0.0.67`");
+    expect(reviewNote).toContain("Issue #2478 is not an acceptance target");
+    expect(reviewNote).toContain("valid sandbox JWT access from Docker origin");
   });
 
   it("writes OpenShell 0.0.67 gateway JWT config into the managed state dir", () => {
