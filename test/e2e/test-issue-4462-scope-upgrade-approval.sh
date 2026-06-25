@@ -494,8 +494,12 @@ approve_gateway_request() {
 		printf "__PORT_BEFORE__=%s\n" "${OPENCLAW_GATEWAY_PORT-unset}"
 		printf "__TOKEN_BEFORE__=%s\n" "$([ "${OPENCLAW_GATEWAY_TOKEN+x}" = x ] && printf set || printf unset)"
 		printf "__INSECURE_PRIVATE_WS_BEFORE__=%s\n" "${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS-unset}"
+		if [ -z "${OPENCLAW_GATEWAY_TOKEN:-}" ]; then
+		  echo "missing OPENCLAW_GATEWAY_TOKEN for gateway-backed approval" >&2
+		  exit 2
+		fi
 		set +e
-		approve_output="$(command openclaw devices approve "$request_id" --json 2>&1)"
+		approve_output="$(command openclaw devices approve "$request_id" --json --token "$OPENCLAW_GATEWAY_TOKEN" 2>&1)"
 		approve_rc=$?
 		set -e
 		printf "__APPROVE_RC__=%s\n" "$approve_rc"
