@@ -128,6 +128,8 @@ classDiagram
     +readPlanFromEnv(options)
     +listHookRequests(plan, phase)
     +applyHooksForPhase(plan, phase, options)
+    +applyPreEnableChecks(plan, options)
+    +applyHealthChecks(plan, options)
     +applyCredentialsAtOpenShell(plan, options)
     +applyPolicyAtOpenShell(plan, options)
     +applyAgentConfigAtOpenShell(plan, options)
@@ -487,7 +489,7 @@ Add the channel through the manifest-first path.
 - Secret values must remain outside manifests and persisted plans.
 - Hook handlers are resolved by stable string IDs and should be injected in tests.
 - Hook output declarations must exist before code consumes the output.
-- Agent render and hook build-file targets must stay inside `/sandbox/.openclaw` or `/sandbox/.hermes`.
+- Agent render and hook build-file targets must stay inside `/sandbox/.openclaw`, `/sandbox/.hermes`, or `/sandbox/.deepagents`.
 - Disabled channels must be filtered before side effects run.
 - Rebuild should hydrate compacted or missing derived fields from current manifests instead of trusting stale persisted render, package, host-forward, runtime, or hook data.
 - Rebuild preserves non-empty persisted `networkPolicy` entries and regenerates policy only when entries are absent or empty.
