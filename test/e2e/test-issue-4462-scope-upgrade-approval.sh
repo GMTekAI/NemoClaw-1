@@ -797,7 +797,7 @@ PROBESH
 
 legacy_gateway_pinned_approval_characterization() {
   local request_id="$1"
-  local output legacy_rc before_url legacy_approve_output legacy_failure_request_id state pending_after approved_after recovery_request_id
+  local output legacy_rc before_url before_insecure_private_ws legacy_approve_output legacy_failure_request_id state pending_after approved_after recovery_request_id
   output=$(sandbox_exec_sh_script 90 '
 set -u
 request_id="$1"
@@ -808,6 +808,7 @@ fi
 # shellcheck source=/dev/null
 . /tmp/nemoclaw-proxy-env.sh
 printf "__URL_FOR_LEGACY_APPROVE__=%s\n" "${OPENCLAW_GATEWAY_URL-unset}"
+printf "__INSECURE_PRIVATE_WS_FOR_LEGACY_APPROVE__=%s\n" "${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS-unset}"
 OPENCLAW_4462_REQUEST_ID="$request_id" python3 - <<'"'"'PY'"'"'
 import os
 import subprocess
@@ -847,8 +848,9 @@ exit 0
     printf '%s\n' "$output"
   } >>"$APPROVAL_LOG"
   before_url=$(sed -n 's/^__URL_FOR_LEGACY_APPROVE__=//p' <<<"$output" | tail -1)
-  if [[ "$before_url" != ws://127.0.0.1:* ]] && [[ "$before_url" != ws://localhost:* ]]; then
-    fail "legacy characterization did not run with gateway URL pinned (${before_url:-empty})"
+  before_insecure_private_ws=$(sed -n 's/^__INSECURE_PRIVATE_WS_FOR_LEGACY_APPROVE__=//p' <<<"$output" | tail -1)
+  if ! gateway_url_is_allowed "$before_url" "$before_insecure_private_ws"; then
+    fail "legacy characterization did not run with an allowed gateway URL pinned (${before_url:-empty} insecure_private_ws=${before_insecure_private_ws:-empty})"
     return 1
   fi
   legacy_rc=$(sed -n 's/^__LEGACY_APPROVE_RC__=//p' <<<"$output" | tail -1)
