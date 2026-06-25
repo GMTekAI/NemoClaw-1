@@ -680,7 +680,7 @@ describe("built-in channel manifests", () => {
     expect(tenantId.envAliases).toEqual(["TEAMS_TENANT_ID"]);
     expect(allowedUsers.envKey).toBe("TEAMS_ALLOWED_USERS");
     expect(allowedUsers.envAliases).toEqual(["MSTEAMS_ALLOWED_USERS"]);
-    expect(allowedUsers.required).toBe(true);
+    expect(allowedUsers.required).toBe(false);
     expect(webhookPort.envKey).toBe("MSTEAMS_PORT");
     expect(webhookPort.envAliases).toEqual(["TEAMS_PORT"]);
     expect(webhookPort).toMatchObject({ kind: "config", defaultValue: "3978" });
@@ -747,7 +747,6 @@ describe("built-in channel manifests", () => {
         {
           id: "allowedUsers",
           kind: "config",
-          required: true,
         },
         {
           id: "webhookPort",

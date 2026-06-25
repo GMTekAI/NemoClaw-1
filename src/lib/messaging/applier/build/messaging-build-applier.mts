@@ -7,10 +7,17 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
+import { discordManifest } from "../../channels/discord/manifest.ts";
+import { slackManifest } from "../../channels/slack/manifest.ts";
+import { teamsManifest } from "../../channels/teams/manifest.ts";
+import { telegramManifest } from "../../channels/telegram/manifest.ts";
+import { wechatManifest } from "../../channels/wechat/manifest.ts";
+import { whatsappManifest } from "../../channels/whatsapp/manifest.ts";
+import type { ChannelManifest } from "../../manifest/types.ts";
 
 type Env = Record<string, string | undefined>;
 type JsonObject = Record<string, any>;
-type MessagingAgentId = "openclaw" | "hermes";
+type MessagingAgentId = "openclaw" | "hermes" | "langchain-deepagents-code";
 type MessagingHookPhase = "agent-install" | "post-agent-install";
 type MessagingRuntimeSetupKey = "nodePreloads" | "envAliases" | "secretScans";
 type MessagingSerializableValue =
@@ -111,6 +118,15 @@ type OpenClawPluginInstall = {
 type HermesUvPackageInstall = {
   readonly spec: string;
 };
+
+const TRUSTED_CHANNEL_MANIFESTS: readonly ChannelManifest[] = [
+  telegramManifest,
+  discordManifest,
+  wechatManifest,
+  slackManifest,
+  whatsappManifest,
+  teamsManifest,
+] as const;
 
 function isPinnedHermesUvPackageSpec(spec: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9_.-]*(?:\[[A-Za-z0-9][A-Za-z0-9_.-]*(?:,[A-Za-z0-9][A-Za-z0-9_.-]*)*\])?==[A-Za-z0-9][A-Za-z0-9_.!+~-]*$/.test(
@@ -449,6 +465,7 @@ function collectHermesMessagingUvPackageInstalls(
 ): HermesUvPackageInstall[] {
   const installs: HermesUvPackageInstall[] = [];
   const seen = new Set<string>();
+  const trustedSpecs = trustedHermesUvPackageSpecsForPlan(plan);
   for (const step of enabledBuildStepsForPhase(plan, "agent-install")) {
     if (step.kind !== "package-install") continue;
     if (step.value === undefined) {
@@ -460,11 +477,43 @@ function collectHermesMessagingUvPackageInstalls(
       continue;
     }
     const install = readHermesUvPipPackageInstall(step.value, step.outputId);
+    if (!trustedSpecs.has(install.spec)) {
+      throw new MessagingBuildApplierError(
+        `Messaging package-install output ${step.outputId} is not declared by a trusted built-in manifest for active Hermes channels: ${install.spec}`,
+      );
+    }
     if (seen.has(install.spec)) continue;
     seen.add(install.spec);
     installs.push(install);
   }
   return installs;
+}
+
+/**
+ * Security boundary: NEMOCLAW_MESSAGING_PLAN_B64 is a derived build artifact,
+ * not authority to choose root-time Hermes packages. Invalid state: a serialized
+ * plan contains a hermes-uv-pip package spec absent from the trusted built-in
+ * manifest for a selected active channel. Source fix: update the channel
+ * manifest's agentPackages, not the serialized plan/env. Remove this recheck
+ * only once package installs are no longer serialized or plans are signed and
+ * attested at the Docker build boundary.
+ */
+function trustedHermesUvPackageSpecsForPlan(plan: MessagingBuildPlan | null): Set<string> {
+  const active = new Set(activeChannels(plan));
+  const specs = new Set<string>();
+  for (const manifest of TRUSTED_CHANNEL_MANIFESTS) {
+    if (!active.has(manifest.id)) continue;
+    for (const packageSpec of manifest.agentPackages ?? []) {
+      if (packageSpec.agent !== "hermes" || packageSpec.manager !== "hermes-uv-pip") continue;
+      if (!isPinnedHermesUvPackageSpec(packageSpec.spec)) {
+        throw new MessagingBuildApplierError(
+          `Trusted manifest ${manifest.id} declares an unsafe Hermes Python package spec: ${packageSpec.spec}`,
+        );
+      }
+      specs.add(packageSpec.spec);
+    }
+  }
+  return specs;
 }
 
 export function openClawDoctorEnvOverrides(
@@ -643,7 +692,12 @@ function resolveAgentRenderTarget(
   options: { readonly homeDir?: string } = {},
 ): string {
   const home = options.homeDir ?? homedir();
-  const agentRoot = agent === "hermes" ? join(home, ".hermes") : join(home, ".openclaw");
+  const agentRoot =
+    agent === "hermes"
+      ? join(home, ".hermes")
+      : agent === "langchain-deepagents-code"
+        ? join(home, ".deepagents")
+        : join(home, ".openclaw");
   const normalizedRoot = resolve(agentRoot);
   if (agent === "openclaw" && target === "openclaw.json") {
     return join(agentRoot, "openclaw.json");
@@ -664,6 +718,14 @@ function resolveAgentRenderTarget(
       );
     }
     relativePath = target.slice("~/.hermes/".length);
+  }
+  if (target.startsWith("~/.deepagents/")) {
+    if (agent !== "langchain-deepagents-code") {
+      throw new MessagingBuildApplierError(
+        `Messaging render target ${target} does not match ${agent}.`,
+      );
+    }
+    relativePath = target.slice("~/.deepagents/".length);
   }
   if (relativePath !== null) {
     const resolvedTarget = resolve(agentRoot, relativePath);
@@ -730,10 +792,13 @@ function applyBuildFileOutputToLocalAgentRoot(
   file: BuildFileOutput,
   options: { readonly homeDir?: string } = {},
 ): string {
+  const home = options.homeDir ?? homedir();
   const root =
     agent === "hermes"
-      ? join(options.homeDir ?? homedir(), ".hermes")
-      : join(options.homeDir ?? homedir(), ".openclaw");
+      ? join(home, ".hermes")
+      : agent === "langchain-deepagents-code"
+        ? join(home, ".deepagents")
+        : join(home, ".openclaw");
   const relativePath = normalizeBuildFilePath(file.path);
   const target = resolve(root, relativePath);
   const normalizedRoot = resolve(root);
@@ -1481,8 +1546,12 @@ function parseMessagingBuildArgs(argv: readonly string[]): {
 }
 
 function readAgentArg(value: string | undefined): MessagingAgentId {
-  if (value === "openclaw" || value === "hermes") return value;
-  throw new MessagingBuildApplierError("--agent must be 'openclaw' or 'hermes'");
+  if (value === "openclaw" || value === "hermes" || value === "langchain-deepagents-code") {
+    return value;
+  }
+  throw new MessagingBuildApplierError(
+    "--agent must be 'openclaw', 'hermes', or 'langchain-deepagents-code'",
+  );
 }
 
 function readPhaseArg(value: string | undefined): MessagingBuildPhase {

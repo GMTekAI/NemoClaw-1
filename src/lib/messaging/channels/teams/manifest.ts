@@ -55,7 +55,7 @@ export const teamsManifest = {
     {
       id: "allowedUsers",
       kind: "config",
-      required: true,
+      required: false,
       envKey: "TEAMS_ALLOWED_USERS",
       envAliases: ["MSTEAMS_ALLOWED_USERS"],
       statePath: "allowedIds.teams",
@@ -282,7 +282,6 @@ export const teamsManifest = {
         {
           id: "allowedUsers",
           kind: "config",
-          required: true,
         },
         {
           id: "webhookPort",

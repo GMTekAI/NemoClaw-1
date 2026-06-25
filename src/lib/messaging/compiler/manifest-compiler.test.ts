@@ -551,7 +551,7 @@ describe("ManifestCompiler", () => {
     expect(JSON.stringify(plan.agentRender)).toContain('"requireMention":true');
   });
 
-  it("keeps Microsoft Teams disabled when no explicit user allowlist is provided", async () => {
+  it("keeps Microsoft Teams active when no explicit user allowlist is provided", async () => {
     const plan = await withEnv(
       {
         MSTEAMS_APP_ID: "test-teams-app-id",
@@ -572,11 +572,14 @@ describe("ManifestCompiler", () => {
     );
 
     expect(plan.channels.find((channel) => channel.channelId === "teams")).toMatchObject({
-      active: false,
+      active: true,
       configured: true,
-      disabled: true,
+      disabled: false,
     });
-    expect(JSON.stringify(plan.agentRender)).not.toContain("channels.msteams");
+    expect(JSON.stringify(plan.agentRender)).toContain("channels.msteams");
+    expect(JSON.stringify(plan.agentRender)).toContain('"groupPolicy":"open"');
+    expect(JSON.stringify(plan.agentRender)).not.toContain("dmPolicy");
+    expect(JSON.stringify(plan.agentRender)).not.toContain("allowFrom");
   });
 
   it("uses the configured Microsoft Teams webhook port for host forwarding", async () => {
@@ -1386,5 +1389,18 @@ describe("ManifestCompiler", () => {
     );
     expect(hookCalls).toEqual(["enroll", "reachability:!room:example.com"]);
     expect(JSON.stringify(plan)).not.toContain("raw-matrix-token");
+  });
+
+  it("treats supportedChannelIds: [] as deny-all and reports the requested channel as missing", async () => {
+    await expect(
+      compiler().compile({
+        sandboxName: "demo",
+        agent: "openclaw",
+        workflow: "onboard",
+        isInteractive: false,
+        configuredChannels: ["telegram"],
+        supportedChannelIds: [],
+      }),
+    ).rejects.toThrow("Missing messaging channel manifest(s): telegram");
   });
 });

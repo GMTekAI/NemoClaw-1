@@ -49,11 +49,13 @@ import type {
 import {
   createBuiltInChannelManifestRegistry,
   createBuiltInRenderTemplateResolver,
+  isMessagingSupportedAgent,
   MessagingSetupApplier,
   MessagingWorkflowPlanner,
-  toMessagingAgentId,
+  tryGetMessagingAgentId,
 } from "../../messaging";
 import { hydrateMessagingChannelConfig } from "../../messaging-channel-config";
+import { markLastStartedStepFailed } from "../../onboard/exit-step-failure";
 import { getStoredMessagingChannelConfig } from "../../onboard/messaging-config";
 import { pruneDisabledMessagingPolicyPresets } from "../../onboard/messaging-policy-presets";
 import * as policies from "../../policy";
@@ -70,15 +72,16 @@ import {
   getActiveSandboxSessions,
 } from "../../state/sandbox-session";
 import { removeSandboxRegistryEntry } from "./destroy";
+import { ensureMessagingHostForwardAfterRebuild } from "./messaging-host-forward-lifecycle";
 import { executeSandboxCommand } from "./process-recovery";
-import { buildRebuildRecreateOnboardOpts } from "./rebuild-gpu-opt-out";
 import {
   backupSandboxStateForRebuild,
   ensureRebuildAgentBaseImage,
   openRebuildShieldsWindowForState,
-  resolveRebuildLiveState,
   type RebuildSandboxEntry,
+  resolveRebuildLiveState,
 } from "./rebuild-flow-helpers";
+import { buildRebuildRecreateOnboardOpts } from "./rebuild-gpu-opt-out";
 import { printRebuildShieldsRecovery, relockRebuildShieldsWindow } from "./rebuild-shields";
 
 export function buildRefreshMutableOpenClawConfigHashCommand(
@@ -225,13 +228,28 @@ function preflightHermesProviderCredentials(
   return false;
 }
 
-async function stageMessagingManifestPlanForRebuild(
+export async function stageMessagingManifestPlanForRebuild(
   sandboxName: string,
   sandboxEntry: registry.SandboxEntry,
   rebuildAgent: string | null,
   log: (msg: string) => void,
 ): Promise<SandboxMessagingPlan | null> {
   const agent = loadAgent(rebuildAgent || "openclaw");
+  const agentId = tryGetMessagingAgentId(agent);
+  if (agentId === null) {
+    MessagingSetupApplier.clearPlanEnv();
+    log(
+      `Messaging manifest rebuild plan skipped: agent '${agent.name}' is not a messaging-capable runtime`,
+    );
+    return null;
+  }
+  if (!isMessagingSupportedAgent(agent)) {
+    MessagingSetupApplier.clearPlanEnv();
+    log(
+      `Messaging manifest rebuild plan skipped: agent '${agent.name}' declares no supported messaging channels`,
+    );
+    return null;
+  }
   const planner = new MessagingWorkflowPlanner(
     createBuiltInChannelManifestRegistry(),
     undefined,
@@ -239,7 +257,7 @@ async function stageMessagingManifestPlanForRebuild(
   );
   const plan = await planner.buildRebuildPlanFromSandboxEntry({
     sandboxName,
-    agent: toMessagingAgentId(agent),
+    agent: agentId,
     sandboxEntry,
     supportedChannelIds: agent.messagingPlatforms,
   });
@@ -840,10 +858,7 @@ export async function rebuildSandbox(
         /* best effort */
       }
       try {
-        const failedStep = onboardSession.loadSession()?.lastStepStarted;
-        if (failedStep) {
-          onboardSession.markStepFailed(failedStep, "Rebuild recreate failed");
-        }
+        markLastStartedStepFailed(onboardSession, "Rebuild recreate failed");
       } catch {
         /* best effort */
       }
@@ -1006,6 +1021,7 @@ export async function rebuildSandbox(
     // gateway-side config writes, so the final result is downgraded below.
     let mutablePermsRepairUnverified = false;
     let mutableConfigHashRefreshUnverified = false;
+    let messagingHostForwardUnverified = false;
     if (agentDef.name === "openclaw") {
       // openclaw doctor --fix validates and repairs directory structure.
       // Idempotent and safe — catches structural changes between OpenClaw versions
@@ -1098,9 +1114,17 @@ export async function rebuildSandbox(
     log(`Registry updated: agentVersion=${agentDef.expectedVersion}`);
 
     if (!relockShieldsIfNeeded(true)) return bail("Failed to re-apply shields lockdown.");
+    if (!ensureMessagingHostForwardAfterRebuild(sandboxName, rebuildMessagingPlan)) {
+      messagingHostForwardUnverified = true;
+    }
 
     console.log("");
-    if (restoreSucceeded && !mutablePermsRepairUnverified && !mutableConfigHashRefreshUnverified) {
+    if (
+      restoreSucceeded &&
+      !mutablePermsRepairUnverified &&
+      !mutableConfigHashRefreshUnverified &&
+      !messagingHostForwardUnverified
+    ) {
       console.log(`  ${G}\u2713${R} Sandbox '${sandboxName}' rebuilt successfully`);
       if (staleRecovery) {
         console.log(
@@ -1131,6 +1155,11 @@ export async function rebuildSandbox(
       if (mutableConfigHashRefreshUnverified) {
         console.log(
           `    Mutable OpenClaw config hash was not refreshed \u2014 restart the sandbox or re-run \`${CLI_NAME} ${sandboxName} rebuild\` before relying on config integrity checks`,
+        );
+      }
+      if (messagingHostForwardUnverified) {
+        console.log(
+          `    Messaging webhook forward was not verified \u2014 run \`${CLI_NAME} ${sandboxName} connect\` after resolving the port conflict`,
         );
       }
     }
