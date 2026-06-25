@@ -524,8 +524,6 @@ const { printDockerDaemonRecovery, reportLegacyGatewayStartResultFailure } =
 const dockerDriverGatewayEnv: typeof import("./onboard/docker-driver-gateway-env") =
   require("./onboard/docker-driver-gateway-env");
 const { getDockerDriverGatewayEndpoint } = dockerDriverGatewayEnv;
-const dockerDriverGatewayLocalTls: typeof import("./onboard/docker-driver-gateway-local-tls") =
-  require("./onboard/docker-driver-gateway-local-tls");
 const dockerDriverGatewayRuntimeMarker: typeof import("./onboard/docker-driver-gateway-runtime-marker") =
   require("./onboard/docker-driver-gateway-runtime-marker");
 const gatewayBinding: typeof import("./onboard/gateway-binding") = require("./onboard/gateway-binding");
@@ -2168,34 +2166,18 @@ async function startDockerDriverGateway({
   skipSandboxBridgeReachability?: boolean;
 } = {}): Promise<void> {
   const gatewayBin = resolveOpenShellGatewayBinary();
-  const openshellVersionOutput = runCaptureOpenshell(["--version"], {
-    ignoreError: true,
-  });
-  const stateDir = getDockerDriverGatewayStateDir();
-  if (gatewayBin) {
-    try {
-      dockerDriverGatewayLocalTls.ensureDockerDriverGatewayLocalTlsBundle({
-        gatewayBin,
-        stateDir,
-      });
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      console.error(`  Failed to prepare OpenShell gateway mTLS material: ${detail}`);
-      if (exitOnFailure) process.exit(1);
-      throw error;
-    }
-  }
+  const openshellVersionOutput = runCaptureOpenshell(["--version"], { ignoreError: true });
   const gatewayEnv = getDockerDriverGatewayEnv(openshellVersionOutput);
-  if (gatewayEnv.OPENSHELL_LOCAL_TLS_DIR) {
-    process.env.OPENSHELL_LOCAL_TLS_DIR = gatewayEnv.OPENSHELL_LOCAL_TLS_DIR;
-  }
+  const stateDir = getDockerDriverGatewayStateDir();
   const runtimeIdentity = gatewayBin
     ? dockerDriverGatewayLaunch.buildDockerDriverGatewayRuntimeIdentity({
         gatewayBin,
         gatewayEnv,
         stateDir,
+        // biome-ignore format: keep src/lib/onboard.ts net-neutral for growth guardrail.
         sandboxBin: resolveOpenShellSandboxBinary(),
         compatContainerName: gatewayBinding.resolveGatewayCompatContainerName(GATEWAY_PORT),
+        ensureLocalTlsBundle: true,
       })
     : null;
   const gatewayLaunch = runtimeIdentity?.launch ?? null;

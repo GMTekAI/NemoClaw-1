@@ -10,7 +10,10 @@ import {
   buildDockerDriverGatewayConfigToml,
   prepareDockerDriverGatewayConfigEnv,
 } from "./docker-driver-gateway-config";
-import { buildDockerDriverGatewayLocalTlsEnv } from "./docker-driver-gateway-local-tls";
+import {
+  buildDockerDriverGatewayLocalTlsEnv,
+  ensureDockerDriverGatewayLocalTlsBundle,
+} from "./docker-driver-gateway-local-tls";
 
 const DEFAULT_COMPAT_IMAGE =
   "ubuntu:24.04@sha256:786a8b558f7be160c6c8c4a54f9a57274f3b4fb1491cf65146521ae77ff1dc54";
@@ -79,6 +82,7 @@ type BuildGatewayLaunchOptions = {
   env?: NodeJS.ProcessEnv;
   hostGlibcVersion?: string | null;
   requiredGlibcVersions?: string[];
+  ensureLocalTlsBundle?: boolean;
   // Default compatibility container name when NEMOCLAW_OPENSHELL_GATEWAY_COMPAT_CONTAINER_NAME
   // is unset. Callers pass a per-gateway-port name so a second sandbox's compat
   // container (and its pre-launch `docker rm`) cannot tear down the first
@@ -230,6 +234,12 @@ export function buildDockerDriverGatewayLaunch(
   options: BuildGatewayLaunchOptions,
 ): DockerDriverGatewayLaunch {
   const gatewayEnv = { ...options.gatewayEnv };
+  if (options.ensureLocalTlsBundle) {
+    ensureDockerDriverGatewayLocalTlsBundle({
+      gatewayBin: options.gatewayBin,
+      stateDir: options.stateDir,
+    });
+  }
   if (!gatewayEnv.OPENSHELL_LOCAL_TLS_DIR) {
     Object.assign(gatewayEnv, buildDockerDriverGatewayLocalTlsEnv(options.stateDir));
   }
