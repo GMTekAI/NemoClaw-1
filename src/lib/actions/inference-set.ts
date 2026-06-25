@@ -271,11 +271,6 @@ export function patchOpenClawInferenceConfig(
 
   updateAgentPrimary(config, route.primaryModelRef);
 
-  const upstream = ensureObject(config, "_nemoclaw_upstream");
-  upstream.provider = provider;
-  upstream.model = model;
-  upstream.base_url = route.inferenceBaseUrl;
-
   const models = ensureObject(config, "models");
   models.mode = "merge";
   const providers = ensureObject(models, "providers");

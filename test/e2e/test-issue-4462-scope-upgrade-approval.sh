@@ -1353,20 +1353,16 @@ extract_openclaw_upstream() {
 import sys
 from pathlib import Path
 
-path = Path("/sandbox/.openclaw/openclaw.json")
+path = Path("/sandbox/.nemoclaw/config.json")
 try:
     cfg = json.loads(path.read_text(encoding="utf-8"))
 except Exception as exc:
     sys.stderr.write(f"read-config-failed: {exc}\n")
     raise SystemExit(2)
 
-upstream = cfg.get("_nemoclaw_upstream") or {}
-model_block = cfg.get("model") or {}
-provider = str(upstream.get("provider") or "").strip()
-model = str(upstream.get("model") or model_block.get("default") or "").strip()
-base_url = str(upstream.get("base_url") or "").strip()
-if not base_url and isinstance(model_block, dict):
-    base_url = str(model_block.get("base_url") or "").strip()
+provider = str(cfg.get("provider") or "").strip()
+model = str(cfg.get("model") or "").strip()
+base_url = str(cfg.get("endpointUrl") or "").strip()
 print(json.dumps({"provider": provider, "model": model, "base_url": base_url}, sort_keys=True))'
   encoded="$(printf '%s' "$py_script" | base64 | tr -d '\n')"
   remote_cmd="tmp=\$(mktemp); trap 'rm -f \"\$tmp\"' EXIT; printf %s $(quote_for_remote_sh "$encoded") | base64 -d > \"\$tmp\"; python3 \"\$tmp\""
