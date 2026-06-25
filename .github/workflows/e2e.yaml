@@ -5286,26 +5286,32 @@ jobs:
         run: npm run build:cli
 
       - name: Install and verify cloudflared prerequisite
+        env:
+          CLOUDFLARED_VERSION: "2026.6.1"
+          CLOUDFLARED_DEB_SHA256: "ccd02ec216c62bfa573395d8f72cb2e91e95cbdf8726a8acc06b3e2d9aa31526"
         run: |
           set -euo pipefail
           if command -v cloudflared >/dev/null 2>&1; then
-            cloudflared --version
-            exit 0
+            if cloudflared --version | grep -F "cloudflared version ${CLOUDFLARED_VERSION}" >/dev/null; then
+              cloudflared --version
+              exit 0
+            fi
           fi
-          source test/e2e/lib/cloudflared-version-resolver.sh
-          sudo mkdir -p --mode=0755 /usr/share/keyrings
-          curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
-          echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflared.list >/dev/null
-          sudo apt-get update -qq
-          available_versions="$(apt-cache madison cloudflared | awk '{print $3}')"
-          cf_min_version="${CLOUDFLARED_MIN_VERSION:-$CLOUDFLARED_DEFAULT_MIN_VERSION}"
-          if [ -n "${CLOUDFLARED_VERSION:-}" ]; then
-            cf_version="$(cloudflared_resolve_package_version "$available_versions" "$cf_min_version" "$CLOUDFLARED_VERSION")"
-          else
-            cf_version="$(cloudflared_resolve_package_version "$available_versions" "$cf_min_version")"
+
+          cloudflared_deb="${RUNNER_TEMP}/cloudflared-${CLOUDFLARED_VERSION}-linux-amd64.deb"
+          curl -fL "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-amd64.deb" -o "${cloudflared_deb}"
+          printf '%s  %s\n' "${CLOUDFLARED_DEB_SHA256}" "${cloudflared_deb}" | sha256sum -c -
+
+          package="$(dpkg-deb -f "${cloudflared_deb}" Package)"
+          version="$(dpkg-deb -f "${cloudflared_deb}" Version)"
+          architecture="$(dpkg-deb -f "${cloudflared_deb}" Architecture)"
+          if [ "${package}" != "cloudflared" ] || [ "${version}" != "${CLOUDFLARED_VERSION}" ] || [ "${architecture}" != "amd64" ]; then
+            printf 'Unexpected cloudflared package metadata: package=%s version=%s architecture=%s\n' "${package}" "${version}" "${architecture}" >&2
+            exit 1
           fi
-          sudo apt-get install -y "cloudflared=${cf_version}"
-          cloudflared --version
+
+          sudo dpkg -i "${cloudflared_deb}"
+          cloudflared --version | grep -F "cloudflared version ${CLOUDFLARED_VERSION}"
 
       - name: Run tunnel lifecycle live test
         # real Docker/OpenShell onboard, host cloudflared quick-tunnel,

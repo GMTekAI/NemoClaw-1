@@ -5204,6 +5204,10 @@ function runContainsCloudflaredAptInstall(run: string): boolean {
   );
 }
 
+const TUNNEL_LIFECYCLE_CLOUDFLARED_VERSION = "2026.6.1";
+const TUNNEL_LIFECYCLE_CLOUDFLARED_DEB_SHA256 =
+  "ccd02ec216c62bfa573395d8f72cb2e91e95cbdf8726a8acc06b3e2d9aa31526";
+
 function validateTunnelLifecycleJob(
   errors: string[],
   jobs: WorkflowRecord,
@@ -5391,13 +5395,37 @@ function validateTunnelLifecycleJob(
     "NVIDIA_API_KEY",
   );
   requireRunContains(errors, cloudflaredPrereq, "cloudflared --version");
+  if (cloudflaredPrereqEnv.CLOUDFLARED_VERSION !== TUNNEL_LIFECYCLE_CLOUDFLARED_VERSION) {
+    errors.push(
+      `tunnel-lifecycle cloudflared prerequisite step must pin CLOUDFLARED_VERSION=${TUNNEL_LIFECYCLE_CLOUDFLARED_VERSION}`,
+    );
+  }
+  if (
+    cloudflaredPrereqEnv.CLOUDFLARED_DEB_SHA256 !==
+    TUNNEL_LIFECYCLE_CLOUDFLARED_DEB_SHA256
+  ) {
+    errors.push(
+      `tunnel-lifecycle cloudflared prerequisite step must pin CLOUDFLARED_DEB_SHA256=${TUNNEL_LIFECYCLE_CLOUDFLARED_DEB_SHA256}`,
+    );
+  }
   requireRunContains(
     errors,
     cloudflaredPrereq,
-    "test/e2e/lib/cloudflared-version-resolver.sh",
+    "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-amd64.deb",
   );
-  requireRunContains(errors, cloudflaredPrereq, "sudo apt-get install -y");
-  requireRunContains(errors, cloudflaredPrereq, "cloudflared=${cf_version}");
+  requireRunContains(errors, cloudflaredPrereq, "sha256sum -c -");
+  requireRunContains(errors, cloudflaredPrereq, "dpkg-deb -f");
+  requireRunContains(errors, cloudflaredPrereq, "sudo dpkg -i");
+  requireRunContains(
+    errors,
+    cloudflaredPrereq,
+    "cloudflared version ${CLOUDFLARED_VERSION}",
+  );
+  requireRunDoesNotContain(errors, cloudflaredPrereq, "pkg.cloudflare.com");
+  requireRunDoesNotContain(errors, cloudflaredPrereq, "cloudflare-main.gpg");
+  requireRunDoesNotContain(errors, cloudflaredPrereq, "apt-cache madison");
+  requireRunDoesNotContain(errors, cloudflaredPrereq, "apt-get install");
+  requireRunDoesNotContain(errors, cloudflaredPrereq, "cloudflared_resolve_package_version");
 
   const runVitest = requireJobStep(
     errors,

@@ -138,15 +138,60 @@ describe("tunnel lifecycle workflow boundary", () => {
           "tunnel-lifecycle step 'Install and verify cloudflared prerequisite' env must not include NVIDIA_API_KEY",
           "tunnel-lifecycle cloudflared prerequisite step env must not include NVIDIA_INFERENCE_API_KEY",
           "tunnel-lifecycle cloudflared prerequisite step env must not include NVIDIA_API_KEY",
-          "step 'Install and verify cloudflared prerequisite' run script must include test/e2e/lib/cloudflared-version-resolver.sh",
-          "step 'Install and verify cloudflared prerequisite' run script must include sudo apt-get install -y",
-          "step 'Install and verify cloudflared prerequisite' run script must include cloudflared=${cf_version}",
+          "tunnel-lifecycle cloudflared prerequisite step must pin CLOUDFLARED_VERSION=2026.6.1",
+          "tunnel-lifecycle cloudflared prerequisite step must pin CLOUDFLARED_DEB_SHA256=ccd02ec216c62bfa573395d8f72cb2e91e95cbdf8726a8acc06b3e2d9aa31526",
+          "step 'Install and verify cloudflared prerequisite' run script must include https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-amd64.deb",
+          "step 'Install and verify cloudflared prerequisite' run script must include sha256sum -c -",
+          "step 'Install and verify cloudflared prerequisite' run script must include dpkg-deb -f",
+          "step 'Install and verify cloudflared prerequisite' run script must include sudo dpkg -i",
+          "step 'Install and verify cloudflared prerequisite' run script must include cloudflared version ${CLOUDFLARED_VERSION}",
           "tunnel-lifecycle live E2E step must not run cloudflared APT installation with NVIDIA_INFERENCE_API_KEY in scope",
           "artifact upload path must include e2e-artifacts/live/tunnel-lifecycle/",
           "tunnel-lifecycle artifact upload must set include-hidden-files: false",
           "tunnel-lifecycle Docker auth cleanup must always run",
           "step 'Clean up Docker auth' run script must include docker logout docker.io",
           "step 'Clean up Docker auth' run script must include rm -rf \"${DOCKER_CONFIG}\"",
+        ]),
+      );
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unverified cloudflared package installation before secret-bearing tunnel tests", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "e2e-workflow-"));
+    const workflowPath = path.join(tmp, "workflow.yaml");
+    const workflow = readWorkflow() as {
+      jobs: Record<string, { steps: Array<Record<string, unknown>> }>;
+    };
+    const job = workflow.jobs["tunnel-lifecycle"];
+    expect(job).toBeDefined();
+    const cloudflared = job.steps.find(
+      (step) => step.name === "Install and verify cloudflared prerequisite",
+    );
+    expect(cloudflared).toBeDefined();
+    cloudflared!.env = { CLOUDFLARED_VERSION: "2026.6.1" };
+    cloudflared!.run = [
+      "set -euo pipefail",
+      "sudo mkdir -p --mode=0755 /usr/share/keyrings",
+      "curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null",
+      "echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared noble main' | sudo tee /etc/apt/sources.list.d/cloudflared.list >/dev/null",
+      "sudo apt-get update -qq",
+      "sudo apt-get install -y cloudflared",
+      "cloudflared --version",
+    ].join("\n");
+    fs.writeFileSync(workflowPath, YAML.stringify(workflow));
+
+    try {
+      expect(validateE2eWorkflowBoundary(workflowPath)).toEqual(
+        expect.arrayContaining([
+          "tunnel-lifecycle cloudflared prerequisite step must pin CLOUDFLARED_DEB_SHA256=ccd02ec216c62bfa573395d8f72cb2e91e95cbdf8726a8acc06b3e2d9aa31526",
+          "step 'Install and verify cloudflared prerequisite' run script must include https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-amd64.deb",
+          "step 'Install and verify cloudflared prerequisite' run script must include sha256sum -c -",
+          "step 'Install and verify cloudflared prerequisite' run script must include sudo dpkg -i",
+          "step 'Install and verify cloudflared prerequisite' run script must not include pkg.cloudflare.com",
+          "step 'Install and verify cloudflared prerequisite' run script must not include cloudflare-main.gpg",
+          "step 'Install and verify cloudflared prerequisite' run script must not include apt-get install",
         ]),
       );
     } finally {
