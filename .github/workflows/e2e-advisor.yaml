@@ -127,6 +127,18 @@ jobs:
           TARGET_PR: ${{ inputs.target_pr }}
           TARGET_BASE: ${{ inputs.target_base }}
         run: |
+          if [[ ! "$TARGET_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error::target_repo must match owner/repo with GitHub-safe characters"
+            exit 1
+          fi
+          if [[ ! "$TARGET_PR" =~ ^[0-9]+$ ]]; then
+            echo "::error::target_pr must be decimal digits"
+            exit 1
+          fi
+          if [[ -z "$TARGET_BASE" || "$TARGET_BASE" == -* || "$TARGET_BASE" == /* || "$TARGET_BASE" == *..* || "$TARGET_BASE" == *:* || "$TARGET_BASE" =~ [[:space:]] || ! "$TARGET_BASE" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            echo "::error::target_base must be a safe branch/ref token"
+            exit 1
+          fi
           TARGET_DIR=/tmp/e2e-advisor-target
           rm -rf "$TARGET_DIR"
           mkdir -p "$TARGET_DIR"

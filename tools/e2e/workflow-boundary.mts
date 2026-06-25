@@ -7722,7 +7722,12 @@ export function validateE2eWorkflowBoundary(
   validateOpenShellVersionPinJob(errors, jobs);
   validateOnboardNegativePathsJob(errors, jobs);
   validateSkillAgentJob(errors, jobs);
-  validateFreeStandingJobSelector(errors, jobs, "credential-migration");
+  validateFreeStandingJobSelector(
+    errors,
+    jobs,
+    "credential-migration",
+    "credential-migration",
+  );
   validateFreeStandingJobSelector(
     errors,
     jobs,
@@ -7759,7 +7764,12 @@ export function validateE2eWorkflowBoundary(
     "openclaw-tui-chat-correlation",
     "openclaw-tui-chat-correlation",
   );
-  validateFreeStandingJobSelector(errors, jobs, "gateway-guard-recovery");
+  validateFreeStandingJobSelector(
+    errors,
+    jobs,
+    "gateway-guard-recovery",
+    "gateway-guard-recovery",
+  );
   validateFreeStandingJobSelector(
     errors,
     jobs,

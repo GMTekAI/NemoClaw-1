@@ -631,7 +631,9 @@ describe("e2e workflow boundary", () => {
     expect(inventory.allowedJobs).toContain("upgrade-stale-sandbox");
     expect(inventory.targetToJob.get("openshell-version-pin")).toBe("openshell-version-pin");
     expect(inventory.targetToJob.get("upgrade-stale-sandbox")).toBe("upgrade-stale-sandbox");
-    expect(inventory.targetToJob.get("credential-migration")).toBeUndefined();
+    expect(inventory.targetToJob.get("credential-migration")).toBe("credential-migration");
+    expect(inventory.targetToJob.get("launchable-smoke")).toBe("launchable-smoke");
+    expect(inventory.targetToJob.get("gateway-guard-recovery")).toBe("gateway-guard-recovery");
     expect(
       inventory.allowedJobs.every((job) =>
         Object.keys((readWorkflow().jobs as Record<string, unknown>) ?? {}).includes(job),
