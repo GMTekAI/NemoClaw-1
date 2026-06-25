@@ -1215,15 +1215,45 @@ section "Phase 7: Verify two-sandbox concurrent differing-provider gateway-backe
 # isolation intact under concurrency.
 
 OLLAMA_TWO_PROVIDER_MODEL="${NEMOCLAW_CLI_SCOPE_OLLAMA_MODEL:-qwen3:0.6b}"
+OLLAMA_SPEC_MODEL_5343="qwen3.5:9b"
+OLLAMA_PINNED_VERSION="${NEMOCLAW_CLI_SCOPE_OLLAMA_VERSION:-0.7.4}"
+OLLAMA_PINNED_SHA256="${NEMOCLAW_CLI_SCOPE_OLLAMA_SHA256:-}"
+OLLAMA_PINNED_TGZ_URL="https://github.com/ollama/ollama/releases/download/v${OLLAMA_PINNED_VERSION}/ollama-linux-amd64.tgz"
+
+if [ "$OLLAMA_TWO_PROVIDER_MODEL" != "$OLLAMA_SPEC_MODEL_5343" ]; then
+  info "Phase 7 CPU-lane substitute: using ${OLLAMA_TWO_PROVIDER_MODEL} in place of the issue-spec model ${OLLAMA_SPEC_MODEL_5343}; differing-provider isolation and inference.local route are proven on this lane, GPU-provisioned model identity validation is deferred"
+fi
 
 info "Ensuring host-side Ollama is available for sandbox B"
 if ! command -v ollama >/dev/null 2>&1; then
-  info "Installing Ollama via official install script"
-  if ! run_with_timeout 600 sh -c 'curl -fsSL https://ollama.com/install.sh | sh' \
-    >>"$INSTALL_LOG" 2>&1; then
-    fail "Ollama installation failed; see ${INSTALL_LOG}"
+  info "Installing pinned Ollama ${OLLAMA_PINNED_VERSION} release artifact"
+  install_tmp="$(mktemp -d)"
+  if ! run_with_timeout 600 curl -fsSL --proto '=https' --tlsv1.2 \
+    -o "${install_tmp}/ollama.tgz" "$OLLAMA_PINNED_TGZ_URL" >>"$INSTALL_LOG" 2>&1; then
+    fail "Ollama download from ${OLLAMA_PINNED_TGZ_URL} failed; see ${INSTALL_LOG}"
+    rm -rf "$install_tmp"
     exit 1
   fi
+  if [ -n "$OLLAMA_PINNED_SHA256" ]; then
+    computed_sha="$(sha256sum "${install_tmp}/ollama.tgz" | awk '{print $1}')"
+    if [ "$computed_sha" != "$OLLAMA_PINNED_SHA256" ]; then
+      fail "Ollama tarball sha256 mismatch: expected ${OLLAMA_PINNED_SHA256}, got ${computed_sha}"
+      rm -rf "$install_tmp"
+      exit 1
+    fi
+    pass "Ollama tarball sha256 verified (${computed_sha})"
+  else
+    info "Skipping Ollama tarball sha256 verification (set NEMOCLAW_CLI_SCOPE_OLLAMA_SHA256 to enable); tag-immutability and GitHub TLS limit drift"
+  fi
+  tar_out=$(sudo tar -C /usr/local -xzf "${install_tmp}/ollama.tgz" 2>&1)
+  tar_rc=$?
+  printf '%s\n' "$tar_out" >>"$INSTALL_LOG"
+  if [ "$tar_rc" -ne 0 ]; then
+    fail "Ollama tarball extract failed (rc=${tar_rc}); see ${INSTALL_LOG}"
+    rm -rf "$install_tmp"
+    exit 1
+  fi
+  rm -rf "$install_tmp"
 fi
 if ! command -v ollama >/dev/null 2>&1; then
   fail "Ollama not on PATH after install attempt"
@@ -1473,7 +1503,12 @@ fi
 rm -f "$multi_out_a" "$multi_out_b"
 
 if [ "$multi_pass" -eq 1 ]; then
-  pass "both sandboxes ran concurrent openclaw agent turns gateway-backed under differing providers (sandbox A ${provider_a} → :18789, sandbox B ${provider_b} → :18790, distinct URLs, no scope-upgrade, pairing, or EMBEDDED FALLBACK markers)"
+  if [ "$OLLAMA_TWO_PROVIDER_MODEL" = "$OLLAMA_SPEC_MODEL_5343" ]; then
+    model_scope_note="full #5343 model coverage"
+  else
+    model_scope_note="CPU-lane substitute ${OLLAMA_TWO_PROVIDER_MODEL} stands in for spec model ${OLLAMA_SPEC_MODEL_5343}; route/provider isolation proven, GPU-only model identity deferred"
+  fi
+  pass "both sandboxes ran concurrent openclaw agent turns gateway-backed under differing providers (sandbox A ${provider_a}/${model_a} → :18789, sandbox B ${provider_b}/${model_b} → :18790, distinct URLs, no scope-upgrade, pairing, or EMBEDDED FALLBACK markers; ${model_scope_note})"
 fi
 
 if [ "$FAIL" -gt 0 ]; then
@@ -1486,4 +1521,8 @@ if [ "$FAIL" -gt 0 ]; then
   exit 1
 fi
 
-finish_success "RESULT: PASSED - CLI scope-upgrade approval stays on the gateway path; two sandboxes with differing providers stay gateway-backed through inference.local concurrently"
+if [ "$OLLAMA_TWO_PROVIDER_MODEL" = "$OLLAMA_SPEC_MODEL_5343" ]; then
+  finish_success "RESULT: PASSED - CLI scope-upgrade approval stays on the gateway path; two sandboxes with differing providers (NVIDIA Cloud + Ollama ${OLLAMA_SPEC_MODEL_5343}) stay gateway-backed through inference.local concurrently"
+else
+  finish_success "RESULT: PASSED (CPU substitute) - CLI scope-upgrade approval stays on the gateway path; two sandboxes with differing providers (NVIDIA Cloud + Ollama ${OLLAMA_TWO_PROVIDER_MODEL} substituting for GPU-only spec model ${OLLAMA_SPEC_MODEL_5343}) stay gateway-backed through inference.local concurrently"
+fi
