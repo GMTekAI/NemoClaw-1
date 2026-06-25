@@ -123,8 +123,8 @@ reviews:
 
     # ── E2E test recommendations ──────────────────────────────────
     # Maps sensitive file paths to the current Vitest-backed E2E workflow.
-    # The retired shell/nightly workflow and top-level `test/e2e/test-*.sh`
-    # entrypoints are intentionally not referenced here.
+    # The retired shell workflow and legacy top-level shell entrypoints are
+    # intentionally not referenced here.
     #
     # To run live targets manually, dispatch `.github/workflows/e2e.yaml` and
     # use either `targets=` for registry targets or `jobs=` for free-standing
