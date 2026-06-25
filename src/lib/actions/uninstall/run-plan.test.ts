@@ -977,6 +977,139 @@ describe("uninstall run plan", () => {
       }
     });
 
+    it("purges the whole state dir when destroyUserData is set, even with --yes on a non-TTY", () => {
+      const { tmpHome, stateDir } = setupStateDir();
+      try {
+        const logs: string[] = [];
+        const result = runUninstallPlan(
+          { assumeYes: true, deleteModels: false, destroyUserData: true, keepOpenShell: true },
+          {
+            commandExists: () => false,
+            env: {
+              HOME: tmpHome,
+              NEMOCLAW_UNINSTALL_DESTROY_USER_DATA: "",
+            } as NodeJS.ProcessEnv,
+            existsSync: tempScopedExistsSync(tmpHome),
+            isTty: false,
+            log: (line) => logs.push(line),
+            run: vi.fn(() => ok()),
+            runDocker: () => ok(""),
+          },
+        );
+
+        expect(result.exitCode).toBe(0);
+        expect(fs.existsSync(stateDir)).toBe(false);
+        expect(logs).toContain(`Removed ${stateDir}`);
+        expect(logs).toContain("--destroy-user-data set; purging user data under ~/.nemoclaw/.");
+        expect(logs.every((line) => !line.includes("preserved:"))).toBe(true);
+      } finally {
+        fs.rmSync(tmpHome, { recursive: true, force: true });
+      }
+    });
+
+    it("destroyUserData purges on a TTY without prompting", () => {
+      const { tmpHome, stateDir } = setupStateDir();
+      const readLine = vi.fn(() => "y");
+      try {
+        const logs: string[] = [];
+        const result = runUninstallPlan(
+          { assumeYes: true, deleteModels: false, destroyUserData: true, keepOpenShell: true },
+          {
+            commandExists: () => false,
+            env: {
+              HOME: tmpHome,
+              NEMOCLAW_UNINSTALL_DESTROY_USER_DATA: "",
+            } as NodeJS.ProcessEnv,
+            existsSync: tempScopedExistsSync(tmpHome),
+            isTty: true,
+            log: (line) => logs.push(line),
+            readLine,
+            run: vi.fn(() => ok()),
+            runDocker: () => ok(""),
+          },
+        );
+
+        expect(result.exitCode).toBe(0);
+        expect(fs.existsSync(stateDir)).toBe(false);
+        expect(logs).toContain("--destroy-user-data set; purging user data under ~/.nemoclaw/.");
+        expect(logs.every((line) => line !== "Also remove them? [y/N]")).toBe(true);
+        expect(readLine).not.toHaveBeenCalled();
+      } finally {
+        fs.rmSync(tmpHome, { recursive: true, force: true });
+      }
+    });
+
+    it("destroyUserData takes precedence over NEMOCLAW_UNINSTALL_DESTROY_USER_DATA env var", () => {
+      const { tmpHome, stateDir } = setupStateDir();
+      try {
+        const logs: string[] = [];
+        const result = runUninstallPlan(
+          { assumeYes: true, deleteModels: false, destroyUserData: true, keepOpenShell: true },
+          {
+            commandExists: () => false,
+            env: {
+              HOME: tmpHome,
+              NEMOCLAW_UNINSTALL_DESTROY_USER_DATA: "1",
+            } as NodeJS.ProcessEnv,
+            existsSync: tempScopedExistsSync(tmpHome),
+            isTty: false,
+            log: (line) => logs.push(line),
+            run: vi.fn(() => ok()),
+            runDocker: () => ok(""),
+          },
+        );
+
+        expect(result.exitCode).toBe(0);
+        expect(fs.existsSync(stateDir)).toBe(false);
+        expect(logs).toContain("--destroy-user-data set; purging user data under ~/.nemoclaw/.");
+        expect(
+          logs.every(
+            (line) =>
+              line !==
+              "NEMOCLAW_UNINSTALL_DESTROY_USER_DATA=1 set; purging user data under ~/.nemoclaw/.",
+          ),
+        ).toBe(true);
+      } finally {
+        fs.rmSync(tmpHome, { recursive: true, force: true });
+      }
+    });
+
+    it("non-interactive hint mentions --destroy-user-data alongside the env var", () => {
+      const { tmpHome, stateDir } = setupStateDir();
+      try {
+        const logs: string[] = [];
+        const result = runUninstallPlan(
+          { assumeYes: true, deleteModels: false, keepOpenShell: true },
+          {
+            commandExists: () => false,
+            env: {
+              HOME: tmpHome,
+              NEMOCLAW_UNINSTALL_DESTROY_USER_DATA: "",
+            } as NodeJS.ProcessEnv,
+            existsSync: tempScopedExistsSync(tmpHome),
+            isTty: false,
+            log: (line) => logs.push(line),
+            run: vi.fn(() => ok()),
+            runDocker: () => ok(""),
+          },
+        );
+
+        expect(result.exitCode).toBe(0);
+        expect(
+          fs.existsSync(path.join(stateDir, "rebuild-backups", "sb1", "20260101", "manifest.json")),
+        ).toBe(true);
+        expect(
+          logs.some(
+            (line) =>
+              line.includes("--destroy-user-data") &&
+              line.includes("NEMOCLAW_UNINSTALL_DESTROY_USER_DATA=1"),
+          ),
+        ).toBe(true);
+      } finally {
+        fs.rmSync(tmpHome, { recursive: true, force: true });
+      }
+    });
+
     it("purges via interactive y/N prompt when user answers yes", () => {
       const { tmpHome, stateDir } = setupStateDir();
       try {
