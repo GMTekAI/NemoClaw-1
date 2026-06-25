@@ -1345,28 +1345,29 @@ pass "second sandbox onboarded with Ollama provider"
 
 extract_openclaw_upstream() {
   local sandbox="$1"
-  local py_script encoded remote_cmd
-  # openshell sandbox exec rejects multiline gRPC arguments; base64-encode the
-  # Python script and decode it into a temp file on the sandbox side, matching
-  # the sandbox_exec_sh_script pattern used elsewhere in this file.
-  py_script='import json
+  # Read provider/model from the host-side NemoClaw sandbox registry rather
+  # than exec-ing into the container. The registry at ~/.nemoclaw/sandboxes.json
+  # is written by NemoClaw on every onboard/inference-set and is always
+  # accessible on the host without gRPC or sandbox exec overhead.
+  python3 - "$sandbox" <<'PY'
+import json
+import os
 import sys
-from pathlib import Path
 
-path = Path("/sandbox/.nemoclaw/config.json")
+sandbox_name = sys.argv[1]
+registry_file = os.path.join(os.environ.get("HOME", "/tmp"), ".nemoclaw", "sandboxes.json")
 try:
-    cfg = json.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(open(registry_file, encoding="utf-8").read())
 except Exception as exc:
-    sys.stderr.write(f"read-config-failed: {exc}\n")
+    sys.stderr.write(f"read-registry-failed: {exc}\n")
     raise SystemExit(2)
 
-provider = str(cfg.get("provider") or "").strip()
-model = str(cfg.get("model") or "").strip()
-base_url = str(cfg.get("endpointUrl") or "").strip()
-print(json.dumps({"provider": provider, "model": model, "base_url": base_url}, sort_keys=True))'
-  encoded="$(printf '%s' "$py_script" | base64 | tr -d '\n')"
-  remote_cmd="tmp=\$(mktemp); trap 'rm -f \"\$tmp\"' EXIT; printf %s $(quote_for_remote_sh "$encoded") | base64 -d > \"\$tmp\"; python3 \"\$tmp\""
-  run_with_timeout 30 "$OPENSHELL_BIN" sandbox exec --name "$sandbox" -- sh -lc "$remote_cmd"
+entry = (data.get("sandboxes") or {}).get(sandbox_name) or {}
+provider = str(entry.get("provider") or "").strip()
+model = str(entry.get("model") or "").strip()
+base_url = "https://inference.local/v1" if provider else ""
+print(json.dumps({"provider": provider, "model": model, "base_url": base_url}, sort_keys=True))
+PY
 }
 
 upstream_a_json="$(extract_openclaw_upstream "$SANDBOX_NAME" 2>&1)" || {
