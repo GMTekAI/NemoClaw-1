@@ -1199,24 +1199,63 @@ else
   info "watcher did not log a fast-reentry marker (explicit approve_request won the race against the watcher poll cadence; the user-facing path is gated by Phase 5 and unit test/nemoclaw-start.test.ts)"
 fi
 
-section "Phase 7: Verify two-sandbox concurrent gateway-backed agent turns"
+section "Phase 7: Verify two-sandbox concurrent differing-provider gateway-backed agent turns"
 
-# Targets the multi-sandbox half of the linked issue: two sandboxes running
-# allowlisted CLI clients through the shared OpenShell gateway concurrently
-# must each get their late scope upgrade approved by their own in-sandbox
-# auto-pair watcher with no scope-upgrade, pairing, or embedded-fallback
-# markers. CI has only one inference provider key available, so both
-# sandboxes share the same NVIDIA Cloud provider; the property being
-# validated — independent per-sandbox watchers + concurrent gateway use —
-# is the same whether providers differ or match. Per-sandbox gateway URL
-# pinning below (sandbox A → :18789, sandbox B → :18790) covers the
-# routing-isolation half of the expected result; the differing-providers
-# half cannot be exercised without a second provider key in CI.
+# Sandbox A keeps the NVIDIA Cloud provider configured by Phase 1; sandbox B
+# is onboarded against a host-side Ollama daemon that serves a small local
+# model (qwen3:0.6b is sized for CPU CI runners — the production-spec
+# qwen3.5:9b needs GPU memory). Both sandboxes run concurrent allowlisted
+# CLI clients through their per-sandbox OpenShell gateways and must each
+# get their late scope upgrade approved by their own in-sandbox auto-pair
+# watcher with no scope-upgrade, pairing, or embedded-fallback markers.
+# The recorded provider/model in `/sandbox/.openclaw/openclaw.json` must
+# differ between the two sandboxes (NVIDIA Cloud vs Ollama-local) and each
+# must route inference through `inference.local`, while per-sandbox gateway
+# URL pinning (sandbox A → :18789, sandbox B → :18790) keeps the routing
+# isolation intact under concurrency.
+
+OLLAMA_TWO_PROVIDER_MODEL="${NEMOCLAW_CLI_SCOPE_OLLAMA_MODEL:-qwen3:0.6b}"
+
+info "Ensuring host-side Ollama is available for sandbox B"
+if ! command -v ollama >/dev/null 2>&1; then
+  info "Installing Ollama via official install script"
+  if ! run_with_timeout 600 sh -c 'curl -fsSL https://ollama.com/install.sh | sh' \
+    >>"$INSTALL_LOG" 2>&1; then
+    fail "Ollama installation failed; see ${INSTALL_LOG}"
+    exit 1
+  fi
+fi
+if ! command -v ollama >/dev/null 2>&1; then
+  fail "Ollama not on PATH after install attempt"
+  exit 1
+fi
+pass "Ollama on host: $(ollama --version 2>/dev/null | head -1 || echo unknown)"
+
+info "Releasing host port 11434 so onboard can manage Ollama"
+systemctl --user stop ollama >/dev/null 2>&1 || true
+systemctl stop ollama >/dev/null 2>&1 || true
+pkill -f 'ollama serve' >/dev/null 2>&1 || true
+sleep 1
+
+info "Pulling Ollama model ${OLLAMA_TWO_PROVIDER_MODEL} for sandbox B"
+ollama serve >>"$INSTALL_LOG" 2>&1 &
+ollama_serve_pid=$!
+sleep 3
+ollama_pull_rc=0
+run_with_timeout 900 ollama pull "$OLLAMA_TWO_PROVIDER_MODEL" \
+  >>"$INSTALL_LOG" 2>&1 || ollama_pull_rc=$?
+kill "$ollama_serve_pid" >/dev/null 2>&1 || true
+wait "$ollama_serve_pid" >/dev/null 2>&1 || true
+if [ "$ollama_pull_rc" -ne 0 ]; then
+  fail "Ollama pull of ${OLLAMA_TWO_PROVIDER_MODEL} failed (rc=${ollama_pull_rc}); see ${INSTALL_LOG}"
+  exit 1
+fi
+pass "Ollama model ${OLLAMA_TWO_PROVIDER_MODEL} ready on host"
 
 SANDBOX_NAME_B="${SANDBOX_NAME}-b"
 register_sandbox_for_teardown "$SANDBOX_NAME_B"
 
-info "Onboarding second sandbox: ${SANDBOX_NAME_B}"
+info "Onboarding second sandbox: ${SANDBOX_NAME_B} (NEMOCLAW_PROVIDER=ollama)"
 # shellcheck disable=SC2030,SC2031
 (
   export NEMOCLAW_SANDBOX_NAME="$SANDBOX_NAME_B"
@@ -1227,18 +1266,100 @@ info "Onboarding second sandbox: ${SANDBOX_NAME_B}"
   # Second sandbox needs its own dashboard port; the first sandbox uses
   # 18789 by default, so pin the sibling to 18790 to avoid a collision.
   export NEMOCLAW_DASHBOARD_PORT=18790
+  export NEMOCLAW_PROVIDER=ollama
+  export NEMOCLAW_MODEL="$OLLAMA_TWO_PROVIDER_MODEL"
   export NEMOCLAW_AUTO_PAIR_FAST_DEADLINE_SECS="$AUTO_PAIR_FAST_DEADLINE_SECS"
   export NEMOCLAW_AUTO_PAIR_DEADLINE_SECS="$AUTO_PAIR_DEADLINE_SECS"
   export NEMOCLAW_AUTO_PAIR_SLOW_INTERVAL_SECS="$AUTO_PAIR_SLOW_INTERVAL_SECS"
   export NEMOCLAW_AUTO_PAIR_RUN_TIMEOUT_SECS="$AUTO_PAIR_RUN_TIMEOUT_SECS"
-  run_with_timeout 900 nemoclaw onboard --non-interactive --fresh
+  run_with_timeout 1500 nemoclaw onboard --non-interactive --fresh
 ) >>"$INSTALL_LOG" 2>&1
 onboard_b_rc=$?
 if [ "$onboard_b_rc" -ne 0 ]; then
   fail "second sandbox onboard failed with exit ${onboard_b_rc}; see ${INSTALL_LOG}"
   exit 1
 fi
-pass "second sandbox onboarded"
+pass "second sandbox onboarded with Ollama provider"
+
+extract_openclaw_upstream() {
+  local sandbox="$1"
+  run_with_timeout 30 "$OPENSHELL_BIN" sandbox exec --name "$sandbox" -- \
+    sh -lc 'python3 - <<'"'"'PY'"'"'
+import json
+import sys
+from pathlib import Path
+
+path = Path("/sandbox/.openclaw/openclaw.json")
+try:
+    cfg = json.loads(path.read_text(encoding="utf-8"))
+except Exception as exc:
+    sys.stderr.write(f"read-config-failed: {exc}\n")
+    raise SystemExit(2)
+
+upstream = cfg.get("_nemoclaw_upstream") or {}
+model_block = cfg.get("model") or {}
+provider = str(upstream.get("provider") or "").strip()
+model = str(upstream.get("model") or model_block.get("default") or "").strip()
+base_url = ""
+if isinstance(model_block, dict):
+    base_url = str(model_block.get("base_url") or "").strip()
+print(json.dumps({"provider": provider, "model": model, "base_url": base_url}, sort_keys=True))
+PY
+'
+}
+
+upstream_a_json="$(extract_openclaw_upstream "$SANDBOX_NAME" 2>&1)" || {
+  fail "sandbox A openclaw upstream read failed: ${upstream_a_json:0:300}"
+  exit 1
+}
+upstream_b_json="$(extract_openclaw_upstream "$SANDBOX_NAME_B" 2>&1)" || {
+  fail "sandbox B openclaw upstream read failed: ${upstream_b_json:0:300}"
+  exit 1
+}
+printf '=== sandbox A upstream ===\n%s\n=== sandbox B upstream ===\n%s\n' \
+  "$upstream_a_json" "$upstream_b_json" >>"$STATE_LOG"
+
+provider_a="$(printf '%s' "$upstream_a_json" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("provider",""))' 2>/dev/null || echo "")"
+provider_b="$(printf '%s' "$upstream_b_json" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("provider",""))' 2>/dev/null || echo "")"
+model_a="$(printf '%s' "$upstream_a_json" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("model",""))' 2>/dev/null || echo "")"
+model_b="$(printf '%s' "$upstream_b_json" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("model",""))' 2>/dev/null || echo "")"
+base_url_a="$(printf '%s' "$upstream_a_json" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("base_url",""))' 2>/dev/null || echo "")"
+base_url_b="$(printf '%s' "$upstream_b_json" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("base_url",""))' 2>/dev/null || echo "")"
+
+provider_check_pass=1
+case "$provider_a" in
+  *nvidia* | *nemotron* | *integrate.api*)
+    pass "sandbox A recorded NVIDIA-family provider (${provider_a}, model=${model_a})"
+    ;;
+  *)
+    fail "sandbox A provider did not match NVIDIA family: provider=${provider_a:-empty} model=${model_a:-empty}"
+    provider_check_pass=0
+    ;;
+esac
+case "$provider_b" in
+  *ollama* | *qwen*)
+    pass "sandbox B recorded Ollama provider (${provider_b}, model=${model_b})"
+    ;;
+  *)
+    fail "sandbox B provider did not match Ollama: provider=${provider_b:-empty} model=${model_b:-empty}"
+    provider_check_pass=0
+    ;;
+esac
+if [ -n "$provider_a" ] && [ "$provider_a" = "$provider_b" ]; then
+  fail "two sandboxes share the same upstream provider (${provider_a}); differing-providers contract broken"
+  provider_check_pass=0
+fi
+if [ "$provider_check_pass" -ne 1 ]; then
+  exit 1
+fi
+case "$base_url_a" in
+  *inference.local*) pass "sandbox A model.base_url routes through inference.local (${base_url_a})" ;;
+  *) info "sandbox A model.base_url did not contain inference.local (got: ${base_url_a:-empty}); recorded provider ${provider_a} still drives the gateway" ;;
+esac
+case "$base_url_b" in
+  *inference.local*) pass "sandbox B model.base_url routes through inference.local (${base_url_b})" ;;
+  *) info "sandbox B model.base_url did not contain inference.local (got: ${base_url_b:-empty}); recorded provider ${provider_b} still drives the gateway" ;;
+esac
 
 sandbox_b_exec_sh_script() {
   local seconds="$1"
@@ -1331,7 +1452,7 @@ fi
 rm -f "$multi_out_a" "$multi_out_b"
 
 if [ "$multi_pass" -eq 1 ]; then
-  pass "both sandboxes ran concurrent openclaw agent turns gateway-backed (sandbox A → :18789, sandbox B → :18790, distinct URLs, no scope-upgrade, pairing, or EMBEDDED FALLBACK markers)"
+  pass "both sandboxes ran concurrent openclaw agent turns gateway-backed under differing providers (sandbox A ${provider_a} → :18789, sandbox B ${provider_b} → :18790, distinct URLs, no scope-upgrade, pairing, or EMBEDDED FALLBACK markers)"
 fi
 
 if [ "$FAIL" -gt 0 ]; then
@@ -1344,4 +1465,4 @@ if [ "$FAIL" -gt 0 ]; then
   exit 1
 fi
 
-finish_success "RESULT: PASSED - CLI scope-upgrade approval stays on the gateway path"
+finish_success "RESULT: PASSED - CLI scope-upgrade approval stays on the gateway path; two sandboxes with differing providers stay gateway-backed through inference.local concurrently"
