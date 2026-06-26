@@ -128,6 +128,7 @@ function codeFilterMatchesChangedPaths(workflow: CiWorkflow, paths: string[]): b
 
 describe("pull request and main workflow contracts", () => {
   const prWorkflow = readYaml<CiWorkflow>(".github/workflows/pr.yaml");
+  const prSelfHostedWorkflow = readYaml<CiWorkflow>(".github/workflows/pr-self-hosted.yaml");
   const mainWorkflow = readYaml<CiWorkflow>(".github/workflows/main.yaml");
   const sharedActions = {
     staticChecks: readYaml<CompositeAction>(".github/actions/ci-static-checks/action.yaml"),
@@ -635,6 +636,16 @@ describe("pull request and main workflow contracts", () => {
       expect(mainChecksRun).toContain(`require_success "${jobName}"`);
     }
     expect(mainWorkflow.jobs["sandbox-images-and-e2e"].needs).toBe("checks");
+  });
+
+  it("runs Hermes stale OpenClaw image validation in self-hosted PR CI", () => {
+    const job = prSelfHostedWorkflow.jobs["build-hermes-stale-openclaw-image"];
+    const runs = stepRuns(job).join("\n");
+
+    expect(job["runs-on"]).toBe("linux-amd64-cpu4");
+    expect(job["timeout-minutes"]).toBe(30);
+    expect(stepUses(job)).toContain("./.github/actions/resolve-hermes-base-image");
+    expect(runs).toContain("bash scripts/verify-hermes-stale-openclaw-image.sh");
   });
 
   it("does not run npm lifecycle scripts during CI dependency installs", () => {

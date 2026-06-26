@@ -10,6 +10,7 @@ ARG BASE_IMAGE=ghcr.io/nvidia/nemoclaw/hermes-sandbox-base@sha256:60333c1982ad85
 
 # hadolint ignore=DL3006
 FROM ${BASE_IMAGE}
+ARG BASE_IMAGE
 
 # Keep the final image contract explicit even when the published base image
 # changes independently of this Dockerfile.
@@ -250,17 +251,26 @@ USER root
 # Flatten stale published base images that still contain /sandbox/.openclaw from
 # older Hermes base layouts or the old .hermes-data symlink bridge. Dockerfile.base
 # is the source of truth for new bases; this final-image repair only removes
-# invalid state baked into already-published bases. The BASE_IMAGE pin/resolver is
-# the support boundary: keep the .openclaw cleanup while an official compatible
-# Hermes base can resolve to the stale layout, and remove it once the minimum
-# supported Hermes base digest is newer than that layout. OpenShell starts the
-# sandbox as the sandbox user, so runtime migration cannot rely on root
-# privileges inside the pod. Regression coverage lives in
-# test/hermes-stale-openclaw-cleanup.test.ts.
+# invalid state baked into already-published bases. The
+# NEMOCLAW_STALE_OPENCLAW_BASE_DIGEST gate below is the removal trigger: update
+# or remove this cleanup when the Dockerfile's default pinned Hermes base digest
+# advances past the stale layout. OpenShell starts the sandbox as the sandbox
+# user, so runtime migration cannot rely on root privileges inside the pod.
+# Regression coverage lives in test/hermes-stale-openclaw-cleanup.test.ts and
+# scripts/verify-hermes-stale-openclaw-image.sh.
 # Refuse symlinked stale state before rm -rf so a compromised base cannot point
 # cleanup outside the Hermes sandbox root.
 # hadolint ignore=DL4006
 RUN set -eu; \
+    stale_base_digest=sha256:60333c1982ad855d55887b4488e867eb343f3930a30aa8e0268e5397fc6f2926; \
+    case "${BASE_IMAGE:-}" in \
+        ghcr.io/nvidia/nemoclaw/hermes-sandbox-base@sha256:*) \
+            if [ "${BASE_IMAGE##*@}" != "$stale_base_digest" ]; then \
+                echo "ERROR: remove stale Hermes .openclaw cleanup or update the tracked stale-base digest; BASE_IMAGE=$BASE_IMAGE tracked=$stale_base_digest" >&2; \
+                exit 1; \
+            fi; \
+            ;; \
+    esac; \
     config_dir=/sandbox/.hermes; \
     data_dir=/sandbox/.hermes-data; \
     openclaw_dir=/sandbox/.openclaw; \
