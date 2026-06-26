@@ -1677,6 +1677,8 @@ jobs:
         run: npm run build:cli
 
       - name: Install OpenShell CLI
+        env:
+          NEMOCLAW_OPENSHELL_CHANNEL: ${{ github.event_name == 'workflow_dispatch' && inputs.openshell_channel || 'stable' }}
         run: bash scripts/install-openshell.sh
 
       - name: Run MCP bridge Vitest E2E
