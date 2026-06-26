@@ -63,10 +63,10 @@ describe("Hermes secret-boundary guard — generated shell shape", () => {
     expect(script).toContain("pkill -KILL -f");
   });
 
-  it("warns and continues recovery on older sandbox images that lack the validator", () => {
+  it("refuses recovery on sandbox images that lack the validator", () => {
     const script = buildRecoveryScript(hermesAgent, 8642);
-    expect(script).not.toContain("SECRET_BOUNDARY_VALIDATOR_MISSING");
-    expect(script).toContain("[gateway-recovery] WARNING");
+    expect(script).toContain("SECRET_BOUNDARY_VALIDATOR_MISSING");
+    expect(script).toContain("[gateway-recovery] ERROR");
     expect(script).toContain("secret-boundary validator");
     expect(script).toContain("missing on this sandbox image");
   });

@@ -1266,7 +1266,7 @@ hermes-box  127.0.0.1  8642  12346  running`;
     expect(secretBoundaryCalls).toBe(1);
   });
 
-  it("falls through when the Hermes secret-boundary validator is absent on an older sandbox image", () => {
+  it("refuses recovery when the Hermes secret-boundary validator is absent", () => {
     const openshellRuntime = requireDist("../dist/lib/adapters/openshell/runtime.js");
     const agentRuntime = requireDist("../dist/lib/agent/runtime.js");
     const registry = requireDist("../dist/lib/state/registry.js");
@@ -1286,9 +1286,9 @@ hermes-box  127.0.0.1  8642  12346  running`;
         }
         if (shellCommand.includes("validate-hermes-env-secret-boundary.py")) {
           return {
-            status: 0,
+            status: 1,
             stdout: "__NEMOCLAW_SANDBOX_EXEC_STARTED__\nSECRET_BOUNDARY_VALIDATOR_MISSING\n",
-            stderr: "",
+            stderr: "[gateway-recovery] ERROR: secret-boundary validator script missing",
           } as never;
         }
         return { status: 0, stdout: "", stderr: "" } as never;
@@ -1319,10 +1319,13 @@ hermes-box  127.0.0.1  8642  12346  running`;
       wasRunning: true,
       recovered: false,
       forwardRecovered: false,
+      secretBoundaryRefused: true,
+      secretBoundaryReason: "inconclusive",
     });
     const errorOutput = errorSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
+    expect(errorOutput).toContain("[gateway-recovery] ERROR");
     expect(errorOutput).toContain(
-      "[boundary] Hermes secret-boundary validator missing in sandbox 'hermes-box'",
+      "Secret-boundary validator missing for Hermes gateway in 'hermes-box'",
     );
     expect(errorOutput).toContain("Re-image the sandbox to enable per-run enforcement.");
   });
