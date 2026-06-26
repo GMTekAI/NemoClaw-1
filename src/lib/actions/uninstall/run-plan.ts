@@ -17,8 +17,8 @@ import {
   type UninstallPaths,
 } from "../../domain/uninstall/paths";
 import { buildUninstallPlan, type UninstallPlan } from "../../domain/uninstall/plan";
-import { isModelRouterCommandLineForPort } from "../../onboard/model-router-process";
 import { stopHostGatewayProcesses } from "../../onboard/host-gateway-process";
+import { isModelRouterCommandLineForPort } from "../../onboard/model-router-process";
 import { stopStaleDashboardListeners } from "../../onboard/stale-gateway-cleanup";
 import { classifyShimPath, type FileSystemDeps } from "./plan";
 
@@ -34,6 +34,7 @@ export interface UninstallRunOptions {
   destroyUserData?: boolean;
   gatewayName?: string;
   keepOpenShell: boolean;
+  keepUserData?: boolean;
 }
 
 export interface UninstallRunDeps {
@@ -798,12 +799,14 @@ function resolvePreserveSet(
   options: UninstallRunOptions,
   runtime: UninstallRuntime,
 ): readonly string[] {
-  // Explicit acknowledgement flag → full purge.
+  if (options.keepUserData) {
+    runtime.log("--keep-user-data set; preserving user data under ~/.nemoclaw/.");
+    return PRESERVED_USER_DATA_ENTRIES;
+  }
   if (options.destroyUserData) {
     runtime.log("--destroy-user-data set; purging user data under ~/.nemoclaw/.");
     return [];
   }
-  // Explicit acknowledgement env var → full purge, matches today's behaviour.
   if (runtime.env.NEMOCLAW_UNINSTALL_DESTROY_USER_DATA === "1") {
     runtime.log(
       "NEMOCLAW_UNINSTALL_DESTROY_USER_DATA=1 set; purging user data under ~/.nemoclaw/.",
@@ -811,15 +814,14 @@ function resolvePreserveSet(
     return [];
   }
   const preservable = detectPreservableEntries(paths, runtime);
-  // Nothing on disk worth preserving → no message, no prompt; treat as default
-  // preserve set so a later snapshot-create still survives if the user re-runs.
   if (preservable.length === 0) return PRESERVED_USER_DATA_ENTRIES;
-  // Non-interactive (no TTY, --yes, or NEMOCLAW_NON_INTERACTIVE=1) → preserve
-  // silently with a one-line notice. Default behaviour is safe; users who want
-  // a destructive uninstall in CI must pass --destroy-user-data or set the env var.
   const nonInteractive =
     !runtime.isTty || options.assumeYes || runtime.env.NEMOCLAW_NON_INTERACTIVE === "1";
   if (nonInteractive) {
+    if (options.assumeYes) {
+      runtime.log("--yes acknowledged; purging user data under ~/.nemoclaw/.");
+      return [];
+    }
     runtime.log(`Preserving ${preservable.join(", ")} under ${paths.nemoclawStateDir}.`);
     runtime.log(
       "  Pass --destroy-user-data (or set NEMOCLAW_UNINSTALL_DESTROY_USER_DATA=1) to purge user data on uninstall.",

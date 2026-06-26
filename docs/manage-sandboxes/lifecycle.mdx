@@ -250,18 +250,21 @@ To remove NemoClaw and all resources created during setup, run the CLI's built-i
 $$nemoclaw uninstall
 ```
 
-| Flag                  | Effect                                                                                |
-|-----------------------|---------------------------------------------------------------------------------------|
-| `--yes`               | Skip the confirmation prompt.                                                         |
-| `--keep-openshell`    | Leave OpenShell binaries installed.                                                   |
-| `--delete-models`     | Also remove NemoClaw-pulled Ollama models.                                            |
-| `--destroy-user-data` | Also remove preserved user data (`rebuild-backups/`, `backups/`, `sandboxes.json`).   |
+| Flag                  | Effect                                                                                                  |
+|-----------------------|---------------------------------------------------------------------------------------------------------|
+| `--yes`               | Skip all confirmation prompts and remove preserved user data; pair with `--keep-user-data` to preserve. |
+| `--keep-openshell`    | Leave OpenShell binaries installed.                                                                     |
+| `--delete-models`     | Also remove NemoClaw-pulled Ollama models.                                                              |
+| `--destroy-user-data` | Remove preserved user data (`rebuild-backups/`, `backups/`, `sandboxes.json`) without requiring `--yes`.|
+| `--keep-user-data`    | Preserve `rebuild-backups/`, `backups/`, and `sandboxes.json` under `~/.nemoclaw/` even with `--yes`.    |
+| `--gateway <name>`    | Override the gateway name to remove (default: `nemoclaw`).                                              |
 
 <Note>
-The uninstall command preserves `~/.nemoclaw/rebuild-backups/` (host-side snapshots that snapshot and `backup-all` commands write), `~/.nemoclaw/backups/` (workspace backups that `scripts/backup-workspace.sh` writes), and `~/.nemoclaw/sandboxes.json` (the sandbox registry) by default.
+The uninstall command treats `~/.nemoclaw/rebuild-backups/` (host-side snapshots that snapshot and `backup-all` commands write), `~/.nemoclaw/backups/` (workspace backups that `scripts/backup-workspace.sh` writes), and `~/.nemoclaw/sandboxes.json` (the sandbox registry) as preserve-able user data.
 Uninstall removes every other entry under `~/.nemoclaw/`.
 Interactive runs prompt before they remove the preserved entries; the default answer keeps them.
-For non-interactive runs (`--yes`, `NEMOCLAW_NON_INTERACTIVE=1`, or a non-TTY shell), pass `--destroy-user-data` (or set `NEMOCLAW_UNINSTALL_DESTROY_USER_DATA=1`) to acknowledge data loss and remove the preserved entries as well.
+Non-interactive runs treat `--yes` as acknowledgement of every prompt, including the data-loss prompt: `--yes` removes the preserved entries. Pass `--keep-user-data` alongside `--yes` to retain them.
+On a non-TTY shell or with `NEMOCLAW_NON_INTERACTIVE=1` but no `--yes`, the preserved entries are kept by default; pass `--destroy-user-data` (or set `NEMOCLAW_UNINSTALL_DESTROY_USER_DATA=1`) to remove them.
 See the [Commands reference](../reference/commands#$$nemoclaw-uninstall) for the full preservation contract.
 </Note>
 
@@ -273,7 +276,7 @@ If the CLI is missing or broken, fall back to the hosted script:
 curl -fsSL https://raw.githubusercontent.com/NVIDIA/NemoClaw/refs/heads/main/uninstall.sh | bash
 ```
 
-The same `--yes`, `--keep-openshell`, `--delete-models`, and `--destroy-user-data` flags listed above also apply to the hosted script. Pass them after `bash -s --`.
+The same `--yes`, `--keep-openshell`, `--delete-models`, `--destroy-user-data`, `--keep-user-data`, and `--gateway` flags listed above also apply to the hosted script. Pass them after `bash -s --`.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/NVIDIA/NemoClaw/refs/heads/main/uninstall.sh | bash -s -- --yes --delete-models

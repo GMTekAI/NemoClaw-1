@@ -4,9 +4,9 @@
 import { AGENT_PRODUCT_NAME, CLI_DISPLAY_NAME, CLI_NAME } from "../cli/branding";
 import {
   brandedPublicText,
+  type CommandDef,
   commandsByGroup,
   visibleCommands,
-  type CommandDef,
 } from "../cli/command-registry";
 import { getRegisteredOclifCommandSummary } from "../cli/oclif-metadata";
 import { getVersion } from "../core/version";
@@ -73,9 +73,17 @@ export function help(): void {
 
   lines.push("");
   lines.push(`  ${G}Uninstall flags:${R}`);
-  lines.push(`    --yes${" ".repeat(29)}Skip the confirmation prompt`);
+  lines.push(
+    `    --yes${" ".repeat(29)}Skip prompts and remove preserved ~/.nemoclaw/ user data (use --keep-user-data to preserve)`,
+  );
   lines.push(`    --keep-openshell${" ".repeat(18)}Leave the openshell binary installed`);
   lines.push(`    --delete-models${" ".repeat(19)}Remove ${CLI_DISPLAY_NAME}-pulled Ollama models`);
+  lines.push(
+    `    --destroy-user-data${" ".repeat(15)}Remove preserved ~/.nemoclaw/ user data (rebuild-backups/, backups/, sandboxes.json)`,
+  );
+  lines.push(
+    `    --keep-user-data${" ".repeat(18)}Preserve ~/.nemoclaw/ user data even with --yes`,
+  );
 
   lines.push("");
   lines.push(`  ${G}Reconfiguration (after onboard):${R}`);

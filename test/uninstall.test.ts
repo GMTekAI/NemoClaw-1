@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, it, expect } from "vitest";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { describe, expect, it } from "vitest";
 
 const UNINSTALL_SCRIPT = path.join(import.meta.dirname, "..", "uninstall.sh");
 
@@ -31,6 +31,8 @@ describe("uninstall CLI flags", () => {
     expect(output).toMatch(/--yes/);
     expect(output).toMatch(/--keep-openshell/);
     expect(output).toMatch(/--delete-models/);
+    expect(output).toMatch(/--destroy-user-data/);
+    expect(output).toMatch(/--keep-user-data/);
   });
 
   it("--help uses NemoHermes branding when Hermes is the active agent", () => {
@@ -76,6 +78,84 @@ describe("uninstall CLI flags", () => {
       const output = `${result.stdout}${result.stderr}`;
       expect(output).toMatch(/NemoClaw/);
       expect(output).toMatch(/Claws retracted/);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it("--yes purges preserved ~/.nemoclaw user data through the public wrapper", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-uninstall-yes-purge-"));
+    const fakeBin = path.join(tmp, "bin");
+    writeFakeTools(fakeBin);
+    const stateDir = path.join(tmp, ".nemoclaw");
+    fs.mkdirSync(path.join(stateDir, "rebuild-backups", "sb1", "20260101"), { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "rebuild-backups", "sb1", "20260101", "manifest.json"),
+      "{}",
+    );
+    fs.mkdirSync(path.join(stateDir, "backups", "20260320-120000"), { recursive: true });
+    fs.writeFileSync(path.join(stateDir, "backups", "20260320-120000", "USER.md"), "hello");
+    fs.writeFileSync(path.join(stateDir, "sandboxes.json"), "[]");
+
+    try {
+      const result = spawnSync("bash", [UNINSTALL_SCRIPT, "--yes"], {
+        cwd: path.join(import.meta.dirname, ".."),
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          HOME: tmp,
+          PATH: `${fakeBin}:/usr/bin:/bin`,
+          NEMOCLAW_NODE: process.execPath,
+          TMPDIR: tmp,
+        },
+      });
+
+      expect(result.status).toBe(0);
+      const output = `${result.stdout}${result.stderr}`;
+      expect(output).toMatch(/--yes acknowledged; purging user data under ~\/\.nemoclaw\//);
+      expect(fs.existsSync(stateDir)).toBe(false);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it("--yes --keep-user-data preserves rebuild-backups, backups, and sandboxes.json", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-uninstall-keep-user-data-"));
+    const fakeBin = path.join(tmp, "bin");
+    writeFakeTools(fakeBin);
+    const stateDir = path.join(tmp, ".nemoclaw");
+    fs.mkdirSync(path.join(stateDir, "rebuild-backups", "sb1", "20260101"), { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "rebuild-backups", "sb1", "20260101", "manifest.json"),
+      "{}",
+    );
+    fs.mkdirSync(path.join(stateDir, "backups", "20260320-120000"), { recursive: true });
+    fs.writeFileSync(path.join(stateDir, "backups", "20260320-120000", "USER.md"), "hello");
+    fs.writeFileSync(path.join(stateDir, "sandboxes.json"), "[]");
+
+    try {
+      const result = spawnSync("bash", [UNINSTALL_SCRIPT, "--yes", "--keep-user-data"], {
+        cwd: path.join(import.meta.dirname, ".."),
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          HOME: tmp,
+          PATH: `${fakeBin}:/usr/bin:/bin`,
+          NEMOCLAW_NODE: process.execPath,
+          TMPDIR: tmp,
+        },
+      });
+
+      expect(result.status).toBe(0);
+      const output = `${result.stdout}${result.stderr}`;
+      expect(output).toMatch(/--keep-user-data set; preserving user data under ~\/\.nemoclaw\//);
+      expect(
+        fs.existsSync(path.join(stateDir, "rebuild-backups", "sb1", "20260101", "manifest.json")),
+      ).toBe(true);
+      expect(fs.existsSync(path.join(stateDir, "backups", "20260320-120000", "USER.md"))).toBe(
+        true,
+      );
+      expect(fs.existsSync(path.join(stateDir, "sandboxes.json"))).toBe(true);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
