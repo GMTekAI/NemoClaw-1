@@ -49,6 +49,7 @@ describe("agent definitions", () => {
       format: "json",
     });
     expect(openclaw.inferenceProviderOptions).toEqual([]);
+    expect(openclaw.mcpCapability).toEqual({ support: "bridge" });
     // OpenClaw uses device_pairing web auth — no fetchable bearer token.
     expect(openclaw.webAuth).toEqual({ method: "none", env: null });
     // #5027: openclaw.json must be declared as a durable state file so
@@ -72,6 +73,10 @@ describe("agent definitions", () => {
       format: "yaml",
     });
     expect(hermes.inferenceProviderOptions).toEqual(["hermesProvider"]);
+    expect(hermes.mcpCapability).toEqual({
+      support: "disabled",
+      reason: "Hermes MCP bridge design is tracked by NVIDIA/NemoClaw#566.",
+    });
     expect(hermes.healthProbe?.url).toBe("http://localhost:8642/health");
     expect(hermes.forwardPort).toBe(18789);
     expect(hermes.forward_ports).toEqual([18789, 8642]);
@@ -114,6 +119,11 @@ describe("agent definitions", () => {
       format: "toml",
     });
     expect(deepAgentsCode.inference?.provider_type).toBe("openai_compatible");
+    expect(deepAgentsCode.mcpCapability).toEqual({
+      support: "disabled",
+      reason:
+        "The managed Deep Agents Code wrapper intentionally forces MCP off; NVIDIA/NemoClaw#566 tracks future design.",
+    });
     expect(deepAgentsCode.stateDirs).toEqual([".state", "skills", "agent/skills"]);
     expect(deepAgentsCode.stateFiles).toEqual([
       { path: "config.toml", strategy: "copy" },

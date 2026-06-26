@@ -1257,6 +1257,65 @@ $$nemoclaw my-assistant channels status --channel whatsapp
 
 The probe is bounded by an in-sandbox `openshell sandbox exec` with a hard timeout, captures only short matched bridge log signals (e.g. `connection.open`, `401 unauthorized`, `qr expired`), and never forwards message bodies to the host diagnostic output.
 
+### `$$nemoclaw <name> mcp list`
+
+List MCP bridges configured for a sandbox.
+The command reports the selected agent's MCP support status and, for each configured bridge, whether the host proxy appears to be running.
+
+```bash
+$$nemoclaw my-assistant mcp list [--json]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--json` | Emit sandbox, support, and bridge state as JSON with bridge tokens redacted |
+
+### `$$nemoclaw <name> mcp add`
+
+Bridge a host-side stdio MCP server into an OpenClaw sandbox.
+Credentials stay in the host process environment: pass `--env KEY` to reference an existing host environment variable, or `--env KEY=VALUE` to use an inline value only for the initial proxy launch.
+NemoClaw persists only the environment variable names, allocates a loopback bridge port, applies a generated sandbox network policy for `host.docker.internal:<port>`, and registers the endpoint with OpenClaw through `mcporter`.
+Agents without bridge support fail before proxy, policy, or registry state is created.
+
+```bash
+$$nemoclaw my-assistant mcp add github --env GITHUB_TOKEN -- npx -y @modelcontextprotocol/server-github
+```
+
+### `$$nemoclaw <name> mcp status`
+
+Inspect MCP bridge state for one server or for all configured bridges.
+Status includes proxy liveness, generated policy presence, adapter registration, port, environment readiness, and the selected agent's MCP support mode.
+
+```bash
+$$nemoclaw my-assistant mcp status [server] [--json]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--json` | Emit status as JSON with bridge tokens redacted |
+
+### `$$nemoclaw <name> mcp restart`
+
+Restart one MCP bridge proxy, or every bridge on the sandbox when no server is supplied.
+Restart requires all referenced host environment variables to be present, reapplies the generated policy if needed, and refreshes the OpenClaw `mcporter` registration.
+
+```bash
+$$nemoclaw my-assistant mcp restart [server]
+```
+
+### `$$nemoclaw <name> mcp remove`
+
+Remove an MCP bridge from a sandbox.
+NemoClaw unregisters the OpenClaw adapter, removes the generated policy, stops the host proxy, deletes runtime files, and clears the sandbox registry entry.
+
+```bash
+$$nemoclaw my-assistant mcp remove github [--force]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--force` | Best-effort cleanup that also clears stale registry and runtime state |
+
 ### `$$nemoclaw <name> skill install <path>`
 
 Deploy a skill directory to a running sandbox.

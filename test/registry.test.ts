@@ -242,6 +242,34 @@ describe("registry", () => {
     expect(sb.model).toBe("new-model");
   });
 
+  it("persists MCP bridge env names without raw host env values", () => {
+    registry.registerSandbox({ name: "mcp-sb", agent: "openclaw" });
+    registry.updateSandbox("mcp-sb", {
+      mcp: {
+        bridges: {
+          github: {
+            server: "github",
+            agent: "openclaw",
+            command: "npx",
+            args: ["-y", "@modelcontextprotocol/server-github"],
+            env: ["GITHUB_TOKEN"],
+            port: 3100,
+            token: "local-bridge-token",
+            policyName: "mcp-bridge-github",
+            addedAt: new Date(0).toISOString(),
+          },
+        },
+      },
+    });
+
+    const raw = fs.readFileSync(regFile, "utf-8");
+    const data = JSON.parse(raw);
+    expect(data.sandboxes["mcp-sb"].mcp.bridges.github.env).toEqual(["GITHUB_TOKEN"]);
+    expect(data.sandboxes["mcp-sb"].mcp.bridges.github.token).toBe("local-bridge-token");
+    expect(raw).not.toContain("ghp_");
+    expect(raw).not.toContain("secret-value");
+  });
+
   it("updateSandbox returns false for nonexistent sandbox", () => {
     expect(registry.updateSandbox("nope", {})).toBe(false);
   });

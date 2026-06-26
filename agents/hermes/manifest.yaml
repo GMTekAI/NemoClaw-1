@@ -115,6 +115,11 @@ inference:
   provider_options:
     - hermesProvider
 
+# ── MCP bridge support ───────────────────────────────────────────
+mcp:
+  support: disabled
+  reason: "Hermes MCP bridge design is tracked by NVIDIA/NemoClaw#566."
+
 # ── Phone-home hosts ───────────────────────────────────────────
 # Agent-specific egress endpoints needed for updates, auth, etc.
 phone_home_hosts:

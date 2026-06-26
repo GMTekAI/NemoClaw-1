@@ -44,6 +44,31 @@ export interface CustomPolicyEntry {
   appliedAt?: string;
 }
 
+export interface McpBridgeLifecycle {
+  pid?: number | null;
+  startedAt?: string | null;
+  stoppedAt?: string | null;
+  lastError?: string | null;
+}
+
+export interface McpBridgeEntry {
+  server: string;
+  agent: string;
+  command: string;
+  args: string[];
+  env: string[];
+  port: number;
+  token: string;
+  policyName: string;
+  addedAt: string;
+  updatedAt?: string;
+  lifecycle?: McpBridgeLifecycle;
+}
+
+export interface SandboxMcpState {
+  bridges: Record<string, McpBridgeEntry>;
+}
+
 // Outcome of the last live sandbox GPU proof run during onboarding/recovery.
 // `status` separates a configured-but-unverified GPU from one whose CUDA
 // usability was actually proven (`verified`) or actively failed a live proof
@@ -94,6 +119,7 @@ export interface SandboxEntry extends Partial<InferenceSelection> {
   nemoclawVersion?: string | null;
   imageTag?: string | null;
   messaging?: SandboxMessagingState;
+  mcp?: SandboxMcpState;
   hermesToolGateways?: string[];
   hermesDashboardEnabled?: boolean;
   hermesDashboardPort?: number | null;
@@ -368,11 +394,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function normalizeSandboxEntryForRuntime(entry: SandboxEntry): SandboxEntry {
   const messaging = cloneSandboxMessagingState(entry.messaging);
-  if (!messaging) {
-    const { messaging: _messaging, ...rest } = entry;
-    return rest;
-  }
-  return { ...entry, messaging };
+  const mcp = normalizeSandboxMcpState(entry.mcp);
+  const { messaging: _messaging, mcp: _mcp, ...rest } = entry;
+  return {
+    ...rest,
+    ...(messaging ? { messaging } : {}),
+    ...(mcp ? { mcp } : {}),
+  };
 }
 
 /**
@@ -394,11 +422,62 @@ function serializeSandboxEntryForDisk(entry: SandboxEntry): SandboxEntry {
     livePhase?: string | null;
   };
   const messaging = serializeSandboxMessagingStateForDisk(durable.messaging);
-  if (!messaging) {
-    const { messaging: _messaging, ...rest } = durable;
-    return rest;
+  const mcp = normalizeSandboxMcpState(durable.mcp);
+  const { messaging: _messaging, mcp: _mcp, ...rest } = durable;
+  return {
+    ...rest,
+    ...(messaging ? { messaging } : {}),
+    ...(mcp ? { mcp } : {}),
+  };
+}
+
+function normalizeSandboxMcpState(value: unknown): SandboxMcpState | undefined {
+  if (!isRecord(value)) return undefined;
+  const bridgesValue = value.bridges;
+  if (!isRecord(bridgesValue)) return undefined;
+  const bridges: Record<string, McpBridgeEntry> = {};
+  for (const [name, rawEntry] of Object.entries(bridgesValue)) {
+    const entry = normalizeMcpBridgeEntry(name, rawEntry);
+    if (entry) bridges[name] = entry;
   }
-  return { ...durable, messaging };
+  return Object.keys(bridges).length > 0 ? { bridges } : undefined;
+}
+
+function normalizeMcpBridgeEntry(server: string, value: unknown): McpBridgeEntry | null {
+  if (!isRecord(value)) return null;
+  const command = typeof value.command === "string" ? value.command : "";
+  const port = typeof value.port === "number" && Number.isInteger(value.port) ? value.port : 0;
+  const token = typeof value.token === "string" ? value.token : "";
+  const policyName = typeof value.policyName === "string" ? value.policyName : "";
+  if (!command || !port || !token || !policyName) return null;
+  const env = Array.isArray(value.env)
+    ? value.env.filter((entry): entry is string => typeof entry === "string")
+    : [];
+  const args = Array.isArray(value.args)
+    ? value.args.filter((entry): entry is string => typeof entry === "string")
+    : [];
+  const lifecycle = isRecord(value.lifecycle) ? value.lifecycle : {};
+  return {
+    server: typeof value.server === "string" && value.server ? value.server : server,
+    agent: typeof value.agent === "string" && value.agent ? value.agent : "openclaw",
+    command,
+    args,
+    env,
+    port,
+    token,
+    policyName,
+    addedAt:
+      typeof value.addedAt === "string" && value.addedAt
+        ? value.addedAt
+        : new Date(0).toISOString(),
+    ...(typeof value.updatedAt === "string" ? { updatedAt: value.updatedAt } : {}),
+    lifecycle: {
+      ...(typeof lifecycle.pid === "number" ? { pid: lifecycle.pid } : {}),
+      ...(typeof lifecycle.startedAt === "string" ? { startedAt: lifecycle.startedAt } : {}),
+      ...(typeof lifecycle.stoppedAt === "string" ? { stoppedAt: lifecycle.stoppedAt } : {}),
+      ...(typeof lifecycle.lastError === "string" ? { lastError: lifecycle.lastError } : {}),
+    },
+  };
 }
 
 export function getSandbox(name: string): SandboxEntry | null {
@@ -442,6 +521,7 @@ export function registerSandbox(entry: SandboxEntry): void {
       nemoclawVersion: entry.nemoclawVersion || null,
       imageTag: entry.imageTag || null,
       messaging: cloneSandboxMessagingState(entry.messaging),
+      mcp: normalizeSandboxMcpState(entry.mcp),
       hermesToolGateways:
         Array.isArray(entry.hermesToolGateways) && entry.hermesToolGateways.length > 0
           ? [...entry.hermesToolGateways]
