@@ -3,6 +3,8 @@
 
 import fs from "node:fs";
 import { chmod } from "node:fs/promises";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 
@@ -17,6 +19,8 @@ import type { ShellProbeResult } from "../fixtures/shell-probe.ts";
 const SANDBOX_NAME = "e2e-mcp-bridge";
 const SERVER_NAME = "fake";
 const HOST_SECRET = "fake-host-mcp-secret-value";
+const COMPATIBLE_KEY = "fake-compatible-mcp-bridge-key";
+const COMPATIBLE_MODEL = "mock/mcp-bridge";
 const REGISTRY_FILE = path.join(process.env.HOME ?? os.homedir(), ".nemoclaw", "sandboxes.json");
 const liveTest = process.env.NEMOCLAW_RUN_E2E_SCENARIOS === "1" ? test : test.skip;
 
@@ -26,6 +30,119 @@ function resultText(result: ShellProbeResult): string {
 
 function expectExitZero(result: ShellProbeResult, label: string): void {
   expect(result.exitCode, `${label}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`).toBe(0);
+}
+
+function jsonResponse(res: http.ServerResponse, status: number, payload: unknown): void {
+  const body = JSON.stringify(payload);
+  res.writeHead(status, {
+    "Content-Type": "application/json",
+    "Content-Length": Buffer.byteLength(body),
+  });
+  res.end(body);
+}
+
+async function readRequestBody(req: http.IncomingMessage): Promise<string> {
+  return await new Promise((resolve) => {
+    let body = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk: string) => {
+      body += chunk;
+    });
+    req.on("end", () => resolve(body));
+  });
+}
+
+async function startCompatibleMock(): Promise<{ port: number; close(): Promise<void> }> {
+  const server = http.createServer(async (req, res) => {
+    const requestPath = new URL(req.url ?? "/", "http://compatible.mock").pathname;
+    const auth = req.headers.authorization === `Bearer ${COMPATIBLE_KEY}`;
+    if (!auth) {
+      jsonResponse(res, 401, { error: { message: "missing bearer credential" } });
+      return;
+    }
+
+    if (req.method === "GET" && ["/models", "/v1/models"].includes(requestPath)) {
+      jsonResponse(res, 200, {
+        object: "list",
+        data: [{ id: COMPATIBLE_MODEL, object: "model" }],
+      });
+      return;
+    }
+
+    if (
+      req.method === "POST" &&
+      ["/chat/completions", "/v1/chat/completions"].includes(requestPath)
+    ) {
+      await readRequestBody(req);
+      jsonResponse(res, 200, {
+        id: "chatcmpl-mcp-bridge",
+        object: "chat.completion",
+        choices: [
+          { index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" },
+        ],
+      });
+      return;
+    }
+
+    if (req.method === "POST" && ["/responses", "/v1/responses"].includes(requestPath)) {
+      await readRequestBody(req);
+      jsonResponse(res, 200, {
+        id: "resp-mcp-bridge",
+        object: "response",
+        output: [
+          {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "ok" }],
+          },
+        ],
+      });
+      return;
+    }
+
+    jsonResponse(res, 404, { error: { message: "not found" } });
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "0.0.0.0", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("compatible endpoint mock did not bind to a TCP port");
+  }
+  return {
+    port: (address as AddressInfo).port,
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  };
+}
+
+async function hostAddressForSandbox(host: HostCliClient): Promise<string> {
+  const probe = await host.command(
+    "bash",
+    [
+      "-lc",
+      [
+        'ip_addr="$(ip route get 1.1.1.1 2>/dev/null | awk \'{for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}\')"',
+        'if [ -n "$ip_addr" ]; then echo "$ip_addr"; exit 0; fi',
+        "ip_addr=\"$(hostname -I 2>/dev/null | awk '{print $1}')\"",
+        'if [ -n "$ip_addr" ]; then echo "$ip_addr"; exit 0; fi',
+        "echo 127.0.0.1",
+      ].join("\n"),
+    ],
+    {
+      artifactName: "host-ip-for-mcp-compatible-endpoint",
+      env: buildAvailabilityProbeEnv(),
+      timeoutMs: 30_000,
+    },
+  );
+  return probe.stdout.trim().split(/\s+/)[0] || "127.0.0.1";
 }
 
 async function bestEffortRemoveBridge(host: HostCliClient): Promise<void> {
@@ -69,26 +186,32 @@ setInterval(() => {}, 1000);
   return script;
 }
 
-async function onboardOpenClaw(host: HostCliClient, cleanup: CleanupRegistry): Promise<void> {
+async function onboardOpenClaw(
+  host: HostCliClient,
+  cleanup: CleanupRegistry,
+  endpointUrl: string,
+): Promise<void> {
   cleanup.add("destroy MCP bridge sandbox", () => cleanupSandbox(host));
   await host.bestEffortCleanupSandbox(SANDBOX_NAME, {
     artifactName: "precleanup-destroy-sandbox",
     timeoutMs: 15 * 60_000,
   });
-  const apiKey = process.env.NVIDIA_INFERENCE_API_KEY ?? "";
   const result = await host.nemoclaw(
     ["onboard", "--non-interactive", "--yes", "--yes-i-accept-third-party-software"],
     {
       artifactName: "onboard-openclaw-mcp-bridge",
       env: {
         ...buildAvailabilityProbeEnv(),
+        COMPATIBLE_API_KEY: COMPATIBLE_KEY,
         NEMOCLAW_AGENT: "openclaw",
-        NEMOCLAW_PROVIDER: "cloud",
+        NEMOCLAW_ENDPOINT_URL: endpointUrl,
+        NEMOCLAW_MODEL: COMPATIBLE_MODEL,
+        NEMOCLAW_PREFERRED_API: "openai-completions",
+        NEMOCLAW_PROVIDER: "custom",
         NEMOCLAW_SANDBOX_NAME: SANDBOX_NAME,
         NEMOCLAW_RECREATE_SANDBOX: "1",
-        NVIDIA_INFERENCE_API_KEY: apiKey,
       },
-      redactionValues: [apiKey],
+      redactionValues: [COMPATIBLE_KEY],
       timeoutMs: 20 * 60_000,
     },
   );
@@ -121,8 +244,12 @@ liveTest("mcp-bridge", { timeout: 45 * 60_000 }, async ({ artifacts, cleanup, ho
     sandbox: SANDBOX_NAME,
     server: SERVER_NAME,
   });
+  const compatibleMock = await startCompatibleMock();
+  cleanup.add("stop MCP bridge compatible endpoint mock", () => compatibleMock.close());
+  const hostAddress = await hostAddressForSandbox(host);
+  const endpointUrl = `http://${hostAddress}:${compatibleMock.port}/v1`;
   const fakeServer = await createFakeMcpServer(artifacts);
-  await onboardOpenClaw(host, cleanup);
+  await onboardOpenClaw(host, cleanup, endpointUrl);
   cleanup.add("remove MCP bridge", () => bestEffortRemoveBridge(host));
 
   const add = await host.nemoclaw(

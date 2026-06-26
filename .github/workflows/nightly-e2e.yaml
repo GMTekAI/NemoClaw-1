@@ -1664,6 +1664,7 @@ jobs:
        contains(format(',{0},', inputs.jobs), ',mcp-bridge-e2e,'))
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
     timeout-minutes: 50
     steps:
@@ -1692,11 +1693,9 @@ jobs:
 
       - name: Run MCP bridge Vitest E2E
         env:
-          NVIDIA_INFERENCE_API_KEY: ${{ secrets.NVIDIA_INFERENCE_API_KEY }}
           E2E_ARTIFACT_DIR: ${{ github.workspace }}/e2e-artifacts/vitest/mcp-bridge
           NEMOCLAW_CLI_BIN: ${{ github.workspace }}/bin/nemoclaw.js
           NEMOCLAW_RUN_E2E_SCENARIOS: "1"
-          NEMOCLAW_E2E_USE_HOSTED_INFERENCE: "1"
           NEMOCLAW_OPENSHELL_CHANNEL: ${{ github.event_name == 'workflow_dispatch' && inputs.openshell_channel || 'stable' }}
           NEMOCLAW_OPENSHELL_ARTIFACT_RUN_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.openshell_artifact_run_id || '' }}
         run: |

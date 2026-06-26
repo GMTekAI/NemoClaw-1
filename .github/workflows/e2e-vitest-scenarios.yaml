@@ -389,7 +389,6 @@ jobs:
       E2E_ARTIFACT_DIR: ${{ github.workspace }}/e2e-artifacts/vitest/mcp-bridge
       NEMOCLAW_CLI_BIN: ${{ github.workspace }}/bin/nemoclaw.js
       NEMOCLAW_RUN_E2E_SCENARIOS: "1"
-      NEMOCLAW_E2E_USE_HOSTED_INFERENCE: "1"
       NEMOCLAW_OPENSHELL_CHANNEL: ${{ inputs.openshell_channel }}
       NEMOCLAW_OPENSHELL_ARTIFACT_RUN_ID: ${{ inputs.openshell_artifact_run_id }}
     steps:
@@ -441,8 +440,6 @@ jobs:
         run: bash scripts/install-openshell.sh
 
       - name: Run MCP bridge live test
-        env:
-          NVIDIA_INFERENCE_API_KEY: ${{ secrets.NVIDIA_INFERENCE_API_KEY }}
         run: |
           set -euo pipefail
           export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"
