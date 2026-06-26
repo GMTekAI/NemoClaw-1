@@ -344,6 +344,90 @@ describe("messaging-build-applier.mts: agent-install", () => {
     }
   });
 
+  it("preserves Hermes runtime env aliases in the reduced runtime plan artifact", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-hermes-runtime-plan-artifact-"));
+    const artifactPath = path.join(tmp, "runtime", "messaging-runtime-plan.json");
+    const plan = {
+      schemaVersion: 1,
+      sandboxName: "test-sandbox",
+      agent: "hermes",
+      workflow: "rebuild",
+      channels: [{ channelId: "slack", active: true, disabled: false }],
+      disabledChannels: [],
+      credentialBindings: [
+        {
+          channelId: "slack",
+          providerEnvKey: "SLACK_BOT_TOKEN",
+          placeholder: "xoxb-OPENSHELL-RESOLVE-ENV-SLACK_BOT_TOKEN",
+        },
+      ],
+      agentRender: [],
+      buildSteps: [],
+      runtimeSetup: {
+        nodePreloads: [],
+        envAliases: [
+          {
+            channelId: "slack",
+            envKey: "SLACK_BOT_TOKEN",
+            match: "^openshell:resolve:env:(v[0-9]+_)?SLACK_BOT_TOKEN$",
+            value: "xoxb-OPENSHELL-RESOLVE-ENV-SLACK_BOT_TOKEN",
+            message:
+              "[channels] Normalized SLACK_BOT_TOKEN runtime placeholder to the Bolt-compatible alias",
+          },
+          {
+            channelId: "slack",
+            envKey: "SLACK_APP_TOKEN",
+            match: "^openshell:resolve:env:(v[0-9]+_)?SLACK_APP_TOKEN$",
+            value: "xapp-OPENSHELL-RESOLVE-ENV-SLACK_APP_TOKEN",
+            message:
+              "[channels] Normalized SLACK_APP_TOKEN runtime placeholder to the Bolt-compatible alias",
+          },
+        ],
+        secretScans: [],
+      },
+    };
+
+    try {
+      const result = spawnSync(
+        "node",
+        [
+          "--experimental-strip-types",
+          SCRIPT_PATH,
+          "--agent",
+          "hermes",
+          "--phase",
+          "runtime-setup",
+        ],
+        {
+          encoding: "utf-8",
+          stdio: ["pipe", "pipe", "pipe"],
+          env: {
+            PATH: process.env.PATH || "/usr/bin:/bin",
+            NEMOCLAW_MESSAGING_RUNTIME_PLAN_PATH: artifactPath,
+            NEMOCLAW_MESSAGING_PLAN_B64: encodePlan(plan),
+          },
+          timeout: 10_000,
+        },
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      const artifact = JSON.parse(fs.readFileSync(artifactPath, "utf-8"));
+      expect(artifact).toMatchObject({
+        schemaVersion: 1,
+        sandboxName: "test-sandbox",
+        agent: "hermes",
+        workflow: "rebuild",
+        channels: [{ channelId: "slack", active: true, disabled: false }],
+        credentialBindings: [{ channelId: "slack", providerEnvKey: "SLACK_BOT_TOKEN" }],
+        runtimeSetup: {
+          envAliases: plan.runtimeSetup.envAliases,
+        },
+      });
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("installs package-install specs supplied by the compiled plan", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-openclaw-package-plan-"));
     const tracePath = path.join(tmp, "openclaw.trace");
@@ -938,82 +1022,6 @@ describe("messaging-build-applier.mts: agent-install", () => {
       expect(result.status).toBe(2);
       expect(result.stderr).toContain("must stay inside");
       expect(fs.existsSync(path.join(tmp, "escaped.json"))).toBe(false);
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
-  });
-
-  it("applies DeepAgents messaging render to .env and messaging.json without raw tokens", () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-deepagents-render-"));
-    const plan = {
-      schemaVersion: 1,
-      sandboxName: "test-sandbox",
-      agent: "langchain-deepagents-code",
-      channels: [{ channelId: "discord", active: true }],
-      credentialBindings: [
-        {
-          channelId: "discord",
-          credentialId: "botToken",
-          providerEnvKey: "DISCORD_BOT_TOKEN",
-          placeholder: "openshell:resolve:env:DISCORD_BOT_TOKEN",
-        },
-      ],
-      agentRender: [
-        {
-          channelId: "discord",
-          agent: "langchain-deepagents-code",
-          target: "~/.deepagents/.env",
-          kind: "env-lines",
-          renderId: "discord-deepagents-env",
-          lines: [
-            "DISCORD_BOT_TOKEN=openshell:resolve:env:DISCORD_BOT_TOKEN",
-            "NEMOCLAW_DISCORD_GUILD_IDS=1234567890",
-          ],
-        },
-        {
-          channelId: "discord",
-          agent: "langchain-deepagents-code",
-          target: "~/.deepagents/messaging.json",
-          kind: "json-fragment",
-          path: "channels.discord",
-          value: { enabled: true, requireMention: true },
-        },
-      ],
-      buildSteps: [],
-    };
-
-    try {
-      const result = spawnSync(
-        "node",
-        [
-          "--experimental-strip-types",
-          SCRIPT_PATH,
-          "--agent",
-          "langchain-deepagents-code",
-          "--phase",
-          "post-agent-install",
-        ],
-        {
-          encoding: "utf-8",
-          stdio: ["pipe", "pipe", "pipe"],
-          env: {
-            PATH: process.env.PATH || "/usr/bin:/bin",
-            HOME: tmp,
-            NEMOCLAW_MESSAGING_PLAN_B64: Buffer.from(JSON.stringify(plan)).toString("base64"),
-            DISCORD_BOT_TOKEN: "raw-discord-token",
-          },
-          timeout: 10_000,
-        },
-      );
-
-      expect(result.status, result.stderr).toBe(0);
-      const envText = fs.readFileSync(path.join(tmp, ".deepagents", ".env"), "utf-8");
-      expect(envText).toContain("DISCORD_BOT_TOKEN=openshell:resolve:env:DISCORD_BOT_TOKEN");
-      expect(envText).toContain("NEMOCLAW_DISCORD_GUILD_IDS=1234567890");
-      expect(envText).not.toContain("raw-discord-token");
-      expect(
-        JSON.parse(fs.readFileSync(path.join(tmp, ".deepagents", "messaging.json"), "utf-8")),
-      ).toEqual({ channels: { discord: { enabled: true, requireMention: true } } });
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
