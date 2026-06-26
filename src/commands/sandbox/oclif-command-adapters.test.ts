@@ -87,22 +87,23 @@ vi.mock("../../lib/shields", () => ({
   shieldsUp: mocks.shieldsUp,
 }));
 
-import ConnectCliCommand from "./connect";
+import SandboxChannelsListCommand from "./channels/list";
 import SandboxConfigGetCommand from "./config/get";
+import ConnectCliCommand from "./connect";
 import DestroyCliCommand from "./destroy";
 import SandboxDoctorCliCommand from "./doctor";
-import SandboxChannelsListCommand from "./channels/list";
+import GatewayRestartCliCommand from "./gateway/restart";
 import HostsAddCommand from "./hosts/add";
 import HostsListCommand from "./hosts/list";
 import HostsRemoveCommand from "./hosts/remove";
 import SandboxLogsCommand from "./logs";
 import SandboxPolicyListCommand from "./policy/list";
-import GatewayRestartCliCommand from "./gateway/restart";
 import RebuildCliCommand from "./rebuild";
-import SandboxStatusCommand from "./status";
+import RecoverCliCommand from "./recover";
 import ShieldsDownCommand from "./shields/down";
 import ShieldsStatusCommand from "./shields/status";
 import ShieldsUpCommand from "./shields/up";
+import SandboxStatusCommand from "./status";
 
 const rootDir = process.cwd();
 
@@ -195,6 +196,11 @@ describe("sandbox oclif command adapters", () => {
     expect(usage(SandboxLogsCommand)).toContain("[--tail <lines>|-n <lines>]");
     expect(DestroyCliCommand.id).toBe("sandbox:destroy");
     expect(usage(DestroyCliCommand)).toContain("[--yes|-y|--force]");
+    expect(RecoverCliCommand.id).toBe("sandbox:recover");
+    expect(RecoverCliCommand.summary).toMatch(/Repair a stopped sandbox gateway/);
+    expect(RecoverCliCommand.description).toContain("A healthy gateway is not restarted");
+    expect(RecoverCliCommand.description).toContain("gateway restart");
+    expect(RecoverCliCommand.summary).not.toMatch(/^Restart\b/);
     expect(RebuildCliCommand.id).toBe("sandbox:rebuild");
     expect(usage(RebuildCliCommand)).toContain("[--yes|-y|--force]");
     expect(SandboxPolicyListCommand.id).toBe("sandbox:policy:list");
