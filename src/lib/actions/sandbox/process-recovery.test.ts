@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { createRequire } from "node:module";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // Import from compiled dist for parity with the other CLI tests in this project.
@@ -9,6 +11,12 @@ import {
   restartSandboxGateway,
   waitForRecoveredSandboxGateway,
 } from "../../../../dist/lib/actions/sandbox/process-recovery";
+
+const requireDist = createRequire(import.meta.url);
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("probeSandboxInferenceGatewayHealth — #3265 gateway-chain subprobe", () => {
   const makeExec =
@@ -170,6 +178,43 @@ describe("restartSandboxGateway — host-mediated gateway restart", () => {
       ...overrides,
     };
   }
+
+  it("refuses unframed OpenShell root exec output without using the Docker fallback", () => {
+    const childProcess = requireDist("node:child_process");
+    const dockerExec = requireDist("../../../../dist/lib/adapters/docker/exec.js");
+    const openshellRuntime = requireDist("../../../../dist/lib/adapters/openshell/runtime.js");
+    const agentRuntime = requireDist("../../../../dist/lib/agent/runtime.js");
+    const registry = requireDist("../../../../dist/lib/state/registry.js");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(openshellRuntime, "getOpenshellBinary").mockReturnValue("openshell");
+    vi.spyOn(childProcess, "spawnSync").mockReturnValue({
+      status: 0,
+      stdout: "OpenShell transport preamble without child stdout marker\n",
+      stderr: "",
+    } as never);
+    const dockerSpawnSync = vi.spyOn(dockerExec, "dockerSpawnSync").mockReturnValue({
+      status: 0,
+      stdout: "__NEMOCLAW_SANDBOX_EXEC_STARTED__\nGATEWAY_PID=123\n",
+      stderr: "",
+    } as never);
+    vi.spyOn(agentRuntime, "getSessionAgent").mockReturnValue(null);
+    vi.spyOn(registry, "getSandbox").mockReturnValue({
+      name: "openclaw-box",
+      agent: "openclaw",
+      dashboardPort: 18789,
+    });
+
+    const result = restartSandboxGateway("openclaw-box", { quiet: true });
+
+    expect(result).toMatchObject({
+      ok: false,
+      failureLayer: "root exec unavailable",
+    });
+    expect(dockerSpawnSync).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(
+      "  Failure layer: root exec unavailable - gateway restart failed for 'openclaw-box'.",
+    );
+  });
 
   it("force-restarts through root exec even when a gateway might already be healthy", () => {
     const restore = silenceConsole();
