@@ -71,9 +71,7 @@ export function mergeRequiredMessagingChannelPolicyPresets(
   return merged;
 }
 
-export function allMessagingChannelPolicyPresets(
-  channels: string[] | null | undefined,
-): string[] {
+export function allMessagingChannelPolicyPresets(channels: string[] | null | undefined): string[] {
   const all: string[] = [];
   for (const channel of normalizedNames(channels)) {
     for (const preset of ALL_POLICY_PRESETS_BY_MESSAGING_CHANNEL[channel] || []) {

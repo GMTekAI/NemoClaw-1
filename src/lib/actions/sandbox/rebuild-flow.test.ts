@@ -474,6 +474,39 @@ describe("rebuildSandbox flow", () => {
     });
   });
 
+  it("prunes the disabled Teams preset from the final registry policies after rebuild", async () => {
+    const disabledTeamsPlan = {
+      schemaVersion: 1,
+      sandboxName: "alpha",
+      agent: "openclaw",
+      workflow: "rebuild",
+      channels: [],
+      disabledChannels: ["teams"],
+      credentialBindings: [],
+      networkPolicy: { presets: [], entries: [] },
+      agentRender: [],
+      buildSteps: [],
+      stateUpdates: [],
+      healthChecks: [],
+    };
+    const harness = createRebuildFlowHarness({
+      applyPreset: () => true,
+      backupPolicyPresets: ["teams", "npm"],
+      buildMessagingRebuildPlan: () => disabledTeamsPlan,
+    });
+
+    await expect(
+      harness.rebuildSandbox("alpha", ["--yes"], { throwOnError: true }),
+    ).resolves.toBeUndefined();
+
+    expect(harness.applyPresetSpy).toHaveBeenCalledWith("alpha", "npm");
+    expect(harness.applyPresetSpy).not.toHaveBeenCalledWith("alpha", "teams");
+    expect(harness.registryUpdateSpy).toHaveBeenCalledWith("alpha", {
+      agentVersion: "0.2.0",
+      policies: ["npm"],
+    });
+  });
+
   it("aborts before backup/delete when messaging manifest staging fails", async () => {
     const harness = createRebuildFlowHarness({
       buildMessagingRebuildPlan: () => {
