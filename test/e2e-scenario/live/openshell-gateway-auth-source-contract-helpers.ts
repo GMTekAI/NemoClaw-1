@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { createPrivateKey, sign as signPayload } from "node:crypto";
 import fs from "node:fs";
 import http2 from "node:http2";
@@ -45,6 +45,19 @@ type SpawnResult = {
   stderr: string;
   stdout: string;
 };
+
+type SandboxTokenContainerProbeOptions = {
+  authorization: string;
+  dockerBin: string;
+  networkName: string;
+  payload: Buffer;
+  port: number;
+  stateDir: string;
+};
+
+const CONTAINER_PROBE_CA_PATH = "/tmp/nemoclaw-probe-ca.crt";
+const CONTAINER_PROBE_CLIENT_CERT_PATH = "/tmp/nemoclaw-probe-client.crt";
+const CONTAINER_PROBE_CLIENT_KEY_PATH = "/tmp/nemoclaw-probe-client.key";
 
 function run(command: string, args: string[], env: NodeJS.ProcessEnv = process.env): SpawnResult {
   const result = spawnSync(command, args, {
@@ -348,16 +361,8 @@ req.end(Buffer.alloc(5));
   ]);
 }
 
-function sandboxTokenContainerProbe(options: {
-  authorization: string;
-  dockerBin: string;
-  networkName: string;
-  payload: Buffer;
-  port: number;
-  stateDir: string;
-}): SpawnResult {
-  const bundle = getDockerDriverGatewayLocalTlsBundle(options.stateDir);
-  const script = `
+function sandboxTokenContainerProbeScript(): string {
+  return `
 const fs = require("node:fs");
 const http2 = require("node:http2");
 
@@ -426,7 +431,14 @@ req.on("end", () => {
 });
 req.end(grpcFrame);
 `;
-  return run(options.dockerBin, [
+}
+
+export function buildSandboxTokenContainerProbeDockerArgs(
+  options: SandboxTokenContainerProbeOptions,
+): string[] {
+  const bundle = getDockerDriverGatewayLocalTlsBundle(options.stateDir);
+  const script = sandboxTokenContainerProbeScript();
+  return [
     "run",
     "--rm",
     "--network",
@@ -434,7 +446,11 @@ req.end(grpcFrame);
     "--add-host",
     "host.openshell.internal:host-gateway",
     "--volume",
-    `${path.resolve(options.stateDir)}:${path.resolve(options.stateDir)}:ro`,
+    `${path.resolve(bundle.caPath)}:${CONTAINER_PROBE_CA_PATH}:ro`,
+    "--volume",
+    `${path.resolve(bundle.clientCertPath)}:${CONTAINER_PROBE_CLIENT_CERT_PATH}:ro`,
+    "--volume",
+    `${path.resolve(bundle.clientKeyPath)}:${CONTAINER_PROBE_CLIENT_KEY_PATH}:ro`,
     "--env",
     `PROBE_AUTHORIZATION=${options.authorization}`,
     "--env",
@@ -444,16 +460,20 @@ req.end(grpcFrame);
     "--env",
     `PROBE_PAYLOAD_B64=${options.payload.toString("base64")}`,
     "--env",
-    `PROBE_CA_PATH=${bundle.caPath}`,
+    `PROBE_CA_PATH=${CONTAINER_PROBE_CA_PATH}`,
     "--env",
-    `PROBE_CLIENT_CERT_PATH=${bundle.clientCertPath}`,
+    `PROBE_CLIENT_CERT_PATH=${CONTAINER_PROBE_CLIENT_CERT_PATH}`,
     "--env",
-    `PROBE_CLIENT_KEY_PATH=${bundle.clientKeyPath}`,
+    `PROBE_CLIENT_KEY_PATH=${CONTAINER_PROBE_CLIENT_KEY_PATH}`,
     DOCKER_GRPC_PROBE_IMAGE,
     "node",
     "-e",
     script,
-  ]);
+  ];
+}
+
+function sandboxTokenContainerProbe(options: SandboxTokenContainerProbeOptions): SpawnResult {
+  return run(options.dockerBin, buildSandboxTokenContainerProbeDockerArgs(options));
 }
 
 function noTokenProbeWasRejected(result: SpawnResult): boolean {
