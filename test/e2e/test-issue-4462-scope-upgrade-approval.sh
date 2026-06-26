@@ -1393,6 +1393,17 @@ case "$provider_a" in
   *nvidia* | *nemotron* | *integrate.api*)
     pass "sandbox A recorded NVIDIA-family provider (${provider_a}, model=${model_a})"
     ;;
+  compatible-endpoint)
+    case "$model_a" in
+      *nvidia* | *nemotron* | *integrate.api*)
+        pass "sandbox A recorded NVIDIA-family provider via compatible endpoint (${provider_a}, model=${model_a})"
+        ;;
+      *)
+        fail "sandbox A compatible-endpoint model did not match NVIDIA family: model=${model_a:-empty}"
+        provider_check_pass=0
+        ;;
+    esac
+    ;;
   *)
     fail "sandbox A provider did not match NVIDIA family: provider=${provider_a:-empty} model=${model_a:-empty}"
     provider_check_pass=0
