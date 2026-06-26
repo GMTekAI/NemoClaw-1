@@ -27,49 +27,19 @@ import {
 type TraceTimingAnalyzer = {
   ONBOARD_PHASE_ORDER: readonly string[];
   TRACE_SUMMARY_FILE: string;
-  buildPhaseRows: (
-    currentPhases: Record<string, number>,
-    priorPhases: Record<string, number>,
-  ) => Array<{ label: string; currentMs: number; priorMs: number; deltaAbsMs: number }>;
-  buildTraceTimingResult: (deps: {
-    context: Record<string, any>;
-    github: Record<string, any>;
-  }) => Promise<{
-    traceTimingLine: string;
-    traceSummaryLines: string[];
-    budgetExceeded: boolean;
-    budgetWarningMessage: string | null;
+  buildPhaseRows: (...args: any[]) => Array<{
+    label: string;
+    currentMs: number;
+    priorMs: number;
+    deltaAbsMs: number;
+    deltaMs?: number;
   }>;
-  evaluateOnboardPerformanceBudget: (args: {
-    budget: unknown;
-    currentTrace: { totalMs: number; phases?: Record<string, number> };
-    priorTrace?: { totalMs: number };
-    phaseRows?: Array<{
-      label: string;
-      currentMs: number;
-      priorMs: number;
-      deltaAbsMs: number;
-      deltaMs?: number;
-    }>;
-  }) => {
-    exceeded: boolean;
-    summary: string;
-    summaryLines: string[];
-    warningMessage: string | null;
-  } | null;
-  formatTopPhaseChanges: (
-    phaseRows: Array<{ label: string; currentMs: number; priorMs: number; deltaAbsMs: number }>,
-  ) => string;
+  buildTraceTimingResult: (...args: any[]) => Promise<any>;
+  evaluateOnboardPerformanceBudget: (...args: any[]) => any;
+  formatTopPhaseChanges: (...args: any[]) => string;
   readOnboardPerformanceBudget: (rootDir?: string) => unknown;
-  selectOnboardTrace: (
-    jsonTexts: string[],
-  ) => { totalMs: number; phases: Record<string, number> } | null;
-  buildTraceSummaryLines: (
-    currentTrace: { totalMs: number },
-    priorTrace: { totalMs: number },
-    priorTag: { name: string },
-    phaseRows: Array<{ label: string; currentMs: number; priorMs: number; deltaAbsMs: number }>,
-  ) => string[];
+  selectOnboardTrace: (...args: any[]) => { totalMs: number; phases: Record<string, number> } | null;
+  buildTraceSummaryLines: (...args: any[]) => string[];
 };
 
 const require = createRequire(import.meta.url);
