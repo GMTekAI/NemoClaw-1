@@ -32,6 +32,15 @@ describe("uninstall CLI flags", () => {
     return stateDir;
   }
 
+  function sanitizedParentEnv(): NodeJS.ProcessEnv {
+    const cleaned: NodeJS.ProcessEnv = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      if (key.startsWith("NEMOCLAW_")) continue;
+      cleaned[key] = value;
+    }
+    return cleaned;
+  }
+
   function runUninstall(
     tmp: string,
     args: string[],
@@ -41,7 +50,7 @@ describe("uninstall CLI flags", () => {
       cwd: path.join(import.meta.dirname, ".."),
       encoding: "utf-8",
       env: {
-        ...process.env,
+        ...sanitizedParentEnv(),
         HOME: tmp,
         PATH: `${path.join(tmp, "bin")}:/usr/bin:/bin`,
         NEMOCLAW_NODE: process.execPath,

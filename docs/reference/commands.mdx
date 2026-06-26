@@ -1983,7 +1983,10 @@ To avoid uninstall destroying host-side user data, uninstall preserves the follo
 
 Uninstall removes every other entry under `~/.nemoclaw/` (gateway source, runtime state, the Ollama auth proxy PID file, etc.).
 
-`--yes` deliberately remains non-destructive for user data: it only acknowledges the global "Proceed?" prompt and still preserves the listed entries. Removing the preserved entries always requires an explicit opt-in (`--destroy-user-data` or `NEMOCLAW_UNINSTALL_DESTROY_USER_DATA=1`), so existing automation using `--yes` retains its safe behaviour and never loses host-side state by accident.
+`--yes` deliberately remains non-destructive for user data.
+It only acknowledges the global `Proceed?` confirmation prompt and still preserves the listed entries.
+Removing the preserved entries always requires an explicit opt-in flag (`--destroy-user-data`) or the matching env var (`NEMOCLAW_UNINSTALL_DESTROY_USER_DATA=1`).
+Existing automation using `--yes` therefore retains its safe behaviour and never loses host-side state by accident.
 
 Decision matrix:
 
@@ -1992,8 +1995,8 @@ Decision matrix:
 | Interactive TTY, preserved entries present, no env override | Prompts `Also remove them? [y/N]`. Default `N` keeps the entries. |
 | Interactive TTY, user answers `y` | Removes everything under `~/.nemoclaw/` (the previous full-removal behaviour). |
 | Non-interactive (`--yes`, `NEMOCLAW_NON_INTERACTIVE=1`, or non-TTY shell) | Preserves the entries and prints a one-line notice. |
-| Any context with `--destroy-user-data` | Skips the prompt and removes everything under `~/.nemoclaw/`. Takes precedence over the env var. |
-| Any context with `NEMOCLAW_UNINSTALL_DESTROY_USER_DATA=1` | Skips the prompt and removes everything under `~/.nemoclaw/`. |
+| `--destroy-user-data` | Skips the secondary user-data prompt and removes the preserved entries under `~/.nemoclaw/`. The global `Proceed?` confirmation still applies unless `--yes` is also passed. |
+| `NEMOCLAW_UNINSTALL_DESTROY_USER_DATA=1` | Skips the secondary user-data prompt and removes the preserved entries. The global `Proceed?` confirmation still applies unless `--yes` is also passed. |
 
 The preserved entries survive uninstall as inert files on disk.
 Reinstall NemoClaw and re-onboard the sandbox before `$$nemoclaw <name> snapshot restore` can use them.
