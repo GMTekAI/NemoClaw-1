@@ -5,12 +5,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  dockerDriverGatewayLocalTlsBundleIsComplete,
   ensureDockerDriverGatewayLocalTlsBundle,
   getDockerDriverGatewayLocalTlsBundle,
 } from "./docker-driver-gateway-local-tls";
+
+const TEST_CERT_VALID_AT = new Date("2026-06-27T00:00:00.000Z");
+const TEST_CERT_NOT_YET_VALID_AT = new Date("2026-06-26T19:49:53.000Z");
+const TEST_CERT_EXPIRED_AT = new Date("2036-06-23T19:49:55.000Z");
 
 const TEST_CERT_PEM = `-----BEGIN CERTIFICATE-----
 MIIDETCCAfmgAwIBAgIUHcSxS4dERobRjaJRbfMQoMPf3K8wDQYJKoZIhvcNAQEL
@@ -86,10 +91,20 @@ function writeBundle(
   return contents;
 }
 
+function useTestCertificateClock(now = TEST_CERT_VALID_AT): void {
+  vi.useFakeTimers();
+  vi.setSystemTime(now);
+}
+
 describe("docker-driver-gateway-local-tls", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("runs OpenShell certgen into the NemoClaw-owned gateway TLS directory", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-tls-"));
     const calls: Array<{ command: string; args: string[]; env?: NodeJS.ProcessEnv }> = [];
+    useTestCertificateClock();
     try {
       const bundle = ensureDockerDriverGatewayLocalTlsBundle({
         env: { PATH: "/usr/bin" },
@@ -133,6 +148,7 @@ describe("docker-driver-gateway-local-tls", () => {
     fs.chmodSync(paths.serverKeyPath, 0o644);
     fs.chmodSync(paths.clientKeyPath, 0o644);
     let certgenCalls = 0;
+    useTestCertificateClock();
     try {
       const bundle = ensureDockerDriverGatewayLocalTlsBundle({
         env: { PATH: "/usr/bin" },
@@ -160,6 +176,7 @@ describe("docker-driver-gateway-local-tls", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-tls-"));
     writeBundle(stateDir, "not a certificate\n", "not a private key\n");
     let certgenCalls = 0;
+    useTestCertificateClock();
     try {
       ensureDockerDriverGatewayLocalTlsBundle({
         env: { PATH: "/usr/bin" },
@@ -176,6 +193,60 @@ describe("docker-driver-gateway-local-tls", () => {
       expect(certgenCalls).toBe(1);
       expect(fs.readFileSync(paths.caPath, "utf-8")).toBe(TEST_CERT_PEM);
       expect(fs.readFileSync(paths.serverKeyPath, "utf-8")).toBe(TEST_KEY_PEM);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("regenerates a complete but expired mTLS bundle before reuse", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-tls-"));
+    writeBundle(stateDir, TEST_CERT_PEM, TEST_KEY_PEM);
+    let certgenCalls = 0;
+    useTestCertificateClock(TEST_CERT_EXPIRED_AT);
+    try {
+      expect(dockerDriverGatewayLocalTlsBundleIsComplete(stateDir)).toBe(false);
+
+      ensureDockerDriverGatewayLocalTlsBundle({
+        env: { PATH: "/usr/bin" },
+        gatewayBin: "/opt/openshell/openshell-gateway",
+        stateDir,
+        spawnSyncImpl: (() => {
+          certgenCalls += 1;
+          vi.setSystemTime(TEST_CERT_VALID_AT);
+          writeBundle(stateDir, TEST_CERT_PEM, TEST_KEY_PEM);
+          return { status: 0, stdout: "", stderr: "" };
+        }) as never,
+      });
+
+      expect(certgenCalls).toBe(1);
+      expect(dockerDriverGatewayLocalTlsBundleIsComplete(stateDir)).toBe(true);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("regenerates a complete but not-yet-valid mTLS bundle before reuse", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-tls-"));
+    writeBundle(stateDir, TEST_CERT_PEM, TEST_KEY_PEM);
+    let certgenCalls = 0;
+    useTestCertificateClock(TEST_CERT_NOT_YET_VALID_AT);
+    try {
+      expect(dockerDriverGatewayLocalTlsBundleIsComplete(stateDir)).toBe(false);
+
+      ensureDockerDriverGatewayLocalTlsBundle({
+        env: { PATH: "/usr/bin" },
+        gatewayBin: "/opt/openshell/openshell-gateway",
+        stateDir,
+        spawnSyncImpl: (() => {
+          certgenCalls += 1;
+          vi.setSystemTime(TEST_CERT_VALID_AT);
+          writeBundle(stateDir, TEST_CERT_PEM, TEST_KEY_PEM);
+          return { status: 0, stdout: "", stderr: "" };
+        }) as never,
+      });
+
+      expect(certgenCalls).toBe(1);
+      expect(dockerDriverGatewayLocalTlsBundleIsComplete(stateDir)).toBe(true);
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }

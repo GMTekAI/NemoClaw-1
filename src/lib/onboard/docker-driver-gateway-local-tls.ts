@@ -60,7 +60,11 @@ export function dockerDriverGatewayLocalTlsBundleIsComplete(stateDir: string): b
   const clientKey = readPrivateKey(bundle.clientKeyPath);
   if (!ca || !serverCert || !clientCert || !serverKey || !clientKey) return false;
 
+  const nowMs = Date.now();
   return (
+    certificateIsCurrentlyValid(ca, nowMs) &&
+    certificateIsCurrentlyValid(serverCert, nowMs) &&
+    certificateIsCurrentlyValid(clientCert, nowMs) &&
     certificateMatchesPrivateKey(serverCert, serverKey) &&
     certificateMatchesPrivateKey(clientCert, clientKey) &&
     certificateVerifiesAgainstCa(serverCert, ca) &&
@@ -94,6 +98,13 @@ function readPrivateKey(filePath: string): KeyObject | null {
   } catch {
     return null;
   }
+}
+
+function certificateIsCurrentlyValid(certificate: X509Certificate, nowMs: number): boolean {
+  const validFromMs = Date.parse(certificate.validFrom);
+  const validToMs = Date.parse(certificate.validTo);
+  if (Number.isNaN(validFromMs) || Number.isNaN(validToMs)) return false;
+  return validFromMs <= nowMs && nowMs <= validToMs;
 }
 
 function certificateMatchesPrivateKey(
