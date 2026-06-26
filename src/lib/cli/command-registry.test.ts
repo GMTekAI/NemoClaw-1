@@ -296,7 +296,7 @@ describe("command-registry", () => {
         "Skills",
         "Policy Presets",
         "Messaging Channels",
-        "MCP Bridges",
+        "MCP Servers",
         "Compatibility Commands",
         "Services",
         "Troubleshooting",

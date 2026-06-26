@@ -68,7 +68,7 @@ inference:
   model_config_key: "models.default"
   proxy_support: implicit
 
-# ── MCP bridge support ───────────────────────────────────────────
+# ── MCP server support ───────────────────────────────────────────
 mcp:
   support: bridge
   adapter: deepagents-config

@@ -9,93 +9,80 @@ import YAML from "yaml";
 import { describe, expect, it } from "vitest";
 
 import {
-  allocateMcpPort,
   buildDeepAgentsMcpRegisterCommand,
   buildHermesMcpRegisterCommand,
   buildMcpBridgePolicyName,
   buildMcpBridgePolicyYaml,
+  buildMcpBridgeProviderName,
   buildOpenClawMcporterRegisterCommand,
-  cleanupStalePidFile,
   MCP_BRIDGE_POLICY_MAX_BODY_BYTES,
-  MCP_HOST,
-  MCP_PORT_END,
-  MCP_PORT_START,
   MCPORTER_VERSION,
+  normalizeMcpServerUrl,
   parseMcpAddArgs,
-  readLivePid,
   redactBridgeSecretsForDisplay,
-  releaseMcpPortReservation,
-  resolveLaunchEnv,
-  waitForProxyReady,
+  resolveCredentialEnv,
 } from "../../../../dist/lib/actions/sandbox/mcp-bridge";
 import type { McpBridgeEntry } from "../../../../dist/lib/state/registry";
 
-const DEAD_PID = 2_147_483_646;
-
-function seedProxyRuntime(
-  sandboxName: string,
-  server: string,
-  logContents: string,
-  pid: number,
-): { dir: string; pidFile: string } {
-  const dir = path.join(
-    process.env.HOME || os.homedir(),
-    ".nemoclaw",
-    "runtime",
-    "mcp",
-    sandboxName,
-    server,
-  );
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(path.join(dir, "proxy.log"), logContents, { mode: 0o600 });
-  const pidFile = path.join(dir, "proxy.pid");
-  fs.writeFileSync(pidFile, `${String(pid)}\n${new Date().toISOString()}\n`, { mode: 0o600 });
-  return { dir, pidFile };
-}
-
-describe("MCP bridge CLI parsing", () => {
-  it("parses server, env references, and command args", () => {
+describe("MCP CLI parsing", () => {
+  it("parses server, URL, and env references", () => {
     const parsed = parseMcpAddArgs([
       "github",
+      "--url",
+      "https://api.githubcopilot.com/mcp/",
       "--env",
       "GITHUB_TOKEN",
-      "--",
-      "npx",
-      "-y",
-      "@modelcontextprotocol/server-github",
     ]);
 
     expect(parsed).toEqual({
       server: "github",
+      url: "https://api.githubcopilot.com/mcp/",
       env: [{ name: "GITHUB_TOKEN" }],
-      command: "npx",
-      args: ["-y", "@modelcontextprotocol/server-github"],
     });
   });
 
-  it("allows inline env values for initial launch but persists only names", () => {
-    const parsed = parseMcpAddArgs(["srv", "--env=TOKEN=a=b=c", "--", "node", "server.js"]);
+  it("allows inline env values for provider registration but persists only names", () => {
+    const parsed = parseMcpAddArgs([
+      "srv",
+      "--url=http://mcp.example.test/rpc",
+      "--env=TOKEN=a=b=c",
+    ]);
 
     expect(parsed.env).toEqual([{ name: "TOKEN", value: "a=b=c" }]);
-    expect(resolveLaunchEnv(parsed.env)).toEqual({ TOKEN: "a=b=c" });
+    expect(resolveCredentialEnv(parsed.env)).toEqual({ TOKEN: "a=b=c" });
     expect(parsed.env.map((entry) => entry.name)).toEqual(["TOKEN"]);
   });
 
-  it("rejects missing command separators", () => {
-    expect(() => parseMcpAddArgs(["github", "npx"])).toThrow(/Command must follow '--'/);
-  });
-
-  it("rejects the bridge's reserved token env name", () => {
+  it("rejects host stdio commands", () => {
     expect(() =>
-      parseMcpAddArgs(["github", "--env", "NEMOCLAW_MCP_BRIDGE_TOKEN", "--", "node", "server.js"]),
-    ).toThrow(/reserved/);
+      parseMcpAddArgs([
+        "github",
+        "--env",
+        "GITHUB_TOKEN",
+        "--",
+        "npx",
+        "@modelcontextprotocol/server-github",
+      ]),
+    ).toThrow(/Host stdio MCP commands are not supported/);
   });
 
-  it("resolves host env references without persisting values", () => {
+  it("requires an HTTP MCP URL", () => {
+    expect(() => parseMcpAddArgs(["github"])).toThrow(/--url/);
+    expect(() => parseMcpAddArgs(["github", "--url", "stdio://github"])).toThrow(/http/);
+  });
+
+  it("normalizes URLs without persisting credentials", () => {
+    expect(normalizeMcpServerUrl("https://mcp.example.test")).toBe("https://mcp.example.test/");
+    expect(() => normalizeMcpServerUrl("https://user:pass@mcp.example.test/mcp")).toThrow(
+      /must not embed credentials/,
+    );
+  });
+
+  it("resolves host env values without requiring them for provider reuse", () => {
     const prior = process.env.MCP_BRIDGE_TEST_TOKEN;
     process.env.MCP_BRIDGE_TEST_TOKEN = "secret-value";
     try {
-      expect(resolveLaunchEnv([{ name: "MCP_BRIDGE_TEST_TOKEN" }])).toEqual({
+      expect(resolveCredentialEnv([{ name: "MCP_BRIDGE_TEST_TOKEN" }])).toEqual({
         MCP_BRIDGE_TEST_TOKEN: "secret-value",
       });
     } finally {
@@ -103,27 +90,20 @@ describe("MCP bridge CLI parsing", () => {
         ? delete process.env.MCP_BRIDGE_TEST_TOKEN
         : (process.env.MCP_BRIDGE_TEST_TOKEN = prior);
     }
-  });
-
-  it("prefers inline env values over host env only for the launch invocation", () => {
-    const prior = process.env.MCP_BRIDGE_INLINE_TOKEN;
-    process.env.MCP_BRIDGE_INLINE_TOKEN = "host-value";
-    try {
-      expect(
-        resolveLaunchEnv([{ name: "MCP_BRIDGE_INLINE_TOKEN", value: "inline-value" }]),
-      ).toEqual({ MCP_BRIDGE_INLINE_TOKEN: "inline-value" });
-    } finally {
-      prior === undefined
-        ? delete process.env.MCP_BRIDGE_INLINE_TOKEN
-        : (process.env.MCP_BRIDGE_INLINE_TOKEN = prior);
-    }
+    expect(resolveCredentialEnv([{ name: "MCP_BRIDGE_TEST_TOKEN_NOT_SET" }])).toEqual({});
   });
 });
 
-describe("MCP bridge policy", () => {
-  it("generates an OpenShell MCP L7 policy for the bridge endpoint", () => {
+describe("MCP OpenShell policy", () => {
+  it("generates a protocol:mcp policy for the target endpoint and adapter binaries", () => {
     const policyName = buildMcpBridgePolicyName("GitHub_Server");
-    const policy = YAML.parse(buildMcpBridgePolicyYaml("GitHub_Server", 3104)) as {
+    const policy = YAML.parse(
+      buildMcpBridgePolicyYaml(
+        "GitHub_Server",
+        "https://api.githubcopilot.com/mcp?transport=streamable",
+        "mcporter",
+      ),
+    ) as {
       preset: { name: string };
       network_policies: Record<
         string,
@@ -133,8 +113,8 @@ describe("MCP bridge policy", () => {
             port: number;
             path: string;
             protocol: string;
-            mcp: { max_body_bytes: number; allow_all_known_mcp_methods: boolean };
-            rules: Array<{ allow: Record<string, never> }>;
+            mcp: { max_body_bytes: number; allow_all_known_mcp_methods?: boolean };
+            rules: Array<{ allow: { method: string } }>;
           }>;
           binaries: Array<{ path: string }>;
         }
@@ -144,167 +124,147 @@ describe("MCP bridge policy", () => {
 
     expect(policyName).toBe("mcp-bridge-github-server");
     expect(policy.preset.name).toBe(policyName);
-    expect(entry.endpoints).toEqual([
-      {
-        host: MCP_HOST,
-        port: 3104,
-        path: "/",
-        protocol: "mcp",
-        enforcement: "enforce",
-        mcp: {
-          max_body_bytes: MCP_BRIDGE_POLICY_MAX_BODY_BYTES,
-          allow_all_known_mcp_methods: true,
-        },
-        rules: [{ allow: {} }],
+    expect(entry.endpoints[0]).toMatchObject({
+      host: "api.githubcopilot.com",
+      port: 443,
+      path: "/mcp",
+      protocol: "mcp",
+      enforcement: "enforce",
+      mcp: {
+        max_body_bytes: MCP_BRIDGE_POLICY_MAX_BODY_BYTES,
       },
-    ]);
+    });
+    expect(entry.endpoints[0].mcp.allow_all_known_mcp_methods).toBeUndefined();
+    expect(entry.endpoints[0].rules.map((rule) => rule.allow.method)).toEqual(
+      expect.arrayContaining(["initialize", "tools/list", "tools/call"]),
+    );
     expect(entry.binaries.map((binary) => binary.path)).toEqual([
       "/usr/local/bin/mcporter",
       "/usr/bin/mcporter",
       "/usr/local/bin/openclaw",
-      "/usr/local/bin/hermes",
-      "/opt/hermes/.venv/bin/python",
-      "/usr/local/bin/dcode",
-      "/opt/venv/bin/python3*",
-      "/usr/bin/node",
       "/usr/local/bin/node",
+      "/usr/bin/node",
     ]);
   });
-});
 
-describe("MCP bridge runtime helpers", () => {
-  it("uses the reserved 3100-3199 bridge range and pins mcporter", () => {
-    expect(MCP_PORT_START).toBe(3100);
-    expect(MCP_PORT_END).toBe(3199);
-    expect(MCP_PORT_END - MCP_PORT_START + 1).toBe(100);
-    expect(MCPORTER_VERSION).toBe("0.7.3");
+  it("allows the OpenShell host alias with private-network SSRF guards", () => {
+    const policy = YAML.parse(
+      buildMcpBridgePolicyYaml("local", "http://host.openshell.internal:31337/mcp", "mcporter"),
+    ) as { network_policies: Record<string, { endpoints: Array<{ allowed_ips: string[] }> }> };
+
+    expect(policy.network_policies.mcp_bridge_local.endpoints[0].allowed_ips).toEqual([
+      "10.0.0.0/8",
+      "172.16.0.0/12",
+      "192.168.0.0/16",
+      "fc00::/7",
+    ]);
   });
 
-  it("cleans up stale pid files", () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-mcp-pid-"));
-    const pidFile = path.join(tmp, "proxy.pid");
-    fs.writeFileSync(pidFile, `${String(DEAD_PID)}\n`, { mode: 0o600 });
+  it("scopes binaries to the selected agent adapter", () => {
+    const hermes = YAML.parse(
+      buildMcpBridgePolicyYaml("srv", "http://mcp.example.test/mcp", "hermes-config"),
+    ) as { network_policies: Record<string, { binaries: Array<{ path: string }> }> };
+    const deepAgents = YAML.parse(
+      buildMcpBridgePolicyYaml("srv", "http://mcp.example.test/mcp", "deepagents-config"),
+    ) as { network_policies: Record<string, { binaries: Array<{ path: string }> }> };
 
-    expect(readLivePid(pidFile)).toBeNull();
-    expect(cleanupStalePidFile(pidFile)).toBe(true);
-    expect(fs.existsSync(pidFile)).toBe(false);
+    expect(hermes.network_policies.mcp_bridge_srv.binaries.map((b) => b.path)).toEqual([
+      "/usr/local/bin/hermes",
+      "/opt/hermes/.venv/bin/python*",
+    ]);
+    expect(deepAgents.network_policies.mcp_bridge_srv.binaries.map((b) => b.path)).toEqual([
+      "/usr/local/bin/dcode",
+      "/opt/venv/bin/python3*",
+    ]);
   });
 
-  it("waits for proxy readiness using only fresh log content", async () => {
-    const priorHome = process.env.HOME;
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-mcp-ready-home-"));
-    process.env.HOME = home;
-    const sandbox = `mcp-ready-${String(process.pid)}`;
-    const server = "github";
-    const stale = "[mcp-proxy] listening on 127.0.0.1:3100\n";
-    const { dir } = seedProxyRuntime(sandbox, server, stale, DEAD_PID);
-    try {
-      await expect(
-        waitForProxyReady(sandbox, server, 3100, Buffer.byteLength(stale), 500),
-      ).resolves.toBe("failed");
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-      priorHome === undefined ? delete process.env.HOME : (process.env.HOME = priorHome);
-    }
-  });
-
-  it("allocates unique ports under concurrent callers", async () => {
-    const priorHome = process.env.HOME;
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-mcp-ports-"));
-    process.env.HOME = home;
-    try {
-      const ports = await Promise.all(Array.from({ length: 8 }, async () => allocateMcpPort()));
-      expect(new Set(ports).size).toBe(ports.length);
-      for (const port of ports) releaseMcpPortReservation(port);
-    } finally {
-      fs.rmSync(home, { recursive: true, force: true });
-      priorHome === undefined ? delete process.env.HOME : (process.env.HOME = priorHome);
-    }
+  it("uses stable provider names with a length guard", () => {
+    expect(buildMcpBridgeProviderName("alpha", "GitHub_Server")).toBe("alpha-mcp-github-server");
+    const long = buildMcpBridgeProviderName(
+      "sandbox-name-with-a-long-prefix",
+      "ServerNameThatWouldOtherwiseExceedTheProviderNameLimit",
+    );
+    expect(long.length).toBeLessThanOrEqual(63);
+    expect(long).toMatch(/^sandbox-name-with-a-long-prefix-mcp-servernamethatwo-[a-f0-9]{10}$/);
   });
 });
 
-describe("MCP bridge adapters", () => {
-  it("constructs a mcporter HTTP registration without external env values", () => {
-    const entry: McpBridgeEntry = {
-      server: "github",
-      agent: "openclaw",
-      adapter: "mcporter",
-      command: "npx",
-      args: ["-y", "@modelcontextprotocol/server-github"],
-      env: ["GITHUB_TOKEN"],
-      port: 3100,
-      token: "bridge-token",
-      policyName: "mcp-bridge-github",
-      addedAt: new Date(0).toISOString(),
-    };
+describe("MCP adapters", () => {
+  const baseEntry: McpBridgeEntry = {
+    server: "github",
+    agent: "openclaw",
+    adapter: "mcporter",
+    url: "https://api.githubcopilot.com/mcp/",
+    env: ["GITHUB_TOKEN"],
+    providerName: "alpha-mcp-github",
+    policyName: "mcp-bridge-github",
+    addedAt: new Date(0).toISOString(),
+  };
 
-    const command = buildOpenClawMcporterRegisterCommand(entry);
+  it("constructs a mcporter HTTP registration with OpenShell env placeholders", () => {
+    const command = buildOpenClawMcporterRegisterCommand(baseEntry);
 
     expect(command).toContain("'mcporter' 'config' 'add' 'github'");
-    expect(command).toContain("'--url' 'http://host.docker.internal:3100'");
-    expect(command).toContain("'--header' 'Authorization=Bearer bridge-token'");
+    expect(command).toContain("'--url' 'https://api.githubcopilot.com/mcp/'");
+    expect(command).toContain(
+      "'--header' 'Authorization=Bearer openshell:resolve:env:GITHUB_TOKEN'",
+    );
     expect(command).toContain("'--scope' 'home'");
-    expect(command).not.toContain("GITHUB_TOKEN");
+    expect(command).not.toContain("fake-secret");
   });
 
-  it("constructs a Hermes config registration for the host bridge endpoint", () => {
-    const entry: McpBridgeEntry = {
-      server: "github",
+  it("constructs a Hermes config registration with placeholders", () => {
+    const command = buildHermesMcpRegisterCommand({
+      ...baseEntry,
       agent: "hermes",
       adapter: "hermes-config",
-      command: "node",
-      args: ["server.js"],
-      env: ["GITHUB_TOKEN"],
-      port: 3107,
-      token: "bridge-token",
-      policyName: "mcp-bridge-github",
-      addedAt: new Date(0).toISOString(),
-    };
-
-    const command = buildHermesMcpRegisterCommand(entry);
+    });
 
     expect(command).toContain("/sandbox/.hermes/config.yaml");
     expect(command).toContain("mcp_servers");
-    expect(command).toContain("http://host.docker.internal:3107");
-    expect(command).toContain("Bearer bridge-token");
-    expect(command).not.toContain("GITHUB_TOKEN");
+    expect(command).toContain("https://api.githubcopilot.com/mcp/");
+    expect(command).toContain("openshell:resolve:env:GITHUB_TOKEN");
   });
 
-  it("constructs a Deep Agents .mcp.json registration for the host bridge endpoint", () => {
-    const entry: McpBridgeEntry = {
-      server: "github",
+  it("constructs a Deep Agents .mcp.json registration with placeholders", () => {
+    const command = buildDeepAgentsMcpRegisterCommand({
+      ...baseEntry,
       agent: "langchain-deepagents-code",
       adapter: "deepagents-config",
-      command: "node",
-      args: ["server.js"],
-      env: ["GITHUB_TOKEN"],
-      port: 3108,
-      token: "bridge-token",
-      policyName: "mcp-bridge-github",
-      addedAt: new Date(0).toISOString(),
-    };
-
-    const command = buildDeepAgentsMcpRegisterCommand(entry);
+    });
 
     expect(command).toContain("/sandbox/.mcp.json");
     expect(command).toContain("mcpServers");
     expect(command).toContain("'type': 'http'");
-    expect(command).toContain("http://host.docker.internal:3108");
-    expect(command).not.toContain("GITHUB_TOKEN");
+    expect(command).toContain("https://api.githubcopilot.com/mcp/");
+    expect(command).toContain("openshell:resolve:env:GITHUB_TOKEN");
   });
 
-  it("redacts bridge bearer tokens from adapter display output", () => {
-    const redacted = redactBridgeSecretsForDisplay(
-      "failed header Authorization=Bearer bridge-token raw bridge-token",
-      { token: "bridge-token" },
-    );
+  it("keeps unauthenticated servers free of Authorization headers", () => {
+    const command = buildOpenClawMcporterRegisterCommand({ ...baseEntry, env: [] });
 
-    expect(redacted).toBe("failed header Authorization=Bearer ***REDACTED*** raw ***REDACTED***");
+    expect(command).not.toContain("Authorization=");
+    expect(command).toContain("'--url' 'https://api.githubcopilot.com/mcp/'");
+  });
+
+  it("redacts credential values from adapter display output", () => {
+    const prior = process.env.GITHUB_TOKEN;
+    process.env.GITHUB_TOKEN = "real-host-secret";
+    try {
+      const redacted = redactBridgeSecretsForDisplay(
+        "failed header Authorization=Bearer real-host-secret raw real-host-secret",
+        baseEntry,
+      );
+
+      expect(redacted).toBe("failed header Authorization=Bearer ***REDACTED*** raw ***REDACTED***");
+    } finally {
+      prior === undefined ? delete process.env.GITHUB_TOKEN : (process.env.GITHUB_TOKEN = prior);
+    }
   });
 });
 
 describe("cross-agent MCP status", () => {
-  it("reports Hermes bridge support in status JSON without requiring bridges", () => {
+  it("reports Hermes bridge support in status JSON without requiring servers", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-mcp-status-"));
     const script = `
 process.env.HOME = ${JSON.stringify(home)};
@@ -341,34 +301,10 @@ bridge.dispatchMcpBridgeCommand("hermes-sandbox", ["status", "--json"]).then(
     });
     expect(payload.bridges).toEqual([]);
   });
+});
 
-  it("force-removes stale runtime without requiring a registry entry", () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-mcp-force-remove-"));
-    const script = `
-const fs = require("node:fs");
-const path = require("node:path");
-process.env.HOME = ${JSON.stringify(home)};
-const registry = require("./dist/lib/state/registry.js");
-const bridge = require("./dist/lib/actions/sandbox/mcp-bridge.js");
-registry.registerSandbox({ name: "hermes-sandbox", agent: "hermes" });
-const runtimeDir = path.join(process.env.HOME, ".nemoclaw", "runtime", "mcp", "hermes-sandbox", "github");
-fs.mkdirSync(runtimeDir, { recursive: true, mode: 0o700 });
-fs.writeFileSync(path.join(runtimeDir, "proxy.pid"), "2147483646\\n");
-bridge.removeMcpBridge("hermes-sandbox", "github", { force: true });
-console.log(JSON.stringify({ runtimeExists: fs.existsSync(runtimeDir), mcp: registry.getSandbox("hermes-sandbox").mcp || null }));
-`;
-    const result = spawnSync(process.execPath, ["-e", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: { ...process.env, HOME: home },
-    });
-
-    expect(result.status).toBe(0);
-    const payload = JSON.parse(result.stdout.trim().split("\n").at(-1) ?? "{}") as {
-      mcp: unknown;
-      runtimeExists: boolean;
-    };
-    expect(payload.mcp).toBeNull();
-    expect(payload.runtimeExists).toBe(false);
+describe("MCP image/runtime constants", () => {
+  it("keeps the mcporter runtime pin visible for image tests", () => {
+    expect(MCPORTER_VERSION).toBe("0.7.3");
   });
 });
