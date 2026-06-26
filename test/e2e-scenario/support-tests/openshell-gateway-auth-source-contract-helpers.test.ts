@@ -8,11 +8,7 @@ import { describe, expect, it } from "vitest";
 import { buildSandboxTokenContainerProbeDockerArgs } from "../live/openshell-gateway-auth-source-contract-helpers.ts";
 
 function valuesAfterFlag(args: string[], flag: string): string[] {
-  const values: string[] = [];
-  for (let index = 0; index < args.length - 1; index += 1) {
-    if (args[index] === flag) values.push(args[index + 1]);
-  }
-  return values;
+  return args.flatMap((arg, index) => (arg === flag ? [args[index + 1] ?? ""] : []));
 }
 
 describe("OpenShell gateway auth source contract helpers", () => {
