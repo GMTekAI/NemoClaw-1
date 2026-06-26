@@ -22,9 +22,6 @@ const hermesProviderAuth = require("../../hermes-provider-auth") as {
     baseUrl?: string,
   ) => void;
 };
-const { providerExistsInGateway } = require("../../onboard/providers") as {
-  providerExistsInGateway: (name: string, runOpenshellFn: typeof runOpenshell) => boolean;
-};
 
 import {
   detectOpenShellStateRpcPreflightIssue,
@@ -80,6 +77,10 @@ import {
   resolveRebuildLiveState,
 } from "./rebuild-flow-helpers";
 import { buildRebuildRecreateOnboardOpts } from "./rebuild-gpu-opt-out";
+import {
+  checkRebuildGatewayProviderOrBail,
+  shouldVerifyRebuildGatewayProvider,
+} from "./rebuild-provider-preflight";
 import {
   getRebuildCredentialEnvFromRegistry,
   isLocalInferenceProvider,
@@ -434,6 +435,7 @@ function preflightRebuildCredentials(
   }
 
   const rebuildProvider = sb.provider;
+
   // Compatibility boundary for GH #2519: pre-fix local-provider sessions could
   // persist credentialEnv="OPENAI_API_KEY" even though current local-provider
   // write paths persist null. Only a session for this sandbox plus a local
@@ -469,6 +471,9 @@ function preflightRebuildCredentials(
   }
 
   if (!rebuildCredentialEnv) {
+    if (!checkRebuildGatewayProviderOrBail(rebuildProvider, rebuildCredentialEnv, log, bail)) {
+      return false;
+    }
     log(
       "Preflight credential check: no credentialEnv in session (local inference or missing session)",
     );
@@ -479,13 +484,16 @@ function preflightRebuildCredentials(
   log(
     `Preflight credential check: ${rebuildCredentialEnv} → ${credentialValue ? "present" : "MISSING"}`,
   );
-  if (credentialValue) return true;
-  if (rebuildProvider && providerExistsInGateway(rebuildProvider, runOpenshell)) {
+  if (!checkRebuildGatewayProviderOrBail(rebuildProvider, rebuildCredentialEnv, log, bail)) {
+    return false;
+  }
+  if (!credentialValue && shouldVerifyRebuildGatewayProvider(rebuildProvider)) {
     log(
       `Preflight credential check: provider '${rebuildProvider}' registered in gateway — skipping env check for ${rebuildCredentialEnv}`,
     );
     return true;
   }
+  if (credentialValue) return true;
 
   console.error("");
   console.error(`  ${_RD}Rebuild preflight failed:${R} provider credential not found.`);
