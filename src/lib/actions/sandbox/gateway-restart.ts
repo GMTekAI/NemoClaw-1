@@ -33,9 +33,7 @@ export type GatewayRestartResult =
       detail: string;
     };
 
-type SandboxAgentLookup = (
-  sandboxName: string,
-) => { agent?: string | null } | null | undefined;
+type SandboxAgentLookup = (sandboxName: string) => { agent?: string | null } | null | undefined;
 
 type SandboxExec = (
   sandboxName: string,
@@ -50,10 +48,7 @@ export type GatewayRestartDeps = {
   buildOpenClawGatewayRestartScript: typeof agentRuntime.buildOpenClawGatewayRestartScript;
   buildHermesGatewayRestartScript: typeof agentRuntime.buildHermesGatewayRestartScript;
   executeSandboxExecCommand: SandboxExec;
-  waitForRecoveredSandboxGateway: (
-    sandboxName: string,
-    options?: { quiet?: boolean },
-  ) => boolean;
+  waitForRecoveredSandboxGateway: (sandboxName: string, options?: { quiet?: boolean }) => boolean;
   ensureSandboxPortForward: (sandboxName: string) => boolean;
   ensureHermesDashboardPortForwardIfEnabled: (sandboxName: string) => boolean | null;
   recoverHermesDashboardProcessIfEnabled: (sandboxName: string) => boolean | null;
@@ -96,9 +91,7 @@ function sanitizeGatewayRestartFailureLine(line: string): string {
   return redactFull(line.replace(ANSI_CONTROL_RE, ""));
 }
 
-export function classifyGatewayRestartFailure(
-  result: GatewayRestartCommandResult | null,
-): {
+export function classifyGatewayRestartFailure(result: GatewayRestartCommandResult | null): {
   layer: GatewayRestartFailureLayer;
   detail: string;
 } {
