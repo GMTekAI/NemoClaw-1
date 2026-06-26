@@ -10,8 +10,11 @@ import { spawnSync } from "node:child_process";
 const SCRIPT = path.join(import.meta.dirname, "..", "scripts", "install-openshell.sh");
 const REQUIRED_OPENSHELL_VERSION = "0.0.72";
 const LEGACY_OPENSHELL_VERSION = "0.0.44";
-const OPENSHELL_FEATURE_MARKERS =
-  "request-body-credential-rewrite websocket-credential-rewrite allow_all_known_mcp_methods";
+const OPENSHELL_REWRITE_FEATURE_MARKERS =
+  "request-body-credential-rewrite websocket-credential-rewrite";
+const OPENSHELL_MCP_FEATURE_MARKER = "allow_all_known_mcp_methods";
+const OPENSHELL_FEATURE_MARKERS = `${OPENSHELL_REWRITE_FEATURE_MARKERS} ${OPENSHELL_MCP_FEATURE_MARKER}`;
+type OpenShellFeaturePlacement = "openshell" | "gateway" | "split-mcp-gateway" | "none";
 
 function writeExecutable(target: string, contents: string) {
   fs.writeFileSync(target, contents, { mode: 0o755 });
@@ -29,12 +32,28 @@ function runWithInstalledVersion(
   extraEnv: NodeJS.ProcessEnv = {},
   options: {
     capability?: boolean;
+    featurePlacement?: OpenShellFeaturePlacement;
     driverBins?: boolean | "gateway" | "gateway-vm";
     os?: string;
     arch?: string;
   } = {},
 ) {
   const capability = options.capability ?? true;
+  const featurePlacement: OpenShellFeaturePlacement = capability
+    ? (options.featurePlacement ?? "openshell")
+    : "none";
+  const openshellMarkers =
+    featurePlacement === "openshell"
+      ? OPENSHELL_FEATURE_MARKERS
+      : featurePlacement === "split-mcp-gateway"
+        ? OPENSHELL_REWRITE_FEATURE_MARKERS
+        : "";
+  const gatewayMarkers =
+    featurePlacement === "gateway"
+      ? OPENSHELL_FEATURE_MARKERS
+      : featurePlacement === "split-mcp-gateway"
+        ? OPENSHELL_MCP_FEATURE_MARKER
+        : "";
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-openshell-ver-"));
   try {
     const fakeBin = path.join(tmp, "bin");
@@ -51,7 +70,7 @@ if [ "\${1:-}" = "-m" ]; then echo "${options.arch ?? "x86_64"}"; else echo "${o
       path.join(fakeBin, "openshell"),
       `#!/usr/bin/env bash
 if [ "\${1:-}" = "--version" ]; then echo "openshell ${version}"; exit 0; fi
-${capability ? `# ${OPENSHELL_FEATURE_MARKERS}` : ""}
+${openshellMarkers ? `# ${openshellMarkers}` : ""}
 exit 99`,
     );
 
@@ -59,6 +78,7 @@ exit 99`,
       writeExecutable(
         path.join(fakeBin, "openshell-gateway"),
         `#!/usr/bin/env bash
+# ${gatewayMarkers}
 exit 0`,
       );
     }
@@ -131,6 +151,16 @@ describe("install-openshell.sh version check", { timeout: 15_000 }, () => {
   it("exits cleanly when the required OpenShell and driver binaries are already installed", () => {
     const result = runWithInstalledVersion(REQUIRED_OPENSHELL_VERSION);
     expect(result.status).toBe(0);
+    expect(result.stdout).toContain(`already installed: ${REQUIRED_OPENSHELL_VERSION}`);
+  });
+
+  it("accepts MCP L7 support from the installed gateway sidecar", () => {
+    const result = runWithInstalledVersion(
+      REQUIRED_OPENSHELL_VERSION,
+      {},
+      { featurePlacement: "split-mcp-gateway" },
+    );
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(result.stdout).toContain(`already installed: ${REQUIRED_OPENSHELL_VERSION}`);
   });
 
@@ -504,6 +534,100 @@ exit 0`,
     });
     expect(result.status).not.toBe(0);
     expect(result.stdout).toMatch(/required dev-channel messaging-rewrite\/MCP-L7 build/);
+  });
+
+  it("installs from OpenShell workflow artifacts when the artifact channel is requested", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-openshell-artifacts-"));
+    try {
+      const fakeBin = path.join(tmp, "bin");
+      const installDir = path.join(tmp, "install-bin");
+      const artifactLog = path.join(tmp, "artifacts.log");
+      fs.mkdirSync(fakeBin);
+
+      writeExecutable(
+        path.join(fakeBin, "uname"),
+        `#!/usr/bin/env bash
+if [ "\${1:-}" = "-m" ]; then echo "x86_64"; else echo "Linux"; fi`,
+      );
+      writeExecutable(
+        path.join(fakeBin, "gh"),
+        `#!/usr/bin/env bash
+set -euo pipefail
+if [ "\${1:-}" = "run" ] && [ "\${2:-}" = "download" ]; then
+  run_id="\${3:-}"
+  name=""
+  dir=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --name) shift; name="\${1:-}" ;;
+      --dir) shift; dir="\${1:-}" ;;
+    esac
+    shift || true
+  done
+  printf '%s %s\\n' "$run_id" "$name" >> ${JSON.stringify(artifactLog)}
+  mkdir -p "$dir"
+  case "$name" in
+    rust-binary-cli-cli-linux-amd64)
+      cat > "$dir/openshell" <<'SH'
+#!/usr/bin/env bash
+if [ "\${1:-}" = "--version" ]; then echo "openshell 0.0.72-dev+artifact"; exit 0; fi
+# request-body-credential-rewrite websocket-credential-rewrite
+exit 0
+SH
+      chmod 755 "$dir/openshell"
+      ;;
+    rust-binary-gateway-gateway-linux-amd64)
+      cat > "$dir/openshell-gateway" <<'SH'
+#!/usr/bin/env bash
+# allow_all_known_mcp_methods
+exit 0
+SH
+      chmod 755 "$dir/openshell-gateway"
+      ;;
+    rust-binary-supervisor-sandbox-linux-amd64)
+      cat > "$dir/openshell-sandbox" <<'SH'
+#!/usr/bin/env bash
+# JSON-RPC MCP allow_all_known_mcp_methods
+exit 0
+SH
+      chmod 755 "$dir/openshell-sandbox"
+      ;;
+    *)
+      exit 7
+      ;;
+  esac
+  exit 0
+fi
+exit 1`,
+      );
+
+      const result = spawnSync("bash", [SCRIPT], {
+        env: {
+          ...process.env,
+          HOME: tmp,
+          XDG_BIN_HOME: installDir,
+          NEMOCLAW_NON_INTERACTIVE: "1",
+          NEMOCLAW_OPENSHELL_CHANNEL: "artifact",
+          NEMOCLAW_OPENSHELL_ARTIFACT_RUN_ID: "28267935010",
+          PATH: `${fakeBin}:/usr/bin:/bin`,
+        },
+        encoding: "utf8",
+      });
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(result.stdout).toContain(
+        "Installing OpenShell from OpenShell workflow artifacts run '28267935010'",
+      );
+      const artifacts = fs.readFileSync(artifactLog, "utf-8");
+      expect(artifacts).toContain("28267935010 rust-binary-cli-cli-linux-amd64");
+      expect(artifacts).toContain("28267935010 rust-binary-gateway-gateway-linux-amd64");
+      expect(artifacts).toContain("28267935010 rust-binary-supervisor-sandbox-linux-amd64");
+      expect(fs.existsSync(path.join(installDir, "openshell"))).toBe(true);
+      expect(fs.existsSync(path.join(installDir, "openshell-gateway"))).toBe(true);
+      expect(fs.existsSync(path.join(installDir, "openshell-sandbox"))).toBe(true);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   it("proceeds to install when openshell is not present", () => {

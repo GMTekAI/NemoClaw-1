@@ -29,7 +29,13 @@ on:
         options:
           - stable
           - dev
+          - artifact
           - auto
+      openshell_artifact_run_id:
+        description: "Optional NVIDIA/OpenShell Actions run id used when openshell_channel=artifact."
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -373,6 +379,9 @@ jobs:
     needs: generate-matrix
     if: ${{ (inputs.jobs == '' && inputs.scenarios == '') || contains(format(',{0},', inputs.jobs), ',mcp-bridge-vitest,') || contains(format(',{0},', inputs.scenarios), ',mcp-bridge,') }}
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
     timeout-minutes: 45
     env:
       FREE_STANDING_VITEST_JOB: "1"
@@ -382,6 +391,7 @@ jobs:
       NEMOCLAW_RUN_E2E_SCENARIOS: "1"
       NEMOCLAW_E2E_USE_HOSTED_INFERENCE: "1"
       NEMOCLAW_OPENSHELL_CHANNEL: ${{ inputs.openshell_channel }}
+      NEMOCLAW_OPENSHELL_ARTIFACT_RUN_ID: ${{ inputs.openshell_artifact_run_id }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -426,6 +436,8 @@ jobs:
         run: npm run build:cli
 
       - name: Install OpenShell CLI
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: bash scripts/install-openshell.sh
 
       - name: Run MCP bridge live test

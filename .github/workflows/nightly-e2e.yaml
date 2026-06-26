@@ -186,7 +186,13 @@ on:
         options:
           - stable
           - dev
+          - artifact
           - auto
+      openshell_artifact_run_id:
+        description: "Optional NVIDIA/OpenShell Actions run id used when openshell_channel=artifact."
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -326,6 +332,7 @@ jobs:
        contains(format(',{0},', inputs.jobs), ',docs-validation-e2e,'))
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
     timeout-minutes: 15
     steps:
@@ -1678,7 +1685,9 @@ jobs:
 
       - name: Install OpenShell CLI
         env:
+          GH_TOKEN: ${{ github.token }}
           NEMOCLAW_OPENSHELL_CHANNEL: ${{ github.event_name == 'workflow_dispatch' && inputs.openshell_channel || 'stable' }}
+          NEMOCLAW_OPENSHELL_ARTIFACT_RUN_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.openshell_artifact_run_id || '' }}
         run: bash scripts/install-openshell.sh
 
       - name: Run MCP bridge Vitest E2E
@@ -1689,6 +1698,7 @@ jobs:
           NEMOCLAW_RUN_E2E_SCENARIOS: "1"
           NEMOCLAW_E2E_USE_HOSTED_INFERENCE: "1"
           NEMOCLAW_OPENSHELL_CHANNEL: ${{ github.event_name == 'workflow_dispatch' && inputs.openshell_channel || 'stable' }}
+          NEMOCLAW_OPENSHELL_ARTIFACT_RUN_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.openshell_artifact_run_id || '' }}
         run: |
           set -euo pipefail
           export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"

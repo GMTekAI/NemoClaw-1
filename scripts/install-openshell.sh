@@ -48,14 +48,21 @@ DEV_MIN_VERSION="0.0.44"
 
 CHANNEL="${NEMOCLAW_OPENSHELL_CHANNEL:-auto}"
 case "$CHANNEL" in
-  stable | dev | auto) ;;
-  *) fail "NEMOCLAW_OPENSHELL_CHANNEL must be one of: stable, dev, auto" ;;
+  stable | dev | artifact | auto) ;;
+  *) fail "NEMOCLAW_OPENSHELL_CHANNEL must be one of: stable, dev, artifact, auto" ;;
 esac
 
 if [ "$CHANNEL" = "auto" ]; then
   RESOLVED_CHANNEL="stable"
 else
   RESOLVED_CHANNEL="$CHANNEL"
+fi
+
+OPENSHELL_ARTIFACT_RUN_ID="${NEMOCLAW_OPENSHELL_ARTIFACT_RUN_ID:-}"
+if [ "$RESOLVED_CHANNEL" = "artifact" ]; then
+  if [[ ! "$OPENSHELL_ARTIFACT_RUN_ID" =~ ^[0-9]+$ ]]; then
+    fail "NEMOCLAW_OPENSHELL_ARTIFACT_RUN_ID must be set to a numeric NVIDIA/OpenShell Actions run id when NEMOCLAW_OPENSHELL_CHANNEL=artifact."
+  fi
 fi
 
 # Honour the TS installer's blueprint-derived env overrides only on the stable
@@ -132,6 +139,44 @@ required_driver_bins_present() {
 
 OPENSHELL_FEATURE_CHECK_ERROR=""
 
+openshell_required_feature_strings() {
+  local openshell_bin="$1"
+  local dir resolved name candidate seen candidate_strings binary_strings
+  local -a candidates
+
+  candidates=("$openshell_bin")
+  dir="$(cd "$(dirname "$openshell_bin")" 2>/dev/null && pwd -P || true)"
+  if [ -n "$dir" ]; then
+    candidates+=("$dir/openshell-gateway" "$dir/openshell-sandbox" "$dir/openshell-driver-vm")
+  fi
+  for name in openshell-gateway openshell-sandbox openshell-driver-vm; do
+    resolved="$(command -v "$name" 2>/dev/null || true)"
+    if [ -n "$resolved" ]; then
+      candidates+=("$resolved")
+    fi
+  done
+
+  seen=":"
+  binary_strings=""
+  for candidate in "${candidates[@]}"; do
+    [ -n "$candidate" ] || continue
+    [ -f "$candidate" ] || continue
+    case "$seen" in
+      *":$candidate:"*) continue ;;
+    esac
+    seen="${seen}${candidate}:"
+    candidate_strings="$(strings "$candidate" 2>/dev/null || true)"
+    binary_strings="${binary_strings}
+${candidate_strings}"
+    if [[ "$binary_strings" == *"request-body-credential-rewrite"* ]] \
+      && [[ "$binary_strings" == *"websocket-credential-rewrite"* ]] \
+      && [[ "$binary_strings" == *"allow_all_known_mcp_methods"* ]]; then
+      break
+    fi
+  done
+  printf '%s\n' "$binary_strings"
+}
+
 openshell_has_required_messaging_features() {
   local openshell_bin
   OPENSHELL_FEATURE_CHECK_ERROR=""
@@ -145,21 +190,21 @@ openshell_has_required_messaging_features() {
     return 2
   fi
 
-  # Keep this independent of a live gateway. `policy update --dry-run` still
-  # needs gateway metadata, but the CLI binary must contain the endpoint-option
-  # parser for request-body/WebSocket rewrite support released in OpenShell 0.0.39.
+  # Keep this independent of a live gateway. Some L7 enforcement strings live
+  # in the gateway/sandbox sidecars, so inspect the installed OpenShell binary
+  # set rather than only the CLI wrapper.
   local binary_strings
-  binary_strings="$(strings "$openshell_bin" 2>/dev/null || true)"
+  binary_strings="$(openshell_required_feature_strings "$openshell_bin")"
   if [[ "$binary_strings" != *"request-body-credential-rewrite"* ]]; then
-    OPENSHELL_FEATURE_CHECK_ERROR="OpenShell binary is missing request-body-credential-rewrite support."
+    OPENSHELL_FEATURE_CHECK_ERROR="OpenShell installed binaries are missing request-body-credential-rewrite support."
     return 1
   fi
   if [[ "$binary_strings" != *"websocket-credential-rewrite"* ]]; then
-    OPENSHELL_FEATURE_CHECK_ERROR="OpenShell binary is missing websocket-credential-rewrite support."
+    OPENSHELL_FEATURE_CHECK_ERROR="OpenShell installed binaries are missing websocket-credential-rewrite support."
     return 1
   fi
   if [[ "$binary_strings" != *"allow_all_known_mcp_methods"* ]]; then
-    OPENSHELL_FEATURE_CHECK_ERROR="OpenShell binary is missing MCP/JSON-RPC L7 policy support."
+    OPENSHELL_FEATURE_CHECK_ERROR="OpenShell installed binaries are missing MCP/JSON-RPC L7 policy support."
     return 1
   fi
   return 0
@@ -257,7 +302,9 @@ if command -v openshell >/dev/null 2>&1; then
   INSTALLED_VERSION_OUTPUT="$(openshell --version 2>&1 || true)"
   INSTALLED_VERSION="$(printf '%s\n' "$INSTALLED_VERSION_OUTPUT" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
   [ -n "$INSTALLED_VERSION" ] || INSTALLED_VERSION="0.0.0"
-  if [ "$RESOLVED_CHANNEL" = "dev" ]; then
+  if [ "$RESOLVED_CHANNEL" = "artifact" ]; then
+    warn "OpenShell artifact channel requested — installing workflow run ${OPENSHELL_ARTIFACT_RUN_ID} even though openshell is already present."
+  elif [ "$RESOLVED_CHANNEL" = "dev" ]; then
     if version_gte "$INSTALLED_VERSION" "$DEV_MIN_VERSION" \
       && printf '%s\n' "$INSTALLED_VERSION_OUTPUT" | grep -qi 'dev'; then
       if openshell_has_required_messaging_features; then
@@ -289,55 +336,93 @@ if command -v openshell >/dev/null 2>&1; then
   fi
 fi
 
-info "Installing OpenShell from release '$RELEASE_TAG'..."
+if [ "$RESOLVED_CHANNEL" = "artifact" ]; then
+  info "Installing OpenShell from OpenShell workflow artifacts run '$OPENSHELL_ARTIFACT_RUN_ID'..."
+else
+  info "Installing OpenShell from release '$RELEASE_TAG'..."
 
-case "$OS" in
-  Darwin)
-    case "$ARCH_LABEL" in
-      x86_64) ASSET="openshell-x86_64-apple-darwin.tar.gz" ;;
-      aarch64) ASSET="openshell-aarch64-apple-darwin.tar.gz" ;;
-    esac
-    ;;
-  Linux)
-    case "$ARCH_LABEL" in
-      x86_64) ASSET="openshell-x86_64-unknown-linux-musl.tar.gz" ;;
-      aarch64) ASSET="openshell-aarch64-unknown-linux-musl.tar.gz" ;;
-    esac
-    ;;
-esac
+  case "$OS" in
+    Darwin)
+      case "$ARCH_LABEL" in
+        x86_64) ASSET="openshell-x86_64-apple-darwin.tar.gz" ;;
+        aarch64) ASSET="openshell-aarch64-apple-darwin.tar.gz" ;;
+      esac
+      ;;
+    Linux)
+      case "$ARCH_LABEL" in
+        x86_64) ASSET="openshell-x86_64-unknown-linux-musl.tar.gz" ;;
+        aarch64) ASSET="openshell-aarch64-unknown-linux-musl.tar.gz" ;;
+      esac
+      ;;
+  esac
 
-declare -a ASSETS=("$ASSET")
-declare -a CHECKSUM_FILES=("openshell-checksums-sha256.txt")
-case "$OS" in
-  Darwin)
-    case "$ARCH_LABEL" in
-      aarch64)
-        ASSETS+=("openshell-gateway-aarch64-apple-darwin.tar.gz")
-        CHECKSUM_FILES+=("openshell-gateway-checksums-sha256.txt")
-        ;;
-      x86_64)
-        fail "OpenShell ${PIN_VERSION} does not publish macOS x86_64 standalone gateway assets."
-        ;;
-    esac
-    ;;
-  Linux)
-    case "$ARCH_LABEL" in
-      x86_64)
-        ASSETS+=("openshell-gateway-x86_64-unknown-linux-gnu.tar.gz")
-        ASSETS+=("openshell-sandbox-x86_64-unknown-linux-gnu.tar.gz")
-        ;;
-      aarch64)
-        ASSETS+=("openshell-gateway-aarch64-unknown-linux-gnu.tar.gz")
-        ASSETS+=("openshell-sandbox-aarch64-unknown-linux-gnu.tar.gz")
-        ;;
-    esac
-    CHECKSUM_FILES+=("openshell-gateway-checksums-sha256.txt")
-    CHECKSUM_FILES+=("openshell-sandbox-checksums-sha256.txt")
-    ;;
-esac
+  declare -a ASSETS=("$ASSET")
+  declare -a CHECKSUM_FILES=("openshell-checksums-sha256.txt")
+  case "$OS" in
+    Darwin)
+      case "$ARCH_LABEL" in
+        aarch64)
+          ASSETS+=("openshell-gateway-aarch64-apple-darwin.tar.gz")
+          CHECKSUM_FILES+=("openshell-gateway-checksums-sha256.txt")
+          ;;
+        x86_64)
+          fail "OpenShell ${PIN_VERSION} does not publish macOS x86_64 standalone gateway assets."
+          ;;
+      esac
+      ;;
+    Linux)
+      case "$ARCH_LABEL" in
+        x86_64)
+          ASSETS+=("openshell-gateway-x86_64-unknown-linux-gnu.tar.gz")
+          ASSETS+=("openshell-sandbox-x86_64-unknown-linux-gnu.tar.gz")
+          ;;
+        aarch64)
+          ASSETS+=("openshell-gateway-aarch64-unknown-linux-gnu.tar.gz")
+          ASSETS+=("openshell-sandbox-aarch64-unknown-linux-gnu.tar.gz")
+          ;;
+      esac
+      CHECKSUM_FILES+=("openshell-gateway-checksums-sha256.txt")
+      CHECKSUM_FILES+=("openshell-sandbox-checksums-sha256.txt")
+      ;;
+  esac
+fi
 
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
+
+download_from_actions_artifacts() {
+  local artifact_arch cli_artifact gateway_artifact sandbox_artifact
+
+  [ "$OS" = "Linux" ] \
+    || fail "OpenShell artifact channel currently supports Linux runners only."
+  command -v gh >/dev/null 2>&1 \
+    || fail "gh CLI is required to install OpenShell from workflow artifacts."
+
+  case "$ARCH_LABEL" in
+    x86_64) artifact_arch="amd64" ;;
+    aarch64) artifact_arch="arm64" ;;
+  esac
+
+  cli_artifact="rust-binary-cli-cli-linux-${artifact_arch}"
+  gateway_artifact="rust-binary-gateway-gateway-linux-${artifact_arch}"
+  sandbox_artifact="rust-binary-supervisor-sandbox-linux-${artifact_arch}"
+
+  info "Downloading OpenShell workflow artifacts from run ${OPENSHELL_ARTIFACT_RUN_ID}..."
+  GH_PROMPT_DISABLED=1 GH_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}" gh run download "$OPENSHELL_ARTIFACT_RUN_ID" \
+    --repo NVIDIA/OpenShell --name "$cli_artifact" --dir "$tmpdir/artifact-cli" \
+    || fail "Failed to download OpenShell artifact '$cli_artifact' from run ${OPENSHELL_ARTIFACT_RUN_ID}."
+  GH_PROMPT_DISABLED=1 GH_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}" gh run download "$OPENSHELL_ARTIFACT_RUN_ID" \
+    --repo NVIDIA/OpenShell --name "$gateway_artifact" --dir "$tmpdir/artifact-gateway" \
+    || fail "Failed to download OpenShell artifact '$gateway_artifact' from run ${OPENSHELL_ARTIFACT_RUN_ID}."
+  GH_PROMPT_DISABLED=1 GH_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}" gh run download "$OPENSHELL_ARTIFACT_RUN_ID" \
+    --repo NVIDIA/OpenShell --name "$sandbox_artifact" --dir "$tmpdir/artifact-sandbox" \
+    || fail "Failed to download OpenShell artifact '$sandbox_artifact' from run ${OPENSHELL_ARTIFACT_RUN_ID}."
+
+  cp "$tmpdir/artifact-cli/openshell" "$tmpdir/openshell"
+  cp "$tmpdir/artifact-gateway/openshell-gateway" "$tmpdir/openshell-gateway"
+  cp "$tmpdir/artifact-sandbox/openshell-sandbox" "$tmpdir/openshell-sandbox"
+  chmod 755 "$tmpdir/openshell" "$tmpdir/openshell-gateway" "$tmpdir/openshell-sandbox"
+}
 
 download_with_curl() {
   local name
@@ -355,45 +440,49 @@ download_with_curl() {
   done
 }
 
-info "Downloading OpenShell release assets (this may take a minute)..."
-if command -v gh >/dev/null 2>&1; then
-  gh_ok=1
-  for name in "${ASSETS[@]}" "${CHECKSUM_FILES[@]}"; do
-    if ! GH_PROMPT_DISABLED=1 GH_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}" gh release download "$RELEASE_TAG" --repo NVIDIA/OpenShell \
-      --pattern "$name" --dir "$tmpdir" --clobber 2>/dev/null; then
-      gh_ok=0
-      break
+if [ "$RESOLVED_CHANNEL" = "artifact" ]; then
+  download_from_actions_artifacts
+else
+  info "Downloading OpenShell release assets (this may take a minute)..."
+  if command -v gh >/dev/null 2>&1; then
+    gh_ok=1
+    for name in "${ASSETS[@]}" "${CHECKSUM_FILES[@]}"; do
+      if ! GH_PROMPT_DISABLED=1 GH_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}" gh release download "$RELEASE_TAG" --repo NVIDIA/OpenShell \
+        --pattern "$name" --dir "$tmpdir" --clobber 2>/dev/null; then
+        gh_ok=0
+        break
+      fi
+    done
+    if [ "$gh_ok" = "1" ]; then
+      : # gh succeeded
+    else
+      warn "gh CLI download failed (auth may not be configured) — falling back to curl"
+      rm -f "$tmpdir"/*
+      download_with_curl
     fi
-  done
-  if [ "$gh_ok" = "1" ]; then
-    : # gh succeeded
   else
-    warn "gh CLI download failed (auth may not be configured) — falling back to curl"
-    rm -f "$tmpdir"/*
     download_with_curl
   fi
-else
-  download_with_curl
-fi
 
-info "Verifying SHA-256 checksum..."
-if command -v sha256sum >/dev/null 2>&1; then
-  SHA_CMD="sha256sum"
-elif command -v shasum >/dev/null 2>&1; then
-  SHA_CMD="shasum -a 256"
-else
-  fail "No SHA-256 tool available (sha256sum/shasum)"
-fi
-for i in "${!ASSETS[@]}"; do
-  asset_name="${ASSETS[$i]}"
-  checksum_file="${CHECKSUM_FILES[$i]}"
-  (cd "$tmpdir" && grep -F "$asset_name" "$checksum_file" | $SHA_CMD -c -) \
-    || fail "SHA-256 checksum verification failed for $asset_name"
-done
+  info "Verifying SHA-256 checksum..."
+  if command -v sha256sum >/dev/null 2>&1; then
+    SHA_CMD="sha256sum"
+  elif command -v shasum >/dev/null 2>&1; then
+    SHA_CMD="shasum -a 256"
+  else
+    fail "No SHA-256 tool available (sha256sum/shasum)"
+  fi
+  for i in "${!ASSETS[@]}"; do
+    asset_name="${ASSETS[$i]}"
+    checksum_file="${CHECKSUM_FILES[$i]}"
+    (cd "$tmpdir" && grep -F "$asset_name" "$checksum_file" | $SHA_CMD -c -) \
+      || fail "SHA-256 checksum verification failed for $asset_name"
+  done
 
-for asset_name in "${ASSETS[@]}"; do
-  tar xzf "$tmpdir/$asset_name" -C "$tmpdir"
-done
+  for asset_name in "${ASSETS[@]}"; do
+    tar xzf "$tmpdir/$asset_name" -C "$tmpdir"
+  done
+fi
 
 target_dir="/usr/local/bin"
 if [[ -n "$ACTIVE_OPENSHELL_BIN" && "$ACTIVE_OPENSHELL_BIN" = /* ]]; then
