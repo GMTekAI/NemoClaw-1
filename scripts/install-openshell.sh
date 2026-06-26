@@ -33,12 +33,12 @@ esac
 
 info "Detected $OS_LABEL ($ARCH_LABEL)"
 
-# Minimum version required for native messaging credential rewrite:
-# WebSocket text frames plus provider-shaped aliases and REST request bodies.
-MIN_VERSION="0.0.44"
+# Minimum version required for native messaging credential rewrite plus
+# MCP/JSON-RPC L7 policy enforcement (NVIDIA/OpenShell#1865).
+MIN_VERSION="0.0.72"
 # Maximum version validated for this NemoClaw release. Newer OpenShell builds
 # may change sandbox semantics; upgrade NemoClaw before upgrading past this.
-MAX_VERSION="0.0.44"
+MAX_VERSION="0.0.72"
 # Pin fresh installs to this version. The TS installer normally overrides this
 # via NEMOCLAW_OPENSHELL_PIN_VERSION after resolving the highest published
 # OpenShell release that satisfies the blueprint's max_openshell_version
@@ -158,6 +158,10 @@ openshell_has_required_messaging_features() {
     OPENSHELL_FEATURE_CHECK_ERROR="OpenShell binary is missing websocket-credential-rewrite support."
     return 1
   fi
+  if [[ "$binary_strings" != *"allow_all_known_mcp_methods"* ]]; then
+    OPENSHELL_FEATURE_CHECK_ERROR="OpenShell binary is missing MCP/JSON-RPC L7 policy support."
+    return 1
+  fi
   return 0
 }
 
@@ -266,7 +270,7 @@ if command -v openshell >/dev/null 2>&1; then
         fi
       fi
     fi
-    warn "openshell $INSTALLED_VERSION is not the required dev-channel messaging-rewrite build — upgrading..."
+    warn "openshell $INSTALLED_VERSION is not the required dev-channel messaging-rewrite/MCP-L7 build — upgrading..."
   else
     if version_gte "$INSTALLED_VERSION" "$MIN_VERSION"; then
       if ! version_gte "$MAX_VERSION" "$INSTALLED_VERSION"; then
@@ -274,9 +278,9 @@ if command -v openshell >/dev/null 2>&1; then
       elif ! required_driver_bins_present; then
         warn "openshell $INSTALLED_VERSION is missing Docker-driver binaries — reinstalling pinned OpenShell ${PIN_VERSION}..."
       elif ! openshell_has_required_messaging_features; then
-        fail "${OPENSHELL_FEATURE_CHECK_ERROR:-openshell $INSTALLED_VERSION is missing required messaging credential rewrite support. Install an OpenShell build that includes provider aliases, WebSocket text rewrite, and request-body credential rewrite.}"
+        fail "${OPENSHELL_FEATURE_CHECK_ERROR:-openshell $INSTALLED_VERSION is missing required messaging credential rewrite and MCP L7 policy support. Install an OpenShell build that includes provider aliases, WebSocket text rewrite, request-body credential rewrite, and MCP/JSON-RPC L7 policy enforcement.}"
       else
-        info "openshell already installed: $INSTALLED_VERSION (>= $MIN_VERSION, <= $MAX_VERSION, messaging rewrite capable)"
+        info "openshell already installed: $INSTALLED_VERSION (>= $MIN_VERSION, <= $MAX_VERSION, messaging rewrite and MCP L7 capable)"
         exit 0
       fi
     else

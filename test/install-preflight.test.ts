@@ -285,7 +285,7 @@ exit 98
       },
     });
 
-    expect(result.status).toBe(0);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     const gitCalls = fs.readFileSync(gitLog, "utf-8");
     expect(gitCalls).not.toMatch(/clone/);
     expect(gitCalls).not.toMatch(/fetch/);
@@ -389,7 +389,7 @@ exit 98
     });
 
     const output = `${result.stdout}${result.stderr}`;
-    expect(result.status).toBe(0);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(output).toMatch(/NemoClaw Installer/);
     expect(output).not.toMatch(/deprecated compatibility wrapper/);
   });
@@ -409,7 +409,7 @@ exit 98
     });
 
     const output = `${result.stdout}${result.stderr}`;
-    expect(result.status).toBe(0);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(output).toMatch(/NemoClaw Installer/);
     expect(output).not.toMatch(/deprecated compatibility wrapper/);
   });
@@ -420,7 +420,7 @@ exit 98
       encoding: "utf-8",
     });
 
-    expect(result.status).toBe(0);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     const output = `${result.stdout}${result.stderr}`;
     expect(output).toMatch(/NemoClaw Installer/);
     expect(output).toMatch(/--non-interactive/);
@@ -443,7 +443,7 @@ exit 98
     });
 
     const output = `${result.stdout}${result.stderr}`;
-    expect(result.status).toBe(0);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(output).toMatch(/build \| openai \| anthropic \| anthropicCompatible/);
     expect(output).toMatch(/gemini \| ollama \| custom \| nim-local \| vllm \| routed/);
     expect(output).toMatch(/aliases: cloud -> build, nim -> nim-local/);
@@ -455,7 +455,7 @@ exit 98
       encoding: "utf-8",
     });
 
-    expect(result.status).toBe(0);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     const output = `${result.stdout}${result.stderr}`;
     expect(output.trim()).toMatch(/^nemoclaw-installer(?: v\d+\.\d+\.\d+(?:-.+)?)?$/);
     expect(output).not.toMatch(/0\.1\.0/);
@@ -517,6 +517,8 @@ exit 98
     fs.mkdirSync(path.join(prefix, "bin"), { recursive: true });
 
     writeNodeStub(fakeBin);
+    writeDockerOkStub(fakeBin);
+    writeOpenShellOkStub(fakeBin);
     writeExecutable(
       path.join(fakeBin, "git"),
       `#!/usr/bin/env bash
@@ -597,7 +599,7 @@ fi`,
       },
     });
 
-    expect(result.status).toBe(0);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     const log = fs.readFileSync(npmLog, "utf-8");
     // install (no -g) and link must both have been called
     expect(log).toMatch(/^install(?!\s+-g)/m);
@@ -623,6 +625,7 @@ fi`,
     fs.mkdirSync(path.join(prefix, "bin"), { recursive: true });
 
     writeNodeStub(fakeBin);
+    writeDockerOkStub(fakeBin);
     writeNpmStub(
       fakeBin,
       `printf '%s\\n' "$*" >> "$NPM_LOG_PATH"
@@ -2169,6 +2172,8 @@ exit 99`,
     fs.mkdirSync(path.join(prefix, "bin"), { recursive: true });
 
     writeNodeStub(fakeBin);
+    writeDockerOkStub(fakeBin);
+    writeOpenShellOkStub(fakeBin);
     writeNpmStub(
       fakeBin,
       `if [ "$1" = "pack" ]; then exit 1; fi
@@ -2230,7 +2235,7 @@ exit 0`,
       },
     });
 
-    expect(result.status).toBe(0);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     // git clone / git fetch should NOT have been called in the source-checkout path.
     // git may be called for version resolution (git describe), so we check
     // that no clone or fetch was attempted rather than no git calls at all.
@@ -2252,6 +2257,8 @@ exit 0`,
     fs.mkdirSync(path.join(prefix, "bin"), { recursive: true });
 
     writeNodeStub(fakeBin);
+    writeDockerOkStub(fakeBin);
+    writeOpenShellOkStub(fakeBin);
 
     writeExecutable(
       path.join(fakeBin, "curl"),
@@ -2307,7 +2314,7 @@ fi`,
       },
     });
 
-    expect(result.status).toBe(0);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     const gitCalls = fs.readFileSync(gitLog, "utf-8");
     expect(gitCalls).not.toMatch(/clone/);
     expect(gitCalls).not.toMatch(/fetch/);
@@ -3928,7 +3935,10 @@ function writeDockerOkStub(fakeBin: string) {
   writeExecutable(
     path.join(fakeBin, "docker"),
     `#!/usr/bin/env bash
-if [ "$1" = "info" ]; then exit 0; fi
+if [ "$1" = "info" ]; then
+  echo '{"ServerVersion":"29.3.1","OperatingSystem":"Ubuntu 24.04","CgroupVersion":"2"}'
+  exit 0
+fi
 exit 0
 `,
   );
@@ -3936,6 +3946,17 @@ exit 0
     path.join(fakeBin, "systemctl"),
     `#!/usr/bin/env bash
 if [ "$1" = "is-active" ] && [ "$2" = "docker" ]; then echo "active"; exit 0; fi
+exit 0
+`,
+  );
+}
+
+function writeOpenShellOkStub(fakeBin: string, version = "0.0.72") {
+  writeExecutable(
+    path.join(fakeBin, "openshell"),
+    `#!/usr/bin/env bash
+if [ "$1" = "--version" ] || [ "$1" = "version" ]; then echo "openshell ${version}"; exit 0; fi
+# request-body-credential-rewrite websocket-credential-rewrite allow_all_known_mcp_methods
 exit 0
 `,
   );

@@ -22,6 +22,7 @@ export const MCP_PORT_END = 3199;
 export const MCP_HOST = "host.docker.internal";
 export const MCPORTER_VERSION = "0.7.3";
 export const MCP_BRIDGE_POLICY_SOURCE = "generated:nemoclaw-mcp-bridge";
+export const MCP_BRIDGE_POLICY_MAX_BODY_BYTES = 131_072;
 
 const VALID_SERVER_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const VALID_ENV_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
@@ -355,9 +356,14 @@ export function buildMcpBridgePolicyYaml(server: string, port: number): string {
           {
             host: MCP_HOST,
             port,
-            protocol: "rest",
+            path: "/",
+            protocol: "mcp",
             enforcement: "enforce",
-            rules: [{ allow: { method: "POST", path: "/" } }],
+            mcp: {
+              max_body_bytes: MCP_BRIDGE_POLICY_MAX_BODY_BYTES,
+              allow_all_known_mcp_methods: true,
+            },
+            rules: [{ allow: {} }],
           },
         ],
         binaries: [

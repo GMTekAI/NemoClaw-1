@@ -12,8 +12,8 @@ import { expect, test } from "../fixtures/e2e-test.ts";
 // Migrated from test/e2e/test-openshell-version-pin.sh (regression guard for
 // #3474). The legacy bash script is a hermetic installer-script behavioral
 // test: it runs scripts/install-openshell.sh under a stubbed PATH where the
-// already-installed openshell reports a too-new version (0.0.45) and the
-// downloaded archives produce a binary that reports the pinned 0.0.44.
+// already-installed openshell reports a too-new version and the downloaded
+// archives produce a binary that reports the pinned compatible version.
 //
 // This is a free-standing live test (per #5049's pattern) — it does not exercise
 // the registry-driven steady-state probe model. There is no OpenClaw instance,
@@ -22,6 +22,10 @@ import { expect, test } from "../fixtures/e2e-test.ts";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
 const INSTALL_SCRIPT = path.join(REPO_ROOT, "scripts", "install-openshell.sh");
+const REQUIRED_OPENSHELL_VERSION = "0.0.72";
+const STICKY_OPENSHELL_VERSION = "0.0.73";
+const OPENSHELL_FEATURE_MARKERS =
+  "request-body-credential-rewrite websocket-credential-rewrite allow_all_known_mcp_methods";
 
 type GhDownloadMode = "success" | "fail";
 
@@ -75,7 +79,7 @@ function createFakeStickyOpenshell(binDir: string, version: string): void {
     path.join(binDir, "openshell"),
     `#!/usr/bin/env bash
 if [ "\${1:-}" = "--version" ]; then echo "openshell ${version}"; exit 0; fi
-# request-body-credential-rewrite websocket-credential-rewrite
+# ${OPENSHELL_FEATURE_MARKERS}
 exit 0`,
   );
 }
@@ -210,7 +214,7 @@ esac
 cat > "$outdir/$name" <<'EOS'
 #!/usr/bin/env bash
 if [ "\${1:-}" = "--version" ]; then echo "openshell ${replacementVersion}"; exit 0; fi
-# request-body-credential-rewrite websocket-credential-rewrite
+# ${OPENSHELL_FEATURE_MARKERS}
 exit 0
 EOS
 chmod 755 "$outdir/$name"`,
@@ -248,11 +252,11 @@ async function runVersionPinScenario(
     fs.writeFileSync(downloadLog, "");
 
     createFakeUname(fakeBin);
-    createFakeStickyOpenshell(fakeBin, "0.0.45");
+    createFakeStickyOpenshell(fakeBin, STICKY_OPENSHELL_VERSION);
     createFakeHelperBinaries(fakeBin);
     createFakeGh(fakeBin, downloadLog, options.ghDownloadMode);
     createFakeCurl(fakeBin, downloadLog);
-    createFakeTar(fakeBin, "0.0.44");
+    createFakeTar(fakeBin, REQUIRED_OPENSHELL_VERSION);
     createFakeStrings(fakeBin);
 
     const result = spawnSync("bash", [INSTALL_SCRIPT], {
@@ -274,40 +278,40 @@ async function runVersionPinScenario(
     // "above the maximum" hard-fail before download).
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
 
-    // Assertion 2: download-log-contains-v0.0.44 — pinned release tag was
+    // Assertion 2: pinned release tag was
     // requested from the release host.
     const downloads = fs.readFileSync(downloadLog, "utf-8");
-    expect(downloads).toContain("v0.0.44");
+    expect(downloads).toContain(`v${REQUIRED_OPENSHELL_VERSION}`);
 
-    // Assertion 3: download-log-excludes-v0.0.45 — the too-new sticky version
+    // Assertion 3: the too-new sticky version
     // is never re-fetched.
-    expect(downloads).not.toContain("v0.0.45");
+    expect(downloads).not.toContain(`v${STICKY_OPENSHELL_VERSION}`);
 
     if (options.ghDownloadMode === "fail") {
       // Assertion 3b: curl-fallback-observed — the installer must recover from
       // gh download failure by re-requesting the pinned assets via curl.
-      expect(downloads).toContain("gh download-fail v0.0.44");
+      expect(downloads).toContain(`gh download-fail v${REQUIRED_OPENSHELL_VERSION}`);
       expect(downloads).toContain("curl ");
     } else {
-      expect(downloads).toContain("gh download v0.0.44");
+      expect(downloads).toContain(`gh download v${REQUIRED_OPENSHELL_VERSION}`);
       expect(downloads).not.toContain("curl ");
     }
 
-    // Assertion 4: replaced-openshell-reports-0.0.44 — the binary on disk in
+    // Assertion 4: replaced-openshell-reports-pinned-version — the binary on disk in
     // the active install dir (== fakeBin, since ACTIVE_OPENSHELL_BIN resolved
-    // there and it is writable) was overwritten with the pinned 0.0.44 build.
+    // there and it is writable) was overwritten with the pinned compatible build.
     const replacedVersion = spawnSync(path.join(fakeBin, "openshell"), ["--version"], {
       encoding: "utf8",
     });
     expect(replacedVersion.status).toBe(0);
-    expect(replacedVersion.stdout).toContain("0.0.44");
-    expect(replacedVersion.stdout).not.toContain("0.0.45");
+    expect(replacedVersion.stdout).toContain(REQUIRED_OPENSHELL_VERSION);
+    expect(replacedVersion.stdout).not.toContain(STICKY_OPENSHELL_VERSION);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
 
-test("openshell-version-pin: replaces sticky too-new openshell with pinned 0.0.44 via gh download", async ({
+test("openshell-version-pin: replaces sticky too-new openshell with the pinned version via gh download", async ({
   artifacts,
 }) => {
   await runVersionPinScenario(artifacts, { ghDownloadMode: "success" });

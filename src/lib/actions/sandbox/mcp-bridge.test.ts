@@ -13,6 +13,7 @@ import {
   buildMcpBridgePolicyYaml,
   buildOpenClawMcporterRegisterCommand,
   cleanupStalePidFile,
+  MCP_BRIDGE_POLICY_MAX_BODY_BYTES,
   MCP_HOST,
   MCP_PORT_END,
   MCP_PORT_START,
@@ -117,7 +118,7 @@ describe("MCP bridge CLI parsing", () => {
 });
 
 describe("MCP bridge policy", () => {
-  it("generates a narrow host.docker.internal POST-only policy", () => {
+  it("generates an OpenShell MCP L7 policy for the bridge endpoint", () => {
     const policyName = buildMcpBridgePolicyName("GitHub_Server");
     const policy = YAML.parse(buildMcpBridgePolicyYaml("GitHub_Server", 3104)) as {
       preset: { name: string };
@@ -127,8 +128,10 @@ describe("MCP bridge policy", () => {
           endpoints: Array<{
             host: string;
             port: number;
+            path: string;
             protocol: string;
-            rules: Array<{ allow: { method: string; path: string } }>;
+            mcp: { max_body_bytes: number; allow_all_known_mcp_methods: boolean };
+            rules: Array<{ allow: Record<string, never> }>;
           }>;
           binaries: Array<{ path: string }>;
         }
@@ -142,9 +145,14 @@ describe("MCP bridge policy", () => {
       {
         host: MCP_HOST,
         port: 3104,
-        protocol: "rest",
+        path: "/",
+        protocol: "mcp",
         enforcement: "enforce",
-        rules: [{ allow: { method: "POST", path: "/" } }],
+        mcp: {
+          max_body_bytes: MCP_BRIDGE_POLICY_MAX_BODY_BYTES,
+          allow_all_known_mcp_methods: true,
+        },
+        rules: [{ allow: {} }],
       },
     ]);
     expect(entry.binaries.map((binary) => binary.path)).toEqual([

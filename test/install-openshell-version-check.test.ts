@@ -8,6 +8,10 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 const SCRIPT = path.join(import.meta.dirname, "..", "scripts", "install-openshell.sh");
+const REQUIRED_OPENSHELL_VERSION = "0.0.72";
+const LEGACY_OPENSHELL_VERSION = "0.0.44";
+const OPENSHELL_FEATURE_MARKERS =
+  "request-body-credential-rewrite websocket-credential-rewrite allow_all_known_mcp_methods";
 
 function writeExecutable(target: string, contents: string) {
   fs.writeFileSync(target, contents, { mode: 0o755 });
@@ -47,7 +51,7 @@ if [ "\${1:-}" = "-m" ]; then echo "${options.arch ?? "x86_64"}"; else echo "${o
       path.join(fakeBin, "openshell"),
       `#!/usr/bin/env bash
 if [ "\${1:-}" = "--version" ]; then echo "openshell ${version}"; exit 0; fi
-${capability ? "# request-body-credential-rewrite websocket-credential-rewrite" : ""}
+${capability ? `# ${OPENSHELL_FEATURE_MARKERS}` : ""}
 exit 99`,
     );
 
@@ -124,29 +128,35 @@ exit 0`,
 }
 
 describe("install-openshell.sh version check", { timeout: 15_000 }, () => {
-  it("exits cleanly when openshell 0.0.44 and driver binaries are already installed", () => {
-    const result = runWithInstalledVersion("0.0.44");
+  it("exits cleanly when the required OpenShell and driver binaries are already installed", () => {
+    const result = runWithInstalledVersion(REQUIRED_OPENSHELL_VERSION);
     expect(result.status).toBe(0);
-    expect(result.stdout).toMatch(/already installed.*0\.0\.44/);
+    expect(result.stdout).toContain(`already installed: ${REQUIRED_OPENSHELL_VERSION}`);
   });
 
-  it("triggers reinstall when openshell 0.0.44 is missing Docker-driver binaries", () => {
-    const result = runWithInstalledVersion("0.0.44", {}, { driverBins: false, os: "Linux" });
+  it("triggers reinstall when the required OpenShell is missing Docker-driver binaries", () => {
+    const result = runWithInstalledVersion(
+      REQUIRED_OPENSHELL_VERSION,
+      {},
+      { driverBins: false, os: "Linux" },
+    );
     expect(result.status).not.toBe(0);
     expect(result.stdout).toMatch(/missing Docker-driver binaries/);
-    expect(result.stdout).toMatch(/Installing OpenShell from release 'v0\.0\.44'/);
+    expect(result.stdout).toContain(
+      `Installing OpenShell from release 'v${REQUIRED_OPENSHELL_VERSION}'`,
+    );
   });
 
-  it("fails closed when openshell 0.0.44 lacks required messaging rewrite support", () => {
-    const result = runWithInstalledVersion("0.0.44", {}, { capability: false });
+  it("fails closed when the required OpenShell lacks required messaging rewrite support", () => {
+    const result = runWithInstalledVersion(REQUIRED_OPENSHELL_VERSION, {}, { capability: false });
     expect(result.status).toBe(1);
     // `fail()` writes to stderr as of #3446; previously stdout.
     expect(result.stderr).toMatch(/missing request-body-credential-rewrite support/);
   });
 
-  it("accepts macOS openshell 0.0.44 when the gateway binary is installed", () => {
+  it("accepts macOS OpenShell when the gateway binary is installed", () => {
     const result = runWithInstalledVersion(
-      "0.0.44",
+      REQUIRED_OPENSHELL_VERSION,
       {},
       {
         driverBins: "gateway",
@@ -155,7 +165,7 @@ describe("install-openshell.sh version check", { timeout: 15_000 }, () => {
       },
     );
     expect(result.status).toBe(0);
-    expect(result.stdout).toMatch(/already installed.*0\.0\.44/);
+    expect(result.stdout).toContain(`already installed: ${REQUIRED_OPENSHELL_VERSION}`);
   });
 
   it("does not require the macOS VM driver entitlement for Docker-driver onboarding", () => {
@@ -164,7 +174,7 @@ describe("install-openshell.sh version check", { timeout: 15_000 }, () => {
       const state = path.join(tmp, "codesign-state");
       const log = path.join(tmp, "codesign.log");
       const result = runWithInstalledVersion(
-        "0.0.44",
+        REQUIRED_OPENSHELL_VERSION,
         {
           NEMOCLAW_FAKE_CODESIGN_HAS_ENTITLEMENT: "0",
           NEMOCLAW_FAKE_CODESIGN_STATE: state,
@@ -178,7 +188,7 @@ describe("install-openshell.sh version check", { timeout: 15_000 }, () => {
       );
 
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-      expect(result.stdout).toMatch(/already installed.*0\.0\.44/);
+      expect(result.stdout).toContain(`already installed: ${REQUIRED_OPENSHELL_VERSION}`);
       expect(result.stdout).not.toMatch(/missing the macOS Hypervisor entitlement/);
       expect(result.stdout).not.toMatch(/Signing openshell-driver-vm/);
       expect(result.stdout).not.toMatch(/Installing OpenShell from release/);
@@ -188,9 +198,9 @@ describe("install-openshell.sh version check", { timeout: 15_000 }, () => {
     }
   });
 
-  it("triggers reinstall on macOS when openshell 0.0.44 is missing required gateway binaries", () => {
+  it("triggers reinstall on macOS when OpenShell is missing required gateway binaries", () => {
     const result = runWithInstalledVersion(
-      "0.0.44",
+      REQUIRED_OPENSHELL_VERSION,
       {},
       {
         driverBins: false,
@@ -200,7 +210,9 @@ describe("install-openshell.sh version check", { timeout: 15_000 }, () => {
     );
     expect(result.status).not.toBe(0);
     expect(result.stdout).toMatch(/missing Docker-driver binaries/);
-    expect(result.stdout).toMatch(/Installing OpenShell from release 'v0\.0\.44'/);
+    expect(result.stdout).toContain(
+      `Installing OpenShell from release 'v${REQUIRED_OPENSHELL_VERSION}'`,
+    );
   });
 
   it("downloads the macOS arm64 gateway asset during reinstall", () => {
@@ -274,8 +286,8 @@ dest="\${@: -1}"
 mkdir -p "$(dirname "$dest")"
 cat > "$dest" <<'EOF'
 #!/usr/bin/env bash
-if [ "\${1:-}" = "--version" ]; then echo "openshell 0.0.44"; exit 0; fi
-# request-body-credential-rewrite websocket-credential-rewrite
+if [ "\${1:-}" = "--version" ]; then echo "openshell ${REQUIRED_OPENSHELL_VERSION}"; exit 0; fi
+# ${OPENSHELL_FEATURE_MARKERS}
 exit 0
 EOF
 chmod +x "$dest"
@@ -396,7 +408,7 @@ printf '%s\\n' "$dest" >> ${JSON.stringify(installLog)}
 mkdir -p "$(dirname "$dest")"
 case "$(basename "$dest")" in
 openshell)
-  printf '#!/usr/bin/env bash\\nif [ "$1" = "--version" ]; then echo "openshell 0.0.44"; else exit 0; fi\\n# request-body-credential-rewrite websocket-credential-rewrite\\n' > "$dest"
+  printf '#!/usr/bin/env bash\\nif [ "$1" = "--version" ]; then echo "openshell ${REQUIRED_OPENSHELL_VERSION}"; else exit 0; fi\\n# ${OPENSHELL_FEATURE_MARKERS}\\n' > "$dest"
   ;;
 *)
   printf '#!/usr/bin/env bash\\nexit 0\\n' > "$dest"
@@ -453,23 +465,33 @@ exit 0`,
   });
 
   it("reinstalls the pinned release when openshell is above MAX_VERSION", () => {
-    const result = runWithInstalledVersion("0.0.45");
+    const result = runWithInstalledVersion("0.0.73");
     expect(result.status).not.toBe(0);
-    expect(result.stdout).toMatch(/above the maximum.*reinstalling pinned OpenShell 0\.0\.44/);
-    expect(result.stdout).toMatch(/Installing OpenShell from release 'v0\.0\.44'/);
+    expect(result.stdout).toContain(
+      `above the maximum (${REQUIRED_OPENSHELL_VERSION}) supported by this NemoClaw release`,
+    );
+    expect(result.stdout).toContain(`reinstalling pinned OpenShell ${REQUIRED_OPENSHELL_VERSION}`);
+    expect(result.stdout).toContain(
+      `Installing OpenShell from release 'v${REQUIRED_OPENSHELL_VERSION}'`,
+    );
     expect(result.stderr).not.toMatch(/Upgrade NemoClaw first/);
   });
 
   it("reinstalls the pinned release when openshell is at a much newer version", () => {
     const result = runWithInstalledVersion("0.1.0");
     expect(result.status).not.toBe(0);
-    expect(result.stdout).toMatch(/above the maximum.*reinstalling pinned OpenShell 0\.0\.44/);
-    expect(result.stdout).toMatch(/Installing OpenShell from release 'v0\.0\.44'/);
+    expect(result.stdout).toContain(
+      `above the maximum (${REQUIRED_OPENSHELL_VERSION}) supported by this NemoClaw release`,
+    );
+    expect(result.stdout).toContain(`reinstalling pinned OpenShell ${REQUIRED_OPENSHELL_VERSION}`);
+    expect(result.stdout).toContain(
+      `Installing OpenShell from release 'v${REQUIRED_OPENSHELL_VERSION}'`,
+    );
     expect(result.stderr).not.toMatch(/Upgrade NemoClaw first/);
   });
 
   it("accepts an installed OpenShell dev-channel Docker-driver build", () => {
-    const result = runWithInstalledVersion("0.0.44.dev84+g6b2180425", {
+    const result = runWithInstalledVersion(`${LEGACY_OPENSHELL_VERSION}.dev84+g6b2180425`, {
       NEMOCLAW_OPENSHELL_CHANNEL: "dev",
     });
     expect(result.status).toBe(0);
@@ -481,7 +503,7 @@ exit 0`,
       NEMOCLAW_OPENSHELL_CHANNEL: "dev",
     });
     expect(result.status).not.toBe(0);
-    expect(result.stdout).toMatch(/required dev-channel messaging-rewrite build/);
+    expect(result.stdout).toMatch(/required dev-channel messaging-rewrite\/MCP-L7 build/);
   });
 
   it("proceeds to install when openshell is not present", () => {
