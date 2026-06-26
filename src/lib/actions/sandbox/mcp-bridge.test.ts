@@ -49,13 +49,11 @@ function seedProxyRuntime(
 }
 
 describe("MCP bridge CLI parsing", () => {
-  it("parses server, env references, inline launch-only values, and command args", () => {
+  it("parses server, env references, and command args", () => {
     const parsed = parseMcpAddArgs([
       "github",
       "--env",
       "GITHUB_TOKEN",
-      "--env",
-      "API_BASE=https://api.example.com",
       "--",
       "npx",
       "-y",
@@ -64,16 +62,19 @@ describe("MCP bridge CLI parsing", () => {
 
     expect(parsed).toEqual({
       server: "github",
-      env: [{ name: "GITHUB_TOKEN" }, { name: "API_BASE", value: "https://api.example.com" }],
+      env: [{ name: "GITHUB_TOKEN" }],
       command: "npx",
       args: ["-y", "@modelcontextprotocol/server-github"],
     });
   });
 
-  it("accepts --env=KEY and preserves '=' inside inline values", () => {
-    expect(parseMcpAddArgs(["srv", "--env=TOKEN=a=b=c", "--", "node", "server.js"]).env).toEqual([
-      { name: "TOKEN", value: "a=b=c" },
-    ]);
+  it("rejects inline env values so bridges stay restart-safe", () => {
+    expect(() => parseMcpAddArgs(["srv", "--env=TOKEN=a=b=c", "--", "node", "server.js"])).toThrow(
+      /KEY=VALUE is not supported/,
+    );
+    expect(() =>
+      parseMcpAddArgs(["srv", "--env", "TOKEN=secret", "--", "node", "server.js"]),
+    ).toThrow(/KEY=VALUE is not supported/);
   });
 
   it("rejects missing command separators", () => {
@@ -100,25 +101,13 @@ describe("MCP bridge CLI parsing", () => {
     }
   });
 
-  it("requires inline env values to match exported host env for restart-safe bridges", () => {
+  it("rejects programmatic inline env values before launch", () => {
     const prior = process.env.MCP_BRIDGE_INLINE_TOKEN;
     try {
-      delete process.env.MCP_BRIDGE_INLINE_TOKEN;
-      expect(() =>
-        resolveLaunchEnv([{ name: "MCP_BRIDGE_INLINE_TOKEN", value: "secret-value" }]),
-      ).toThrow(/launch-only/);
-
-      process.env.MCP_BRIDGE_INLINE_TOKEN = "different";
-      expect(() =>
-        resolveLaunchEnv([{ name: "MCP_BRIDGE_INLINE_TOKEN", value: "secret-value" }]),
-      ).toThrow(/does not match/);
-
       process.env.MCP_BRIDGE_INLINE_TOKEN = "secret-value";
-      expect(
+      expect(() =>
         resolveLaunchEnv([{ name: "MCP_BRIDGE_INLINE_TOKEN", value: "secret-value" }]),
-      ).toEqual({
-        MCP_BRIDGE_INLINE_TOKEN: "secret-value",
-      });
+      ).toThrow(/VALUE is not supported/);
     } finally {
       prior === undefined
         ? delete process.env.MCP_BRIDGE_INLINE_TOKEN

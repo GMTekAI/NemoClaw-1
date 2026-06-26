@@ -202,7 +202,7 @@ const PUBLIC_DISPLAY_LAYOUT: Record<string, readonly PublicDisplayLayout[]> = {
       order: 25.2,
       usage: "nemoclaw <name> mcp add",
       description: "Bridge a host MCP server into the sandbox",
-      flags: "<server> [--env KEY|KEY=VALUE ...] -- <command> [args...]",
+      flags: "<server> [--env KEY ...] -- <command> [args...]",
     },
     {
       group: "MCP Bridges",

@@ -196,18 +196,28 @@ export function parseMcpAddArgs(argv: string[]): ParsedMcpAddArgs {
       const raw = argv[++i] ?? "";
       const eq = raw.indexOf("=");
       const name = eq >= 0 ? raw.slice(0, eq) : raw;
-      const value = eq >= 0 ? raw.slice(eq + 1) : undefined;
+      if (eq >= 0) {
+        throw new McpBridgeError(
+          "Inline --env KEY=VALUE is not supported for restart-safe MCP bridges. Export KEY in the host environment and pass --env KEY.",
+          2,
+        );
+      }
       validateEnvName(name);
-      env.push(value === undefined ? { name } : { name, value });
+      env.push({ name });
       continue;
     }
     if (token?.startsWith("--env=")) {
       const raw = token.slice("--env=".length);
       const eq = raw.indexOf("=");
       const name = eq >= 0 ? raw.slice(0, eq) : raw;
-      const value = eq >= 0 ? raw.slice(eq + 1) : undefined;
+      if (eq >= 0) {
+        throw new McpBridgeError(
+          "Inline --env KEY=VALUE is not supported for restart-safe MCP bridges. Export KEY in the host environment and pass --env KEY.",
+          2,
+        );
+      }
       validateEnvName(name);
-      env.push(value === undefined ? { name } : { name, value });
+      env.push({ name });
       continue;
     }
     if (token?.startsWith("-")) {
@@ -226,7 +236,7 @@ export function parseMcpAddArgs(argv: string[]): ParsedMcpAddArgs {
 
   if (!server) {
     throw new McpBridgeError(
-      "Usage: nemoclaw <sandbox> mcp add <server> [--env KEY|KEY=VALUE ...] -- <command> [args...]",
+      "Usage: nemoclaw <sandbox> mcp add <server> [--env KEY ...] -- <command> [args...]",
       2,
     );
   }
@@ -256,20 +266,12 @@ export function resolveLaunchEnv(env: readonly ParsedEnvReference[]): Record<str
     validateEnvName(entry.name);
     const hostValue = process.env[entry.name];
     if (entry.value !== undefined) {
-      if (hostValue === undefined || hostValue === "") {
-        throw new McpBridgeError(
-          `Inline --env ${entry.name}=VALUE is launch-only. Export '${entry.name}' in the host environment before adding the bridge so restart can relaunch it without persisting the raw value.`,
-          1,
-        );
-      }
-      if (hostValue !== entry.value) {
-        throw new McpBridgeError(
-          `Inline --env ${entry.name}=VALUE does not match the exported host value. Update '${entry.name}' in the host environment, or pass --env ${entry.name} to use the exported value.`,
-          1,
-        );
-      }
+      throw new McpBridgeError(
+        `Inline --env ${entry.name}=VALUE is not supported for restart-safe MCP bridges. Export '${entry.name}' in the host environment and pass --env ${entry.name}.`,
+        1,
+      );
     }
-    const value = entry.value ?? hostValue;
+    const value = hostValue;
     if (value === undefined || value === "") {
       throw new McpBridgeError(
         `Host environment variable '${entry.name}' is required to launch this MCP bridge.`,
@@ -692,7 +694,6 @@ export async function restartMcpBridge(sandboxName: string, server?: string): Pr
     stopProxy(sandboxName, name);
     const logOffset = getLogOffset(bridgeLogFile(sandboxName, name));
     let proxyStarted = false;
-    let committed = false;
     try {
       const proxy = startProxy(sandboxName, name, entry, envValues);
       proxyStarted = true;
@@ -707,9 +708,8 @@ export async function restartMcpBridge(sandboxName: string, server?: string): Pr
         updatedAt: nowIso(),
         lifecycle: { pid: proxy.pid, startedAt: nowIso(), lastError: null },
       });
-      committed = true;
     } catch (error) {
-      if (proxyStarted && !committed) stopProxy(sandboxName, name);
+      if (proxyStarted) stopProxy(sandboxName, name);
       writeBridgeEntry(sandboxName, {
         ...entry,
         updatedAt: nowIso(),
@@ -956,10 +956,10 @@ function renderMcpHelp(subcommand: string): void {
   switch (subcommand) {
     case "add":
       console.log(`USAGE
-  nemoclaw <name> mcp add <server> [--env KEY|KEY=VALUE ...] -- <command> [args...]
+  nemoclaw <name> mcp add <server> [--env KEY ...] -- <command> [args...]
 
   FLAGS
-    --env KEY|KEY=VALUE  Host env reference. Inline values must match exported host env and are not persisted.`);
+    --env KEY  Host environment variable reference for the bridge process`);
       return;
     case "list":
       console.log(`USAGE
