@@ -14,6 +14,7 @@ import {
   classifySandboxForwardHealth,
   executeSandboxExecCommand,
   resolveSandboxDashboardPort,
+  restartSandboxGateway,
   type SandboxForwardListEntry,
 } from "../dist/lib/actions/sandbox/process-recovery.js";
 
@@ -330,6 +331,45 @@ describe("executeSandboxExecCommand", () => {
       "-c",
       expect.stringContaining("echo SECRET_BOUNDARY_OK"),
     ]);
+  });
+});
+
+describe("restartSandboxGateway", () => {
+  it("refuses unframed OpenShell root exec output without using the Docker fallback", () => {
+    const childProcess = requireDist("node:child_process");
+    const dockerExec = requireDist("../dist/lib/adapters/docker/exec.js");
+    const agentRuntime = requireDist("../dist/lib/agent/runtime.js");
+    const registry = requireDist("../dist/lib/state/registry.js");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(childProcess, "spawnSync").mockReturnValue({
+      status: 0,
+      stdout: "OpenShell transport preamble without child stdout marker\n",
+      stderr: "",
+    } as never);
+    const dockerSpawnSync = vi.spyOn(dockerExec, "dockerSpawnSync").mockReturnValue({
+      status: 0,
+      stdout: "__NEMOCLAW_SANDBOX_EXEC_STARTED__\nGATEWAY_PID=123\n",
+      stderr: "",
+    } as never);
+    vi.spyOn(agentRuntime, "getSessionAgent").mockReturnValue(null);
+    vi.spyOn(registry, "getSandbox").mockReturnValue({
+      name: "openclaw-box",
+      agent: "openclaw",
+      dashboardPort: 18789,
+    });
+
+    const result = withFakeOpenshellBinary(() =>
+      restartSandboxGateway("openclaw-box", { quiet: true }),
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      failureLayer: "root exec unavailable",
+    });
+    expect(dockerSpawnSync).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(
+      "  Failure layer: root exec unavailable - gateway restart failed for 'openclaw-box'.",
+    );
   });
 });
 

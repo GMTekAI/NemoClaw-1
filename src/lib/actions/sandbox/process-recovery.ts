@@ -34,12 +34,12 @@ import { parseForwardList } from "../../state/sandbox-session";
 import { classifyForwardHealthWithReachability, isLocalForwardReachable } from "./forward-health";
 import {
   classifyGatewayRestartFailure,
-  printGatewayRestartFailure,
-  restartSandboxGatewayWithDeps,
-  sandboxAgentName,
   type GatewayRestartDeps,
   type GatewayRestartResult,
+  printGatewayRestartFailure,
   type RestartSandboxGatewayOptions,
+  restartSandboxGatewayWithDeps,
+  sandboxAgentName,
 } from "./gateway-restart";
 import { printGatewayWedgeDiagnostics } from "./gateway-wedge-diagnostics";
 import {
@@ -289,6 +289,33 @@ export function executeSandboxExecCommand(
   }
 }
 
+function executeSandboxRootExecCommand(
+  sandboxName: string,
+  command: string,
+  timeout = 15000,
+): SandboxCommandResult | null {
+  const markedCommand = buildSandboxExecMarkedCommand(command);
+  const timeoutOverride = Number(process.env.NEMOCLAW_SANDBOX_EXEC_TIMEOUT_MS || "");
+  const effectiveTimeout =
+    Number.isFinite(timeoutOverride) && timeoutOverride > 0 ? timeoutOverride : timeout;
+  try {
+    const result = spawnSync(
+      getOpenshellBinary(),
+      ["sandbox", "exec", "--name", sandboxName, "--", "sh", "-c", markedCommand],
+      {
+        cwd: ROOT,
+        encoding: "utf-8",
+        env: process.env,
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: effectiveTimeout,
+      },
+    );
+    return parseSandboxCommandResult(result);
+  } catch {
+    return null;
+  }
+}
+
 async function executeSandboxExecCommandForStatus(
   sandboxName: string,
   command: string,
@@ -457,7 +484,7 @@ export function restartSandboxGateway(
       resolveSandboxDashboardPort,
       buildOpenClawGatewayRestartScript: agentRuntime.buildOpenClawGatewayRestartScript,
       buildHermesGatewayRestartScript: agentRuntime.buildHermesGatewayRestartScript,
-      executeSandboxExecCommand,
+      executeSandboxExecCommand: executeSandboxRootExecCommand,
       waitForRecoveredSandboxGateway,
       ensureSandboxPortForward,
       ensureHermesDashboardPortForwardIfEnabled,
