@@ -93,7 +93,7 @@ describe("fixture redaction entry point", () => {
     expect(out).not.toContain(canonical);
   });
 
-  it("redacts fake hosted inference keys from uploaded shell-probe artifacts", async () => {
+  it("redacts fake hosted inference keys from representative uploaded artifacts", async () => {
     const fakeHostedKey = "fake-hosted-inference-key-for-artifact-scan";
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "nemoclaw-e2e-artifact-redaction-"));
     const artifacts = new ArtifactSink(path.join(rootDir, "e2e-artifacts/live/redaction-smoke"));
@@ -110,6 +110,21 @@ describe("fixture redaction entry point", () => {
       signal: new AbortController().signal,
     });
 
+    const directArtifactPaths = await Promise.all([
+      artifacts.writeJson("run-plan.json", {
+        targetId: "redaction-smoke",
+        note: secrets.redact(`plan saw ${fakeHostedKey}`),
+      }),
+      artifacts.writeJson("target-result.json", {
+        id: "redaction-smoke",
+        output: secrets.redact(`result saw ${fakeHostedKey}`),
+      }),
+      artifacts.writeText(
+        "actions/redacted-action.log",
+        secrets.redact(`action saw ${fakeHostedKey}`),
+      ),
+      artifacts.writeText("logs/redacted-live.log", secrets.redact(`log saw ${fakeHostedKey}`)),
+    ]);
     const result = await probe.run(
       trustedShellCommand({
         command: "bash",
@@ -125,14 +140,28 @@ describe("fixture redaction entry point", () => {
         redactionValues: [fakeHostedKey],
       },
     );
+    const uploadedPaths = [...directArtifactPaths, ...Object.values(result.artifacts)];
     const uploadedTexts = await Promise.all(
-      Object.values(result.artifacts).map((artifactPath) => fs.readFile(artifactPath, "utf8")),
+      uploadedPaths.map((artifactPath) => fs.readFile(artifactPath, "utf8")),
     );
 
     expect(result.stdout).toContain("[REDACTED]");
     expect(result.stderr).toContain("[REDACTED]");
     expect(uploadedTexts.join("\n")).not.toContain(fakeHostedKey);
     expect(uploadedTexts.join("\n")).toContain("[REDACTED]");
+    expect(
+      uploadedPaths.map((artifactPath) => path.relative(artifacts.rootDir, artifactPath)),
+    ).toEqual(
+      expect.arrayContaining([
+        "run-plan.json",
+        "target-result.json",
+        "actions/redacted-action.log",
+        "logs/redacted-live.log",
+        "shell/hosted-inference-secret-smoke.stdout.txt",
+        "shell/hosted-inference-secret-smoke.stderr.txt",
+        "shell/hosted-inference-secret-smoke.result.json",
+      ]),
+    );
 
     await fs.rm(rootDir, { recursive: true, force: true });
   });
