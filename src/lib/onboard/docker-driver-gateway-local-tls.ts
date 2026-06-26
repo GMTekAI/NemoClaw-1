@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { spawnSync, type SpawnSyncOptions } from "node:child_process";
-import { createPrivateKey, createPublicKey, X509Certificate, type KeyObject } from "node:crypto";
+import { type SpawnSyncOptions, spawnSync } from "node:child_process";
+import { createPrivateKey, createPublicKey, type KeyObject, X509Certificate } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
