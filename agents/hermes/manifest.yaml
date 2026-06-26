@@ -115,7 +115,7 @@ inference:
   provider_options:
     - hermesProvider
 
-# ── MCP bridge support ───────────────────────────────────────────
+# ── MCP server support ───────────────────────────────────────────
 mcp:
   support: bridge
   adapter: hermes-config

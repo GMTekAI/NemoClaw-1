@@ -22,7 +22,7 @@ on:
         type: string
         default: ""
       openshell_channel:
-        description: "OpenShell installer channel for MCP bridge proof before the pinned stable release is published."
+        description: "OpenShell installer channel for MCP server proof before the pinned stable release is published."
         required: false
         default: "stable"
         type: choice
@@ -439,7 +439,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/install-openshell.sh
 
-      - name: Run MCP bridge live test
+      - name: Run MCP OpenShell provider live test
         run: |
           set -euo pipefail
           export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"
@@ -457,7 +457,7 @@ jobs:
             test/e2e-scenario/live/mcp-bridge.test.ts \
             --silent=false --reporter=default
 
-      - name: Upload MCP bridge artifacts
+      - name: Upload MCP server artifacts
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

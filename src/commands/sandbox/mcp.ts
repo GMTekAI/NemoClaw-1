@@ -7,13 +7,13 @@ import { NemoClawCommand } from "../../lib/cli/nemoclaw-oclif-command";
 export default class SandboxMcpCommand extends NemoClawCommand {
   static id = "sandbox:mcp";
   static strict = false;
-  static summary = "Manage MCP bridges for a sandbox";
+  static summary = "Manage MCP servers for a sandbox";
   static description =
-    "Manage host-side stdio MCP server bridges for a sandbox. The proxy runs on the host with host environment credentials; the sandbox reaches it through a generated network policy and a bearer-authenticated local bridge.";
+    "Manage OpenShell-enforced MCP Streamable HTTP servers for a sandbox. Credentials are registered as OpenShell providers and appear in sandbox config only as openshell:resolve:env placeholders.";
   static usage = ["<name> <add|list|status|restart|remove> [args...]"];
   static examples = [
     "<%= config.bin %> sandbox mcp alpha list",
-    "<%= config.bin %> sandbox mcp alpha add github --env GITHUB_TOKEN -- npx -y @modelcontextprotocol/server-github",
+    "<%= config.bin %> sandbox mcp alpha add github --url https://api.githubcopilot.com/mcp/ --env GITHUB_TOKEN",
     "<%= config.bin %> sandbox mcp alpha status github --json",
     "<%= config.bin %> sandbox mcp alpha remove github",
   ];

@@ -44,7 +44,7 @@ export const GROUP_ORDER: readonly CommandGroup[] = [
   "Skills",
   "Policy Presets",
   "Messaging Channels",
-  "MCP Bridges",
+  "MCP Servers",
   "Compatibility Commands",
   "Services",
   "Troubleshooting",

@@ -1,35 +1,34 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { spawn } from "node:child_process";
 import crypto from "node:crypto";
-import fs from "node:fs";
-import net from "node:net";
-import os from "node:os";
-import path from "node:path";
 import YAML from "yaml";
 
 import { type AgentDefinition, type AgentMcpAdapter, loadAgent } from "../../agent/defs";
-import { shellQuote } from "../../runner";
-import { ensureConfigDir } from "../../state/config-io";
+import { runOpenshellProviderCommand } from "../../actions/global";
+import { recoverNamedGatewayRuntime } from "../../gateway-runtime-action";
+import * as policies from "../../policy";
+import { redact } from "../../security/redact";
 import * as registry from "../../state/registry";
 import type { McpBridgeEntry, SandboxEntry } from "../../state/registry";
-import * as policies from "../../policy";
+import { shellQuote } from "../../runner";
+import {
+  deleteProviderWithRecovery,
+  type SandboxProviderRunOpenshell,
+} from "../../onboard/sandbox-provider-cleanup";
 import { executeSandboxCommand } from "./process-recovery";
+import { getSandboxTargetGatewayName } from "./gateway-target";
 
-export const MCP_PORT_START = 3100;
-export const MCP_PORT_END = 3199;
-export const MCP_HOST = "host.docker.internal";
 export const MCPORTER_VERSION = "0.7.3";
 export const MCP_BRIDGE_POLICY_SOURCE = "generated:nemoclaw-mcp-bridge";
 export const MCP_BRIDGE_POLICY_MAX_BODY_BYTES = 131_072;
-export const MCP_PROXY_READY_TIMEOUT_MS = 30_000;
 
 const VALID_SERVER_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const VALID_ENV_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 const VALID_SANDBOX_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
-const BRIDGE_TOKEN_ENV = "NEMOCLAW_MCP_BRIDGE_TOKEN";
-const MCP_PORT_RESERVATION_STALE_MS = 10 * 60_000;
+const DEFAULT_AUTH_HEADER = "Authorization";
+const DEFAULT_AUTH_SCHEME = "Bearer";
+const MCP_PROVIDER_HASH_BYTES = 5;
 
 export class McpBridgeError extends Error {
   constructor(
@@ -48,9 +47,8 @@ export interface ParsedEnvReference {
 
 export interface ParsedMcpAddArgs {
   server: string;
+  url: string;
   env: ParsedEnvReference[];
-  command: string;
-  args: string[];
 }
 
 export interface McpBridgeAddOptions extends ParsedMcpAddArgs {}
@@ -64,20 +62,17 @@ export interface McpBridgeStatus {
     adapter?: AgentMcpAdapter;
     reason?: string;
   };
-  command?: string;
-  args?: string[];
+  url?: string;
   env: {
     names: string[];
     missing: string[];
     ready: boolean;
   };
-  port?: number;
-  url?: string;
-  proxy: {
-    pid: number | null;
-    running: boolean;
-    pidFile?: string;
-    logFile?: string;
+  provider: {
+    name?: string;
+    registryPresent: boolean;
+    gatewayPresent: boolean | null;
+    attached: boolean | null;
   };
   policy: {
     name?: string;
@@ -88,7 +83,6 @@ export interface McpBridgeStatus {
     registered: boolean | null;
     detail?: string;
   };
-  token: "[REDACTED]" | null;
   addedAt?: string;
   updatedAt?: string;
 }
@@ -100,18 +94,14 @@ interface McpBridgeJsonSummary {
   bridges: McpBridgeStatus[];
 }
 
-type StartedProxy = {
-  pid: number;
-  logFile: string;
-  pidFile: string;
+type OpenShellCommandResult = {
+  status: number | null;
+  stdout?: string | Buffer | null;
+  stderr?: string | Buffer | null;
 };
 
 function nowIso(): string {
   return new Date().toISOString();
-}
-
-function mcpProxyScriptPath(): string {
-  return path.resolve(__dirname, "..", "..", "..", "mcp-proxy.js");
 }
 
 function validateSandboxName(name: string): void {
@@ -139,9 +129,34 @@ function validateEnvName(name: string): void {
       2,
     );
   }
-  if (name === BRIDGE_TOKEN_ENV) {
-    throw new McpBridgeError(`${BRIDGE_TOKEN_ENV} is reserved for the local MCP bridge token.`, 2);
+}
+
+export function normalizeMcpServerUrl(rawUrl: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new McpBridgeError(`Invalid MCP server URL '${rawUrl}'.`, 2);
   }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new McpBridgeError("MCP server URL must use http:// or https://.", 2);
+  }
+  if (!parsed.hostname) {
+    throw new McpBridgeError("MCP server URL must include a hostname.", 2);
+  }
+  if (parsed.username || parsed.password) {
+    throw new McpBridgeError(
+      "MCP server URL must not embed credentials. Use --env KEY so OpenShell resolves host-only credentials.",
+      2,
+    );
+  }
+  if (parsed.hash) parsed.hash = "";
+  if (!parsed.pathname) parsed.pathname = "/";
+  return parsed.toString();
+}
+
+function parseMcpUrl(rawUrl: string): URL {
+  return new URL(normalizeMcpServerUrl(rawUrl));
 }
 
 function getSandboxOrThrow(sandboxName: string): SandboxEntry {
@@ -163,8 +178,8 @@ function getSandboxAgent(sandbox: SandboxEntry): AgentDefinition {
 function unsupportedMessage(agent: AgentDefinition): string {
   const reason = agent.mcpCapability.reason
     ? ` ${agent.mcpCapability.reason}`
-    : " MCP bridge support is disabled for this agent.";
-  return `${agent.displayName} does not support MCP bridges yet.${reason} Issue #566 tracks future design.`;
+    : " MCP support is disabled for this agent.";
+  return `${agent.displayName} does not support managed MCP servers yet.${reason} Issue #566 tracks future design.`;
 }
 
 function assertBridgeSupported(agent: AgentDefinition): void {
@@ -177,7 +192,7 @@ function getBridgeAdapter(agent: AgentDefinition): AgentMcpAdapter {
   const adapter = agent.mcpCapability.adapter;
   if (!adapter) {
     throw new McpBridgeError(
-      `${agent.displayName} declares MCP bridge support but does not declare an adapter.`,
+      `${agent.displayName} declares MCP support but does not declare an adapter.`,
       1,
     );
   }
@@ -211,16 +226,15 @@ function setBridgeState(sandboxName: string, bridges: Record<string, McpBridgeEn
 export function parseMcpAddArgs(argv: string[]): ParsedMcpAddArgs {
   const env: ParsedEnvReference[] = [];
   let server = "";
-  let command = "";
-  let args: string[] = [];
+  let url = "";
 
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i];
     if (token === "--") {
-      const rest = argv.slice(i + 1);
-      command = rest[0] ?? "";
-      args = rest.slice(1);
-      break;
+      throw new McpBridgeError(
+        "Host stdio MCP commands are not supported. Use --url so OpenShell can enforce MCP traffic and provider credentials.",
+        2,
+      );
     }
     if (token === "--env" || token === "-e") {
       const raw = argv[++i] ?? "";
@@ -238,6 +252,14 @@ export function parseMcpAddArgs(argv: string[]): ParsedMcpAddArgs {
       env.push(eq >= 0 ? { name, value: raw.slice(eq + 1) } : { name });
       continue;
     }
+    if (token === "--url") {
+      url = normalizeMcpServerUrl(argv[++i] ?? "");
+      continue;
+    }
+    if (token?.startsWith("--url=")) {
+      url = normalizeMcpServerUrl(token.slice("--url=".length));
+      continue;
+    }
     if (token?.startsWith("-")) {
       throw new McpBridgeError(`Unknown mcp add option: ${token}`, 2);
     }
@@ -247,30 +269,22 @@ export function parseMcpAddArgs(argv: string[]): ParsedMcpAddArgs {
       continue;
     }
     throw new McpBridgeError(
-      "Command must follow '--': mcp add <server> [--env KEY] -- <command> [args...]",
+      "Usage: nemoclaw <sandbox> mcp add <server> --url <http-mcp-url> [--env KEY|KEY=VALUE ...]",
       2,
     );
   }
 
   if (!server) {
     throw new McpBridgeError(
-      "Usage: nemoclaw <sandbox> mcp add <server> [--env KEY ...] -- <command> [args...]",
+      "Usage: nemoclaw <sandbox> mcp add <server> --url <http-mcp-url> [--env KEY|KEY=VALUE ...]",
       2,
     );
   }
-  if (!command) {
-    throw new McpBridgeError("MCP server command is required after '--'.", 2);
-  }
-  if (command.includes("\0") || command.includes("\n")) {
-    throw new McpBridgeError("MCP server command must not contain control characters.", 2);
-  }
-  for (const arg of args) {
-    if (arg.includes("\0")) {
-      throw new McpBridgeError("MCP server arguments must not contain NUL bytes.", 2);
-    }
+  if (!url) {
+    throw new McpBridgeError("MCP server URL is required. Pass --url <http-mcp-url>.", 2);
   }
 
-  return { server, env, command, args };
+  return { server, url, env };
 }
 
 function uniqueEnvNames(env: readonly ParsedEnvReference[] | readonly string[]): string[] {
@@ -278,134 +292,34 @@ function uniqueEnvNames(env: readonly ParsedEnvReference[] | readonly string[]):
   return [...new Set(names)];
 }
 
-export function resolveLaunchEnv(env: readonly ParsedEnvReference[]): Record<string, string> {
+export function resolveCredentialEnv(env: readonly ParsedEnvReference[]): Record<string, string> {
   const resolved: Record<string, string> = {};
   for (const entry of env) {
     validateEnvName(entry.name);
     const value = entry.value ?? process.env[entry.name];
-    if (value === undefined || value === "") {
-      throw new McpBridgeError(
-        `Host environment variable '${entry.name}' is required to launch this MCP bridge.`,
-        1,
-      );
+    if (value !== undefined && value !== "") {
+      resolved[entry.name] = value;
     }
-    resolved[entry.name] = value;
   }
   return resolved;
 }
 
-function runtimeRoot(): string {
-  const home = process.env.HOME || os.homedir();
-  return path.join(home, ".nemoclaw", "runtime", "mcp");
-}
-
-export function bridgeRuntimeDir(sandboxName: string, server: string): string {
+export function buildMcpBridgeProviderName(sandboxName: string, server: string): string {
   validateSandboxName(sandboxName);
   validateMcpServerName(server);
-  return path.join(runtimeRoot(), sandboxName, server);
-}
-
-function ensureBridgeRuntimeDir(sandboxName: string, server: string): string {
-  const dir = bridgeRuntimeDir(sandboxName, server);
-  ensureConfigDir(dir);
-  fs.chmodSync(dir, 0o700);
-  return dir;
-}
-
-function bridgePidFile(sandboxName: string, server: string): string {
-  return path.join(bridgeRuntimeDir(sandboxName, server), "proxy.pid");
-}
-
-function bridgeLogFile(sandboxName: string, server: string): string {
-  return path.join(bridgeRuntimeDir(sandboxName, server), "proxy.log");
-}
-
-function bridgeTokenFile(sandboxName: string, server: string): string {
-  return path.join(bridgeRuntimeDir(sandboxName, server), "proxy.token");
-}
-
-export function readLivePid(pidFile: string): number | null {
-  try {
-    const raw = fs.readFileSync(pidFile, "utf8").trim().split(/\s+/)[0] ?? "";
-    const pid = Number.parseInt(raw, 10);
-    if (!Number.isFinite(pid) || pid <= 0) return null;
-    process.kill(pid, 0);
-    return pid;
-  } catch {
-    return null;
-  }
-}
-
-export function cleanupStalePidFile(pidFile: string): boolean {
-  if (!fs.existsSync(pidFile)) return false;
-  if (readLivePid(pidFile)) return false;
-  fs.rmSync(pidFile, { force: true });
-  return true;
-}
-
-function writePidFile(pidFile: string, pid: number): void {
-  fs.writeFileSync(pidFile, `${String(pid)}\n${nowIso()}\n`, { mode: 0o600 });
-}
-
-function portReservationRoot(): string {
-  return path.join(runtimeRoot(), "ports");
-}
-
-function portReservationDir(port: number): string {
-  return path.join(portReservationRoot(), String(port));
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function cleanupStalePortReservation(port: number, used: ReadonlySet<number>): void {
-  if (used.has(port)) return;
-  const dir = portReservationDir(port);
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(dir);
-  } catch {
-    return;
-  }
-  let ownerPid: number | null = null;
-  try {
-    const owner = JSON.parse(fs.readFileSync(path.join(dir, "owner.json"), "utf8")) as {
-      pid?: unknown;
-    };
-    ownerPid = typeof owner.pid === "number" && owner.pid > 0 ? owner.pid : null;
-  } catch {
-    ownerPid = null;
-  }
-  if (ownerPid !== null && isProcessAlive(ownerPid)) return;
-  if (Date.now() - stat.mtimeMs < MCP_PORT_RESERVATION_STALE_MS && ownerPid === null) return;
-  fs.rmSync(dir, { recursive: true, force: true });
-}
-
-function tryReserveMcpPort(port: number): boolean {
-  ensureConfigDir(portReservationRoot());
-  const dir = portReservationDir(port);
-  try {
-    fs.mkdirSync(dir, { mode: 0o700 });
-    fs.writeFileSync(
-      path.join(dir, "owner.json"),
-      JSON.stringify({ pid: process.pid, reservedAt: nowIso() }, null, 2),
-      { mode: 0o600 },
-    );
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export function releaseMcpPortReservation(port: number): void {
-  if (port < MCP_PORT_START || port > MCP_PORT_END) return;
-  fs.rmSync(portReservationDir(port), { recursive: true, force: true });
+  const serverSlug = server
+    .toLowerCase()
+    .replace(/_/g, "-")
+    .replace(/[^a-z0-9-]/g, "-");
+  const base = `${sandboxName}-mcp-${serverSlug}`.replace(/-+/g, "-").replace(/^-|-$/g, "");
+  if (base.length <= 63) return base;
+  const hash = crypto
+    .createHash("sha256")
+    .update(`${sandboxName}:${server}`)
+    .digest("hex")
+    .slice(0, MCP_PROVIDER_HASH_BYTES * 2);
+  const suffix = `-${hash}`;
+  return `${base.slice(0, 63 - suffix.length).replace(/-+$/g, "")}${suffix}`;
 }
 
 export function buildMcpBridgePolicyName(server: string): string {
@@ -417,174 +331,105 @@ function buildMcpBridgePolicyKey(server: string): string {
   return buildMcpBridgePolicyName(server).replace(/-/g, "_");
 }
 
-export function buildMcpBridgePolicyYaml(server: string, port: number): string {
+function endpointPort(url: URL): number {
+  if (url.port) return Number.parseInt(url.port, 10);
+  return url.protocol === "https:" ? 443 : 80;
+}
+
+function endpointPath(url: URL): string {
+  return url.pathname || "/";
+}
+
+function binariesForAdapter(adapter: AgentMcpAdapter): Array<{ path: string }> {
+  switch (adapter) {
+    case "mcporter":
+      return [
+        { path: "/usr/local/bin/mcporter" },
+        { path: "/usr/bin/mcporter" },
+        { path: "/usr/local/bin/openclaw" },
+        { path: "/usr/local/bin/node" },
+        { path: "/usr/bin/node" },
+      ];
+    case "hermes-config":
+      return [{ path: "/usr/local/bin/hermes" }, { path: "/opt/hermes/.venv/bin/python*" }];
+    case "deepagents-config":
+      return [{ path: "/usr/local/bin/dcode" }, { path: "/opt/venv/bin/python3*" }];
+  }
+}
+
+function allowedIpsForEndpoint(hostname: string): string[] | undefined {
+  const normalized = hostname.toLowerCase();
+  if (
+    normalized === "host.openshell.internal" ||
+    normalized === "host.docker.internal" ||
+    normalized === "host.containers.internal"
+  ) {
+    return ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"];
+  }
+  return undefined;
+}
+
+export function buildMcpBridgePolicyYaml(
+  server: string,
+  url: string,
+  adapter: AgentMcpAdapter = "mcporter",
+): string {
+  const parsed = parseMcpUrl(url);
   const key = buildMcpBridgePolicyKey(server);
+  const allowedIps = allowedIpsForEndpoint(parsed.hostname);
   return YAML.stringify({
     preset: {
       name: buildMcpBridgePolicyName(server),
-      description: `Generated MCP bridge policy for ${server}`,
+      description: `Generated MCP policy for ${server}`,
     },
     network_policies: {
       [key]: {
         name: key,
         endpoints: [
           {
-            host: MCP_HOST,
-            port,
-            path: "/",
+            host: parsed.hostname,
+            port: endpointPort(parsed),
+            path: endpointPath(parsed),
             protocol: "mcp",
             enforcement: "enforce",
+            ...(allowedIps ? { allowed_ips: allowedIps } : {}),
             mcp: {
               max_body_bytes: MCP_BRIDGE_POLICY_MAX_BODY_BYTES,
-              // The host proxy is the per-server trust boundary. It only
-              // exposes the user-selected MCP server on this generated port;
-              // tool filtering, when an agent supports it, is configured in
-              // the agent adapter rather than in the network allowlist.
-              allow_all_known_mcp_methods: true,
             },
-            rules: [{ allow: {} }],
+            rules: [
+              { allow: { method: "initialize" } },
+              { allow: { method: "notifications/initialized" } },
+              { allow: { method: "ping" } },
+              { allow: { method: "tools/list" } },
+              { allow: { method: "tools/call" } },
+              { allow: { method: "resources/list" } },
+              { allow: { method: "resources/read" } },
+              { allow: { method: "resources/templates/list" } },
+              { allow: { method: "prompts/list" } },
+              { allow: { method: "prompts/get" } },
+              { allow: { method: "completion/complete" } },
+            ],
           },
         ],
-        binaries: [
-          { path: "/usr/local/bin/mcporter" },
-          { path: "/usr/bin/mcporter" },
-          { path: "/usr/local/bin/openclaw" },
-          { path: "/usr/local/bin/hermes" },
-          { path: "/opt/hermes/.venv/bin/python" },
-          { path: "/usr/local/bin/dcode" },
-          { path: "/opt/venv/bin/python3*" },
-          { path: "/usr/bin/node" },
-          { path: "/usr/local/bin/node" },
-        ],
+        binaries: binariesForAdapter(adapter),
       },
     },
   });
 }
 
-async function isTcpPortAvailable(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const server = net.createServer();
-    server.once("error", () => resolve(false));
-    server.once("listening", () => {
-      server.close(() => resolve(true));
-    });
-    server.listen(port, "127.0.0.1");
-  });
+function authPlaceholder(entry: Pick<McpBridgeEntry, "env">): string | null {
+  const envName = entry.env[0];
+  return envName ? `openshell:resolve:env:${envName}` : null;
 }
 
-export async function allocateMcpPort(): Promise<number> {
-  const data = registry.load();
-  const used = new Set<number>();
-  for (const sandbox of Object.values(data.sandboxes)) {
-    for (const entry of Object.values(bridgeState(sandbox))) {
-      used.add(entry.port);
-      cleanupStalePidFile(bridgePidFile(sandbox.name, entry.server));
-    }
-  }
-  for (let port = MCP_PORT_START; port <= MCP_PORT_END; port++) {
-    if (used.has(port)) continue;
-    cleanupStalePortReservation(port, used);
-    if (!tryReserveMcpPort(port)) continue;
-    if (await isTcpPortAvailable(port)) return port;
-    releaseMcpPortReservation(port);
-  }
-  throw new McpBridgeError(`No available MCP bridge ports in ${MCP_PORT_START}-${MCP_PORT_END}.`);
+function authorizationValue(entry: Pick<McpBridgeEntry, "env">): string | null {
+  const placeholder = authPlaceholder(entry);
+  return placeholder ? `${DEFAULT_AUTH_SCHEME} ${placeholder}` : null;
 }
 
-function startProxy(
-  sandboxName: string,
-  server: string,
-  entry: Pick<McpBridgeEntry, "command" | "args" | "port" | "token" | "env">,
-  envValues: Record<string, string>,
-): StartedProxy {
-  const dir = ensureBridgeRuntimeDir(sandboxName, server);
-  const logPath = path.join(dir, "proxy.log");
-  const pidPath = path.join(dir, "proxy.pid");
-  const tokenPath = bridgeTokenFile(sandboxName, server);
-  fs.writeFileSync(tokenPath, `${entry.token}\n`, { mode: 0o600 });
-  const logFd = fs.openSync(logPath, "a", 0o600);
-  const proxyArgs = [
-    mcpProxyScriptPath(),
-    "--command",
-    entry.command,
-    "--port",
-    String(entry.port),
-    "--token-file",
-    tokenPath,
-  ];
-  for (const arg of entry.args) proxyArgs.push("--arg", arg);
-  for (const name of entry.env) proxyArgs.push("--env", name);
-
-  const proxyEnv: NodeJS.ProcessEnv = {
-    PATH: process.env.PATH,
-    HOME: process.env.HOME,
-    ...envValues,
-  };
-  const child = spawn(process.execPath, proxyArgs, {
-    detached: true,
-    stdio: ["ignore", logFd, logFd],
-    env: proxyEnv,
-    shell: false,
-  });
-  child.unref();
-  fs.closeSync(logFd);
-  if (!child.pid) {
-    fs.rmSync(tokenPath, { force: true });
-    throw new McpBridgeError("Failed to start MCP proxy.");
-  }
-  writePidFile(pidPath, child.pid);
-  return { pid: child.pid, logFile: logPath, pidFile: pidPath };
-}
-
-function stopProxy(sandboxName: string, server: string): number | null {
-  const pidPath = bridgePidFile(sandboxName, server);
-  const pid = readLivePid(pidPath);
-  if (pid) {
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch {
-      /* already gone */
-    }
-  }
-  fs.rmSync(pidPath, { force: true });
-  return pid;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-export async function waitForProxyReady(
-  sandboxName: string,
-  server: string,
-  port: number,
-  sinceOffset: number,
-  timeoutMs = Number.parseInt(process.env.NEMOCLAW_MCP_PROXY_READY_TIMEOUT_MS || "", 10) ||
-    MCP_PROXY_READY_TIMEOUT_MS,
-): Promise<"ready" | "failed" | "timeout"> {
-  const logPath = bridgeLogFile(sandboxName, server);
-  const pidPath = bridgePidFile(sandboxName, server);
-  const listening = `[mcp-proxy] listening on 127.0.0.1:${String(port)}`;
-  const readTail = (): string => {
-    try {
-      const buffer = fs.readFileSync(logPath);
-      return buffer.subarray(Math.min(sinceOffset, buffer.length)).toString("utf8");
-    } catch {
-      return "";
-    }
-  };
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const tail = readTail();
-    if (tail.includes("failed to listen") || tail.includes("child exited")) return "failed";
-    if (tail.includes(listening)) {
-      await sleep(250);
-      return readLivePid(pidPath) ? "ready" : "failed";
-    }
-    if (!readLivePid(pidPath)) return tail.includes(listening) ? "ready" : "failed";
-    await sleep(100);
-  }
-  return "timeout";
+function entryHeaders(entry: Pick<McpBridgeEntry, "env">): Record<string, string> {
+  const authorization = authorizationValue(entry);
+  return authorization ? { [DEFAULT_AUTH_HEADER]: authorization } : {};
 }
 
 function ensureMcporter(sandboxName: string): void {
@@ -595,31 +440,12 @@ function ensureMcporter(sandboxName: string): void {
   );
 }
 
-function bridgeUrl(entry: Pick<McpBridgeEntry, "port">): string {
-  return `http://${MCP_HOST}:${String(entry.port)}`;
-}
-
-function bridgeAuthorizationHeader(entry: Pick<McpBridgeEntry, "token">): string {
-  return `Bearer ${entry.token}`;
-}
-
 export function buildOpenClawMcporterRegisterCommand(entry: McpBridgeEntry): string {
-  const url = bridgeUrl(entry);
-  const header = `Authorization=${bridgeAuthorizationHeader(entry)}`;
-  return [
-    "mcporter",
-    "config",
-    "add",
-    entry.server,
-    "--url",
-    url,
-    "--header",
-    header,
-    "--scope",
-    "home",
-  ]
-    .map(shellQuote)
-    .join(" ");
+  const args = ["mcporter", "config", "add", entry.server, "--url", entry.url];
+  const authorization = authorizationValue(entry);
+  if (authorization) args.push("--header", `${DEFAULT_AUTH_HEADER}=${authorization}`);
+  args.push("--scope", "home");
+  return args.map(shellQuote).join(" ");
 }
 
 function pythonJsonLiteral(value: unknown): string {
@@ -629,8 +455,8 @@ function pythonJsonLiteral(value: unknown): string {
 export function buildHermesMcpRegisterCommand(entry: McpBridgeEntry): string {
   const payload = {
     server: entry.server,
-    url: bridgeUrl(entry),
-    authorization: bridgeAuthorizationHeader(entry),
+    url: entry.url,
+    headers: entryHeaders(entry),
   };
   return [
     "/opt/hermes/.venv/bin/python - <<'PY'",
@@ -641,14 +467,10 @@ export function buildHermesMcpRegisterCommand(entry: McpBridgeEntry): string {
     "if config_path.exists():",
     "    data = yaml.safe_load(config_path.read_text(encoding='utf-8')) or {}",
     "servers = data.setdefault('mcp_servers', {})",
-    "servers[payload['server']] = {",
-    "    'url': payload['url'],",
-    "    'headers': {'Authorization': payload['authorization']},",
-    "    'enabled': True,",
-    "    'timeout': 120,",
-    "    'connect_timeout': 60,",
-    "    'tools': {'resources': True, 'prompts': True},",
-    "}",
+    "server = {'url': payload['url'], 'enabled': True, 'timeout': 120, 'connect_timeout': 60, 'tools': {'resources': True, 'prompts': True}}",
+    "if payload['headers']:",
+    "    server['headers'] = payload['headers']",
+    "servers[payload['server']] = server",
     "tmp = config_path.with_name(config_path.name + '.nemoclaw-mcp.tmp')",
     "tmp.write_text(yaml.safe_dump(data, sort_keys=False), encoding='utf-8')",
     "os.chmod(tmp, 0o660)",
@@ -683,7 +505,7 @@ function buildHermesMcpRemoveCommand(server: string): string {
 }
 
 function buildHermesMcpStatusCommand(entry: McpBridgeEntry): string {
-  const payload = { server: entry.server, url: bridgeUrl(entry) };
+  const payload = { server: entry.server, url: entry.url, headers: entryHeaders(entry) };
   return [
     "/opt/hermes/.venv/bin/python - <<'PY'",
     "import json, pathlib, yaml",
@@ -692,10 +514,10 @@ function buildHermesMcpStatusCommand(entry: McpBridgeEntry): string {
     "data = yaml.safe_load(config_path.read_text(encoding='utf-8')) if config_path.exists() else {}",
     "servers = data.get('mcp_servers') if isinstance(data, dict) else None",
     "server = servers.get(payload['server']) if isinstance(servers, dict) else None",
-    "if isinstance(server, dict) and server.get('url') == payload['url'] and server.get('headers', {}).get('Authorization'):",
-    "    print('registered')",
-    "else:",
-    "    print('missing')",
+    "ok = isinstance(server, dict) and server.get('url') == payload['url']",
+    "if payload['headers']:",
+    "    ok = ok and server.get('headers') == payload['headers']",
+    "print('registered' if ok else 'missing')",
     "PY",
   ].join("\n");
 }
@@ -703,8 +525,8 @@ function buildHermesMcpStatusCommand(entry: McpBridgeEntry): string {
 export function buildDeepAgentsMcpRegisterCommand(entry: McpBridgeEntry): string {
   const payload = {
     server: entry.server,
-    url: bridgeUrl(entry),
-    authorization: bridgeAuthorizationHeader(entry),
+    url: entry.url,
+    headers: entryHeaders(entry),
   };
   return [
     "python3 - <<'PY'",
@@ -718,11 +540,10 @@ export function buildDeepAgentsMcpRegisterCommand(entry: McpBridgeEntry): string
     "    except json.JSONDecodeError:",
     "        data = {}",
     "servers = data.setdefault('mcpServers', {})",
-    "servers[payload['server']] = {",
-    "    'type': 'http',",
-    "    'url': payload['url'],",
-    "    'headers': {'Authorization': payload['authorization']},",
-    "}",
+    "server = {'type': 'http', 'url': payload['url']}",
+    "if payload['headers']:",
+    "    server['headers'] = payload['headers']",
+    "servers[payload['server']] = server",
     "tmp = config_path.with_name(config_path.name + '.nemoclaw-mcp.tmp')",
     "tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + '\\n', encoding='utf-8')",
     "os.chmod(tmp, 0o600)",
@@ -758,7 +579,7 @@ function buildDeepAgentsMcpRemoveCommand(server: string): string {
 }
 
 function buildDeepAgentsMcpStatusCommand(entry: McpBridgeEntry): string {
-  const payload = { server: entry.server, url: bridgeUrl(entry) };
+  const payload = { server: entry.server, url: entry.url, headers: entryHeaders(entry) };
   return [
     "python3 - <<'PY'",
     "import json, pathlib",
@@ -770,22 +591,24 @@ function buildDeepAgentsMcpStatusCommand(entry: McpBridgeEntry): string {
     "    data = {}",
     "servers = data.get('mcpServers') if isinstance(data, dict) else None",
     "server = servers.get(payload['server']) if isinstance(servers, dict) else None",
-    "if isinstance(server, dict) and server.get('url') == payload['url'] and server.get('headers', {}).get('Authorization'):",
-    "    print('registered')",
-    "else:",
-    "    print('missing')",
+    "ok = isinstance(server, dict) and server.get('url') == payload['url']",
+    "if payload['headers']:",
+    "    ok = ok and server.get('headers') == payload['headers']",
+    "print('registered' if ok else 'missing')",
     "PY",
   ].join("\n");
 }
 
 export function redactBridgeSecretsForDisplay(
   text: string,
-  entry: Pick<McpBridgeEntry, "token">,
+  entry?: Pick<McpBridgeEntry, "env">,
 ): string {
-  if (!text) return text;
-  return text
-    .replaceAll(entry.token, "***REDACTED***")
-    .replace(/Authorization=Bearer\s+\S+/g, "Authorization=Bearer ***REDACTED***");
+  let output = redact(text || "");
+  for (const envName of entry?.env ?? []) {
+    const value = process.env[envName];
+    if (value) output = output.replaceAll(value, "***REDACTED***");
+  }
+  return output.replace(/Authorization=Bearer\s+\S+/g, "Authorization=Bearer ***REDACTED***");
 }
 
 function buildOpenClawMcporterRemoveCommand(server: string): string {
@@ -806,7 +629,7 @@ function registerOpenClawAdapter(sandboxName: string, entry: McpBridgeEntry): vo
 
 function runAdapterCommand(
   sandboxName: string,
-  entry: Pick<McpBridgeEntry, "token">,
+  entry: Pick<McpBridgeEntry, "env">,
   command: string,
   failureMessage: string,
   options: { force?: boolean } = {},
@@ -852,7 +675,7 @@ function registerAgentAdapter(
 
 function unregisterOpenClawAdapter(
   sandboxName: string,
-  entry: Pick<McpBridgeEntry, "server" | "token">,
+  entry: Pick<McpBridgeEntry, "server" | "env">,
   options: { force?: boolean } = {},
 ): void {
   const result = executeSandboxCommand(
@@ -872,7 +695,7 @@ function unregisterOpenClawAdapter(
 function unregisterAgentAdapter(
   sandboxName: string,
   adapter: AgentMcpAdapter,
-  entry: Pick<McpBridgeEntry, "server" | "token">,
+  entry: Pick<McpBridgeEntry, "server" | "env">,
   options: { force?: boolean } = {},
 ): void {
   switch (adapter) {
@@ -900,28 +723,149 @@ function unregisterAgentAdapter(
   }
 }
 
-function getLogOffset(logPath: string): number {
-  try {
-    return fs.statSync(logPath).size;
-  } catch {
-    return 0;
+function commandOutput(result: OpenShellCommandResult): string {
+  const stdout =
+    typeof result.stdout === "string" ? result.stdout : (result.stdout?.toString() ?? "");
+  const stderr =
+    typeof result.stderr === "string" ? result.stderr : (result.stderr?.toString() ?? "");
+  return redact(`${stderr}${stdout}`).replace(/\r/g, "").trim();
+}
+
+const runProviderCleanupOpenshell: SandboxProviderRunOpenshell = (args, opts) =>
+  runOpenshellProviderCommand(
+    args,
+    opts as Parameters<typeof runOpenshellProviderCommand>[1],
+  ) as OpenShellCommandResult;
+
+function providerExists(providerName: string): boolean {
+  const result = runOpenshellProviderCommand(["provider", "get", providerName], {
+    ignoreError: true,
+    stdio: ["ignore", "ignore", "ignore"],
+  }) as OpenShellCommandResult;
+  return result.status === 0;
+}
+
+function buildProviderArgs(
+  action: "create" | "update",
+  providerName: string,
+  env: readonly ParsedEnvReference[],
+  envValues: Record<string, string>,
+): string[] {
+  const args =
+    action === "create"
+      ? ["provider", "create", "--name", providerName, "--type", "generic"]
+      : ["provider", "update", providerName];
+  for (const entry of env) {
+    const value = envValues[entry.name];
+    if (value !== undefined && value !== "") {
+      args.push("--credential", `${entry.name}=${value}`);
+    }
+  }
+  return args;
+}
+
+function upsertMcpProvider(
+  providerName: string,
+  env: readonly ParsedEnvReference[],
+): "created" | "updated" | "reused" | "none" {
+  const envNames = uniqueEnvNames(env);
+  if (envNames.length === 0) return "none";
+  const envValues = resolveCredentialEnv(env);
+  const exists = providerExists(providerName);
+  if (Object.keys(envValues).length === 0) {
+    if (exists) return "reused";
+    throw new McpBridgeError(
+      `Host environment variable '${envNames[0]}' is required to create MCP provider '${providerName}'.`,
+      1,
+    );
+  }
+  const action = exists ? "update" : "create";
+  const result = runOpenshellProviderCommand(
+    buildProviderArgs(action, providerName, env, envValues),
+    {
+      ignoreError: true,
+      env: envValues,
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  ) as OpenShellCommandResult;
+  if (result.status !== 0) {
+    throw new McpBridgeError(
+      commandOutput(result) || `Failed to ${action} MCP provider '${providerName}'.`,
+    );
+  }
+  return action === "create" ? "created" : "updated";
+}
+
+function attachProvider(sandboxName: string, providerName: string | undefined): void {
+  if (!providerName) return;
+  const result = runOpenshellProviderCommand(
+    ["sandbox", "provider", "attach", sandboxName, providerName],
+    { ignoreError: true, stdio: ["ignore", "pipe", "pipe"] },
+  ) as OpenShellCommandResult;
+  if (result.status !== 0) {
+    const output = commandOutput(result);
+    if (/already\s+attached|AlreadyExists/i.test(output)) return;
+    throw new McpBridgeError(output || `Failed to attach MCP provider '${providerName}'.`);
   }
 }
 
+function detachProvider(
+  sandboxName: string,
+  providerName: string | undefined,
+  options: { force?: boolean } = {},
+): void {
+  if (!providerName) return;
+  const result = runOpenshellProviderCommand(
+    ["sandbox", "provider", "detach", sandboxName, providerName],
+    { ignoreError: true, stdio: ["ignore", "pipe", "pipe"], suppressOutput: true } as Record<
+      string,
+      unknown
+    >,
+  ) as OpenShellCommandResult;
+  if (result.status !== 0) {
+    const output = commandOutput(result);
+    if (/not\s+attached|NotAttached|not\s+found|NotFound/i.test(output) || options.force) return;
+    throw new McpBridgeError(output || `Failed to detach MCP provider '${providerName}'.`);
+  }
+}
+
+function deleteProvider(providerName: string | undefined, options: { force?: boolean } = {}): void {
+  if (!providerName) return;
+  const result = deleteProviderWithRecovery(providerName, {
+    runOpenshell: runProviderCleanupOpenshell,
+  });
+  if (!result.ok && !options.force) {
+    const output = redact(`${result.stderr}${result.stdout}`).trim();
+    throw new McpBridgeError(output || `Failed to delete MCP provider '${providerName}'.`);
+  }
+}
+
+function providerAttached(sandboxName: string, providerName: string | undefined): boolean | null {
+  if (!providerName) return null;
+  const result = runOpenshellProviderCommand(["sandbox", "provider", "list", sandboxName], {
+    ignoreError: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  }) as OpenShellCommandResult;
+  if (result.status !== 0) return null;
+  const output = commandOutput(result);
+  return output.split(/\s+/).includes(providerName) || output.includes(providerName);
+}
+
 function applyGeneratedPolicy(sandboxName: string, entry: McpBridgeEntry): void {
-  const content = buildMcpBridgePolicyYaml(entry.server, entry.port);
+  const adapter = isAgentMcpAdapter(entry.adapter) ? entry.adapter : "mcporter";
+  const content = buildMcpBridgePolicyYaml(entry.server, entry.url, adapter);
   const ok = policies.applyPresetContent(sandboxName, entry.policyName, content, {
     custom: { sourcePath: MCP_BRIDGE_POLICY_SOURCE },
   });
   if (ok === false) {
-    throw new McpBridgeError(`Failed to apply generated MCP bridge policy '${entry.policyName}'.`);
+    throw new McpBridgeError(`Failed to apply generated MCP policy '${entry.policyName}'.`);
   }
 }
 
 function removeGeneratedPolicy(sandboxName: string, policyName: string, force = false): void {
   const ok = policies.removePreset(sandboxName, policyName);
   if (!ok && !force) {
-    throw new McpBridgeError(`Failed to remove generated MCP bridge policy '${policyName}'.`);
+    throw new McpBridgeError(`Failed to remove generated MCP policy '${policyName}'.`);
   }
   if (force || ok) registry.removeCustomPolicyByName(sandboxName, policyName);
 }
@@ -939,12 +883,23 @@ function removeBridgeEntry(sandboxName: string, server: string): void {
   setBridgeState(sandboxName, bridges);
 }
 
+function removeBridgeEntryIfPresent(sandboxName: string, server: string): void {
+  const sandbox = registry.getSandbox(sandboxName);
+  if (!sandbox || !bridgeState(sandbox)[server]) return;
+  removeBridgeEntry(sandboxName, server);
+}
+
+async function ensureSandboxGatewaySelected(sandboxName: string): Promise<void> {
+  await recoverNamedGatewayRuntime({ gatewayName: getSandboxTargetGatewayName(sandboxName) });
+}
+
 export async function addMcpBridge(
   sandboxName: string,
   options: McpBridgeAddOptions,
 ): Promise<void> {
   validateSandboxName(sandboxName);
   validateMcpServerName(options.server);
+  const normalizedUrl = normalizeMcpServerUrl(options.url);
   const sandbox = getSandboxOrThrow(sandboxName);
   const agent = getSandboxAgent(sandbox);
   const adapter = getBridgeAdapter(agent);
@@ -954,40 +909,30 @@ export async function addMcpBridge(
     );
   }
 
-  const envValues = resolveLaunchEnv(options.env);
-  const port = await allocateMcpPort();
+  const envNames = uniqueEnvNames(options.env);
+  const providerName =
+    envNames.length > 0 ? buildMcpBridgeProviderName(sandboxName, options.server) : undefined;
   const entry: McpBridgeEntry = {
     server: options.server,
     agent: agent.name,
     adapter,
-    command: options.command,
-    args: options.args,
-    env: uniqueEnvNames(options.env),
-    port,
-    token: crypto.randomBytes(32).toString("hex"),
+    url: normalizedUrl,
+    env: envNames,
+    ...(providerName ? { providerName } : {}),
     policyName: buildMcpBridgePolicyName(options.server),
     addedAt: nowIso(),
-    lifecycle: {},
   };
 
-  let proxyStarted = false;
+  let providerCreated = false;
+  let providerAttachedState = false;
   let policyApplied = false;
   let adapterRegistered = false;
   try {
-    const logPath = bridgeLogFile(sandboxName, entry.server);
-    const logOffset = getLogOffset(logPath);
-    const proxy = startProxy(sandboxName, entry.server, entry, envValues);
-    proxyStarted = true;
-    entry.lifecycle = { pid: proxy.pid, startedAt: nowIso() };
-    const readiness = await waitForProxyReady(sandboxName, entry.server, entry.port, logOffset);
-    if (readiness !== "ready") {
-      throw new McpBridgeError(
-        readiness === "timeout"
-          ? `MCP proxy for '${entry.server}' did not start listening in time. See ${proxy.logFile}.`
-          : `MCP proxy for '${entry.server}' exited during startup. See ${proxy.logFile}.`,
-      );
-    }
-
+    await ensureSandboxGatewaySelected(sandboxName);
+    const providerAction = upsertMcpProvider(providerName ?? "", options.env);
+    providerCreated = providerAction === "created";
+    attachProvider(sandboxName, providerName);
+    providerAttachedState = !!providerName;
     applyGeneratedPolicy(sandboxName, entry);
     policyApplied = true;
     registerAgentAdapter(sandboxName, adapter, entry);
@@ -996,22 +941,11 @@ export async function addMcpBridge(
   } catch (error) {
     if (adapterRegistered) unregisterAgentAdapter(sandboxName, adapter, entry, { force: true });
     if (policyApplied) removeGeneratedPolicy(sandboxName, entry.policyName, true);
-    if (proxyStarted) stopProxy(sandboxName, entry.server);
-    fs.rmSync(bridgeRuntimeDir(sandboxName, entry.server), { recursive: true, force: true });
-    releaseMcpPortReservation(entry.port);
+    if (providerAttachedState) detachProvider(sandboxName, providerName, { force: true });
+    if (providerCreated) deleteProvider(providerName, { force: true });
     removeBridgeEntryIfPresent(sandboxName, entry.server);
     throw error;
   }
-}
-
-function removeBridgeEntryIfPresent(sandboxName: string, server: string): void {
-  const sandbox = registry.getSandbox(sandboxName);
-  if (!sandbox || !bridgeState(sandbox)[server]) return;
-  removeBridgeEntry(sandboxName, server);
-}
-
-function entryEnvRefsFromHost(entry: McpBridgeEntry): ParsedEnvReference[] {
-  return entry.env.map((name) => ({ name }));
 }
 
 export async function restartMcpBridge(sandboxName: string, server?: string): Promise<void> {
@@ -1022,49 +956,29 @@ export async function restartMcpBridge(sandboxName: string, server?: string): Pr
   const bridges = bridgeState(sandbox);
   const targets = server ? [[server, bridges[server]] as const] : Object.entries(bridges);
   if (targets.length === 0) {
-    console.log(`  No MCP bridges for sandbox '${sandboxName}'.`);
+    console.log(`  No MCP servers for sandbox '${sandboxName}'.`);
     return;
   }
+  await ensureSandboxGatewaySelected(sandboxName);
   for (const [name, entry] of targets) {
     if (!entry) {
       throw new McpBridgeError(`MCP server '${name}' not found on sandbox '${sandboxName}'.`);
     }
-    const envValues = resolveLaunchEnv(entryEnvRefsFromHost(entry));
-    stopProxy(sandboxName, name);
-    const logOffset = getLogOffset(bridgeLogFile(sandboxName, name));
-    let proxyStarted = false;
-    try {
-      const proxy = startProxy(sandboxName, name, entry, envValues);
-      proxyStarted = true;
-      const readiness = await waitForProxyReady(sandboxName, name, entry.port, logOffset);
-      if (readiness !== "ready") {
-        throw new McpBridgeError(`MCP proxy for '${name}' failed to restart.`);
-      }
-      applyGeneratedPolicy(sandboxName, entry);
-      registerAgentAdapter(
-        sandboxName,
-        (entry.adapter as AgentMcpAdapter | undefined) ?? adapter,
-        entry,
-      );
-      writeBridgeEntry(sandboxName, {
-        ...entry,
-        adapter: (entry.adapter as AgentMcpAdapter | undefined) ?? adapter,
-        updatedAt: nowIso(),
-        lifecycle: { pid: proxy.pid, startedAt: nowIso(), lastError: null },
-      });
-    } catch (error) {
-      if (proxyStarted) stopProxy(sandboxName, name);
-      writeBridgeEntry(sandboxName, {
-        ...entry,
-        updatedAt: nowIso(),
-        lifecycle: {
-          ...entry.lifecycle,
-          lastError: error instanceof Error ? error.message : String(error),
-        },
-      });
-      throw error;
-    }
-    console.log(`  Restarted MCP bridge '${name}' on port ${String(entry.port)}.`);
+    const envRefs = entry.env.map((envName) => ({ name: envName }));
+    upsertMcpProvider(entry.providerName ?? "", envRefs);
+    attachProvider(sandboxName, entry.providerName);
+    applyGeneratedPolicy(sandboxName, entry);
+    registerAgentAdapter(
+      sandboxName,
+      (entry.adapter as AgentMcpAdapter | undefined) ?? adapter,
+      entry,
+    );
+    writeBridgeEntry(sandboxName, {
+      ...entry,
+      adapter: (entry.adapter as AgentMcpAdapter | undefined) ?? adapter,
+      updatedAt: nowIso(),
+    });
+    console.log(`  Refreshed MCP server '${name}'.`);
   }
 }
 
@@ -1080,13 +994,11 @@ export function removeMcpBridge(
   const adapter = getBridgeAdapter(agent);
   const entry = bridgeState(sandbox)[server];
   if (!entry) {
-    if (options.force) {
-      stopProxy(sandboxName, server);
-      fs.rmSync(bridgeRuntimeDir(sandboxName, server), { recursive: true, force: true });
-      console.log(`  Cleared stale MCP bridge runtime for '${server}'.`);
-      return;
+    if (!options.force) {
+      throw new McpBridgeError(`MCP server '${server}' not found on sandbox '${sandboxName}'.`);
     }
-    throw new McpBridgeError(`MCP server '${server}' not found on sandbox '${sandboxName}'.`);
+    console.log(`  No MCP server '${server}' is registered on sandbox '${sandboxName}'.`);
+    return;
   }
 
   const failures: string[] = [];
@@ -1105,20 +1017,32 @@ export function removeMcpBridge(
   } catch (error) {
     failures.push(error instanceof Error ? error.message : String(error));
   }
-  stopProxy(sandboxName, server);
+  try {
+    detachProvider(sandboxName, entry.providerName, { force: options.force === true });
+  } catch (error) {
+    failures.push(error instanceof Error ? error.message : String(error));
+  }
+  try {
+    deleteProvider(entry.providerName, { force: options.force === true });
+  } catch (error) {
+    failures.push(error instanceof Error ? error.message : String(error));
+  }
   if (failures.length > 0 && !options.force) {
     throw new McpBridgeError(failures.join("\n"));
   }
   removeBridgeEntry(sandboxName, server);
-  releaseMcpPortReservation(entry.port);
-  fs.rmSync(bridgeRuntimeDir(sandboxName, server), { recursive: true, force: true });
-  console.log(`  Removed MCP bridge '${server}' from sandbox '${sandboxName}'.`);
+  console.log(`  Removed MCP server '${server}' from sandbox '${sandboxName}'.`);
 }
 
 function getPolicyPresence(sandboxName: string, policyName: string | undefined): boolean | null {
   if (!policyName) return false;
   const gatewayPresets = policies.getGatewayPresets(sandboxName);
   return gatewayPresets === null ? null : gatewayPresets.includes(policyName);
+}
+
+function getProviderPresence(providerName: string | undefined): boolean | null {
+  if (!providerName) return null;
+  return providerExists(providerName);
 }
 
 function getAdapterRegistration(
@@ -1128,7 +1052,7 @@ function getAdapterRegistration(
 ): McpBridgeStatus["adapter"] {
   if (!entry) return { registered: null };
   const adapter = getEntryAdapter(entry, agent);
-  if (!adapter) return { registered: null, detail: "MCP bridge adapter is not declared" };
+  if (!adapter) return { registered: null, detail: "MCP adapter is not declared" };
   const command =
     adapter === "mcporter"
       ? ["mcporter", "config", "get", entry.server, "--json"].map(shellQuote).join(" ")
@@ -1168,18 +1092,14 @@ export function statusMcpBridge(sandboxName: string, server?: string): McpBridge
           ...(agent.mcpCapability.reason ? { reason: agent.mcpCapability.reason } : {}),
         },
         env: { names: [], missing: [], ready: true },
-        proxy: { pid: null, running: false },
+        provider: { registryPresent: false, gatewayPresent: false, attached: null },
         policy: { registryPresent: false, gatewayPresent: false },
         adapter: { registered: null },
-        token: null,
       },
     ];
   }
 
   return entries.map(([name, entry]) => {
-    const pidPath = bridgePidFile(sandboxName, name);
-    const logPath = bridgeLogFile(sandboxName, name);
-    const pid = readLivePid(pidPath);
     const missingEnv = entry
       ? entry.env.filter(
           (envName: string) => process.env[envName] === undefined || process.env[envName] === "",
@@ -1196,18 +1116,17 @@ export function statusMcpBridge(sandboxName: string, server?: string): McpBridge
           : {}),
         ...(agent.mcpCapability.reason ? { reason: agent.mcpCapability.reason } : {}),
       },
-      ...(entry ? { command: entry.command, args: entry.args } : {}),
+      ...(entry ? { url: entry.url } : {}),
       env: {
         names: entry?.env ?? [],
         missing: missingEnv,
-        ready: missingEnv.length === 0,
+        ready: missingEnv.length === 0 || getProviderPresence(entry?.providerName) === true,
       },
-      ...(entry ? { port: entry.port, url: `http://${MCP_HOST}:${String(entry.port)}` } : {}),
-      proxy: {
-        pid,
-        running: pid !== null,
-        pidFile: pidPath,
-        logFile: logPath,
+      provider: {
+        name: entry?.providerName,
+        registryPresent: !!entry?.providerName,
+        gatewayPresent: getProviderPresence(entry?.providerName),
+        attached: providerAttached(sandboxName, entry?.providerName),
       },
       policy: {
         name: entry?.policyName,
@@ -1215,7 +1134,6 @@ export function statusMcpBridge(sandboxName: string, server?: string): McpBridge
         gatewayPresent: getPolicyPresence(sandboxName, entry?.policyName),
       },
       adapter: getAdapterRegistration(sandboxName, agent, entry),
-      token: entry ? "[REDACTED]" : null,
       ...(entry?.addedAt ? { addedAt: entry.addedAt } : {}),
       ...(entry?.updatedAt ? { updatedAt: entry.updatedAt } : {}),
     };
@@ -1255,17 +1173,18 @@ function renderList(
     if (agent.mcpCapability.reason) console.log(`  ${agent.mcpCapability.reason}`);
   }
   if (statuses.length === 0) {
-    console.log(`  No MCP bridges for sandbox '${sandboxName}'.`);
+    console.log(`  No MCP servers for sandbox '${sandboxName}'.`);
     console.log("");
     return;
   }
-  console.log(`  MCP bridges for sandbox '${sandboxName}':`);
+  console.log(`  MCP servers for sandbox '${sandboxName}':`);
   for (const status of statuses) {
-    const marker = status.proxy.running ? "running" : "stopped";
+    const policy = status.policy.gatewayPresent ? "policy" : "policy?";
+    const provider =
+      status.provider.registryPresent && status.provider.gatewayPresent ? "provider" : "provider?";
     const env = status.env.names.length > 0 ? status.env.names.join(", ") : "(none)";
-    const port = status.port ? `:${String(status.port)}` : "";
     console.log(
-      `    ${status.server.padEnd(18)} ${marker.padEnd(8)} ${port.padEnd(6)} env: ${env}`,
+      `    ${status.server.padEnd(18)} ${policy.padEnd(8)} ${provider.padEnd(10)} env: ${env}`,
     );
   }
   console.log("");
@@ -1278,7 +1197,7 @@ function renderStatus(
 ): void {
   if (statuses.length === 0) {
     console.log("");
-    console.log(`  MCP bridges for sandbox '${sandboxName}': none`);
+    console.log(`  MCP servers for sandbox '${sandboxName}': none`);
     console.log(`    agent: ${agent.name}`);
     console.log(`    support: ${agent.mcpCapability.support}`);
     if (agent.mcpCapability.reason) console.log(`    reason: ${agent.mcpCapability.reason}`);
@@ -1287,13 +1206,16 @@ function renderStatus(
   }
   for (const status of statuses) {
     console.log("");
-    console.log(`  MCP bridge: ${status.server}`);
+    console.log(`  MCP server: ${status.server}`);
     console.log(`    agent: ${status.agent}`);
     console.log(`    support: ${status.support.mode}`);
     if (status.support.reason) console.log(`    reason: ${status.support.reason}`);
-    if (status.port) console.log(`    endpoint: ${MCP_HOST}:${String(status.port)}`);
+    if (status.url) console.log(`    endpoint: ${status.url}`);
     console.log(
-      `    proxy: ${status.proxy.running ? `running (pid ${String(status.proxy.pid)})` : "stopped"}`,
+      `    provider: ${status.provider.registryPresent ? status.provider.name : "(none)"}`,
+    );
+    console.log(
+      `    provider attached: ${status.provider.attached === null ? "unknown" : status.provider.attached ? "yes" : "no"}`,
     );
     console.log(
       `    policy: ${status.policy.gatewayPresent === null ? "unknown" : status.policy.gatewayPresent ? "present" : "missing"}`,
@@ -1323,30 +1245,31 @@ function renderMcpHelp(subcommand: string): void {
   switch (subcommand) {
     case "add":
       console.log(`USAGE
-  nemoclaw <name> mcp add <server> [--env KEY|KEY=VALUE ...] -- <command> [args...]
+  nemoclaw <name> mcp add <server> --url <http-mcp-url> [--env KEY|KEY=VALUE ...]
 
-  FLAGS
-    --env KEY        Host environment variable reference for the bridge process
-    --env KEY=VALUE  Use VALUE for the initial launch; only KEY is persisted
+FLAGS
+  --url URL        MCP Streamable HTTP endpoint
+  --env KEY       Host credential reference registered with OpenShell
+  --env KEY=VALUE Store VALUE in the OpenShell provider; only KEY is persisted by NemoClaw
 
-  SECURITY
-    The command after '--' runs on the host as your current user. Use MCP
-    servers you trust, and prefer --env KEY so external API keys stay in the
-    host environment.`);
+SECURITY
+  Credentials are registered as an OpenShell provider and appear inside the
+  sandbox only as openshell:resolve:env:KEY placeholders. OpenShell resolves
+  them at egress while enforcing the generated protocol: mcp policy.`);
       return;
     case "list":
       console.log(`USAGE
   nemoclaw <name> mcp list [--json]
 
 FLAGS
-  --json  Emit sandbox, support, and bridge state as JSON`);
+  --json  Emit sandbox, support, and MCP server state as JSON`);
       return;
     case "status":
       console.log(`USAGE
   nemoclaw <name> mcp status [server] [--json]
 
 FLAGS
-  --json  Emit MCP bridge status as JSON`);
+  --json  Emit MCP server status as JSON`);
       return;
     case "restart":
       console.log(`USAGE
@@ -1383,7 +1306,7 @@ export async function dispatchMcpBridgeCommand(
       case "add": {
         const options = parseMcpAddArgs(rest);
         await addMcpBridge(sandboxName, options);
-        console.log(`  MCP bridge '${options.server}' added to sandbox '${sandboxName}'.`);
+        console.log(`  MCP server '${options.server}' added to sandbox '${sandboxName}'.`);
         return;
       }
       case "list": {

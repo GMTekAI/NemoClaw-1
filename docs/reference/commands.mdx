@@ -1259,8 +1259,8 @@ The probe is bounded by an in-sandbox `openshell sandbox exec` with a hard timeo
 
 ### `$$nemoclaw <name> mcp list`
 
-List MCP bridges configured for a sandbox.
-The command reports the selected agent's MCP support status and, for each configured bridge, whether the host proxy appears to be running.
+List MCP servers configured for a sandbox.
+The command reports the selected agent's MCP support status and, for each configured server, whether the generated OpenShell provider, policy, and agent adapter are present.
 
 ```bash
 $$nemoclaw my-assistant mcp list [--json]
@@ -1268,26 +1268,24 @@ $$nemoclaw my-assistant mcp list [--json]
 
 | Flag | Description |
 |------|-------------|
-| `--json` | Emit sandbox, support, and bridge state as JSON with bridge tokens redacted |
+| `--json` | Emit sandbox, support, and MCP server state as JSON without credential values |
 
 ### `$$nemoclaw <name> mcp add`
 
-Bridge a host-side stdio MCP server into a sandbox.
-This command accepts stdio MCP server commands only; it does not register already-hosted HTTP MCP URLs.
-Credentials stay in the host process environment: pass `--env KEY` to reference an existing host environment variable.
-Inline `--env KEY=VALUE` values are used only for the initial launch; NemoClaw persists only `KEY` so restart can relaunch from host environment variable names without storing raw API keys.
-NemoClaw allocates a loopback bridge port, applies a generated OpenShell `protocol: mcp` network policy for `host.docker.internal:<port>`, and registers the endpoint through the sandbox agent's MCP adapter.
-The command after `--` runs on the host as your current user. Use MCP servers you trust.
-For full setup details, see [Set Up MCP Bridges](../deployment/set-up-mcp-bridge).
+Add an MCP Streamable HTTP server to a sandbox.
+Pass `--url` for the MCP endpoint and `--env KEY` for each host credential the sandbox-side MCP client should reference.
+NemoClaw registers those credentials in an OpenShell provider, attaches it to the running sandbox, writes only `openshell:resolve:env:KEY` placeholders into the agent config, and applies a generated OpenShell `protocol: mcp` policy for the target endpoint.
+Inline `--env KEY=VALUE` values are stored in OpenShell's provider store; NemoClaw persists only `KEY`.
+For full setup details, see [Set Up MCP Servers](../deployment/set-up-mcp-bridge).
 
 ```bash
-$$nemoclaw my-assistant mcp add github --env GITHUB_TOKEN -- npx -y @modelcontextprotocol/server-github
+$$nemoclaw my-assistant mcp add github --url https://api.githubcopilot.com/mcp/ --env GITHUB_TOKEN
 ```
 
 ### `$$nemoclaw <name> mcp status`
 
-Inspect MCP bridge state for one server or for all configured bridges.
-Status includes proxy liveness, generated policy presence, adapter registration, port, environment readiness, and the selected agent's MCP support mode.
+Inspect MCP server state for one server or for all configured servers.
+Status includes OpenShell provider presence, provider attachment, generated policy presence, adapter registration, environment readiness, and the selected agent's MCP support mode.
 
 ```bash
 $$nemoclaw my-assistant mcp status [server] [--json]
@@ -1295,12 +1293,12 @@ $$nemoclaw my-assistant mcp status [server] [--json]
 
 | Flag | Description |
 |------|-------------|
-| `--json` | Emit status as JSON with bridge tokens redacted |
+| `--json` | Emit status as JSON without credential values |
 
 ### `$$nemoclaw <name> mcp restart`
 
-Restart one MCP bridge proxy, or every bridge on the sandbox when no server is supplied.
-Restart requires all referenced host environment variables to be present, reapplies the generated policy if needed, and refreshes the sandbox agent adapter registration.
+Refresh one MCP server registration, or every server on the sandbox when no server is supplied.
+Restart reapplies the generated policy, reattaches the OpenShell provider when needed, and refreshes the sandbox agent adapter registration.
 
 ```bash
 $$nemoclaw my-assistant mcp restart [server]
@@ -1308,8 +1306,8 @@ $$nemoclaw my-assistant mcp restart [server]
 
 ### `$$nemoclaw <name> mcp remove`
 
-Remove an MCP bridge from a sandbox.
-NemoClaw unregisters the sandbox agent adapter, removes the generated policy, stops the host proxy, deletes runtime files, and clears the sandbox registry entry.
+Remove an MCP server from a sandbox.
+NemoClaw unregisters the sandbox agent adapter, removes the generated policy, detaches and deletes the OpenShell provider, and clears the sandbox registry entry.
 
 ```bash
 $$nemoclaw my-assistant mcp remove github [--force]
@@ -1317,7 +1315,7 @@ $$nemoclaw my-assistant mcp remove github [--force]
 
 | Flag | Description |
 |------|-------------|
-| `--force` | Best-effort cleanup that also clears stale registry and runtime state |
+| `--force` | Best-effort cleanup that also clears stale registry state |
 
 ### `$$nemoclaw <name> skill install <path>`
 

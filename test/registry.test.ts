@@ -129,7 +129,7 @@ describe("registry", () => {
     expect(data.sandboxes.alpha.livePhase).toBeUndefined();
   });
 
-  it("encrypts MCP bridge bearer tokens at rest while hydrating runtime state", () => {
+  it("persists MCP server state without local proxy secrets", () => {
     registry.registerSandbox({
       name: "alpha",
       agent: "openclaw",
@@ -139,11 +139,9 @@ describe("registry", () => {
             server: "github",
             agent: "openclaw",
             adapter: "mcporter",
-            command: "node",
-            args: ["server.js"],
+            url: "https://api.githubcopilot.com/mcp/",
             env: ["GITHUB_TOKEN"],
-            port: 3100,
-            token: "bridge-token-secret",
+            providerName: "alpha-mcp-github",
             policyName: "mcp-bridge-github",
             addedAt: new Date(0).toISOString(),
           },
@@ -152,11 +150,17 @@ describe("registry", () => {
     });
 
     const raw = JSON.parse(fs.readFileSync(regFile, "utf-8"));
-    const diskToken = raw.sandboxes.alpha.mcp.bridges.github.token;
+    const entry = raw.sandboxes.alpha.mcp.bridges.github;
 
-    expect(diskToken).toMatch(/^enc:v1:/);
-    expect(diskToken).not.toBe("bridge-token-secret");
-    expect(registry.getSandbox("alpha").mcp.bridges.github.token).toBe("bridge-token-secret");
+    expect(entry).toMatchObject({
+      url: "https://api.githubcopilot.com/mcp/",
+      env: ["GITHUB_TOKEN"],
+      providerName: "alpha-mcp-github",
+      policyName: "mcp-bridge-github",
+    });
+    expect(entry.token).toBeUndefined();
+    expect(entry.command).toBeUndefined();
+    expect(entry.port).toBeUndefined();
   });
 
   it("normalizes configured inference fields into a discriminated view", () => {
@@ -272,7 +276,7 @@ describe("registry", () => {
     expect(sb.model).toBe("new-model");
   });
 
-  it("persists MCP bridge env names without raw host env values", () => {
+  it("persists MCP env names without raw host env values", () => {
     registry.registerSandbox({ name: "mcp-sb", agent: "openclaw" });
     registry.updateSandbox("mcp-sb", {
       mcp: {
@@ -281,11 +285,9 @@ describe("registry", () => {
             server: "github",
             agent: "openclaw",
             adapter: "mcporter",
-            command: "npx",
-            args: ["-y", "@modelcontextprotocol/server-github"],
+            url: "https://api.githubcopilot.com/mcp/",
             env: ["GITHUB_TOKEN"],
-            port: 3100,
-            token: "local-bridge-token",
+            providerName: "mcp-sb-mcp-github",
             policyName: "mcp-bridge-github",
             addedAt: new Date(0).toISOString(),
           },
@@ -296,8 +298,8 @@ describe("registry", () => {
     const raw = fs.readFileSync(regFile, "utf-8");
     const data = JSON.parse(raw);
     expect(data.sandboxes["mcp-sb"].mcp.bridges.github.env).toEqual(["GITHUB_TOKEN"]);
-    expect(data.sandboxes["mcp-sb"].mcp.bridges.github.token).toMatch(/^enc:v1:/);
-    expect(registry.getSandbox("mcp-sb").mcp.bridges.github.token).toBe("local-bridge-token");
+    expect(data.sandboxes["mcp-sb"].mcp.bridges.github.providerName).toBe("mcp-sb-mcp-github");
+    expect(data.sandboxes["mcp-sb"].mcp.bridges.github.token).toBeUndefined();
     expect(raw).not.toContain("ghp_");
     expect(raw).not.toContain("secret-value");
   });

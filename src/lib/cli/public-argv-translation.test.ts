@@ -221,24 +221,20 @@ describe("translatePublicSandboxArgv", () => {
       translatePublicSandboxArgv("alpha", "mcp", [
         "add",
         "github",
+        "--url",
+        "https://api.githubcopilot.com/mcp/",
         "--env",
         "GITHUB_TOKEN",
-        "--",
-        "npx",
-        "-y",
-        "@modelcontextprotocol/server-github",
       ]),
       "sandbox:mcp",
       [
         "alpha",
         "add",
         "github",
+        "--url",
+        "https://api.githubcopilot.com/mcp/",
         "--env",
         "GITHUB_TOKEN",
-        "--",
-        "npx",
-        "-y",
-        "@modelcontextprotocol/server-github",
       ],
     );
     expectNative(
