@@ -133,7 +133,11 @@ function readDockerfileOpenClawVersion(): string {
 }
 
 function readDockerfileMcporterVersion(): string {
-  return readRequiredMatch(DOCKERFILE, /^ARG MCPORTER_VERSION=([^\s]+)/m, "mcporter runtime version");
+  return readRequiredMatch(
+    DOCKERFILE,
+    /^ARG MCPORTER_VERSION=([^\s]+)/m,
+    "mcporter runtime version",
+  );
 }
 
 function readDockerfileBaseOpenClawIntegrity(): string {
