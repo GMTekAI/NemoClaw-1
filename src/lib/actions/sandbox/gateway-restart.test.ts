@@ -7,7 +7,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { classifyGatewayRestartFailure } from "../../../../dist/lib/actions/sandbox/gateway-restart";
 import { restartSandboxGateway } from "../../../../dist/lib/actions/sandbox/process-recovery";
-import { buildHermesGatewayRestartScript } from "../../../../dist/lib/agent/runtime";
+import { GATEWAY_RESTART_MARKERS as MARKERS } from "../../../../dist/lib/agent/gateway-restart-markers";
+import {
+  buildHermesGatewayRestartScript,
+  buildOpenClawGatewayRestartScript,
+} from "../../../../dist/lib/agent/runtime";
 
 const requireDist = createRequire(import.meta.url);
 
@@ -26,16 +30,41 @@ describe("gateway restart failure markers", () => {
       } as never,
       8642,
     );
-    const expectedMarkers = [
-      ["ROOT_EXEC_UNAVAILABLE", "root exec unavailable"],
-      ["GOSU_MISSING", "root exec unavailable"],
-      ["GATEWAY_USER_MISSING", "root exec unavailable"],
-      ["SECRET_BOUNDARY_REFUSED", "secret-boundary refusal"],
-      ["SECRET_BOUNDARY_VALIDATOR_MISSING", "unsafe config path"],
-      ["HERMES_RUNTIME_CONFIG_GUARD_MISSING", "unsafe config path"],
-      ["HERMES_UNSAFE_CONFIG_PATH", "unsafe config path"],
-      ["HERMES_LOCKED_HASH_MISMATCH", "hash mismatch while locked"],
-      ["GATEWAY_FAILED", "launch failure"],
+    const expectedMarkers: Array<
+      [string, ReturnType<typeof classifyGatewayRestartFailure>["layer"]]
+    > = [
+      [MARKERS.ROOT_EXEC_UNAVAILABLE, "root exec unavailable"],
+      [MARKERS.GOSU_MISSING, "root exec unavailable"],
+      [MARKERS.GATEWAY_USER_MISSING, "root exec unavailable"],
+      [MARKERS.SECRET_BOUNDARY_REFUSED, "secret-boundary refusal"],
+      [MARKERS.SECRET_BOUNDARY_VALIDATOR_MISSING, "unsafe config path"],
+      [MARKERS.HERMES_RUNTIME_CONFIG_GUARD_MISSING, "unsafe config path"],
+      [MARKERS.HERMES_UNSAFE_CONFIG_PATH, "unsafe config path"],
+      [MARKERS.HERMES_LOCKED_HASH_MISMATCH, "hash mismatch while locked"],
+      [MARKERS.GATEWAY_FAILED, "launch failure"],
+    ] as const;
+
+    for (const [marker, layer] of expectedMarkers) {
+      expect(script).toContain(marker);
+      expect(
+        classifyGatewayRestartFailure({
+          status: 1,
+          stdout: marker,
+          stderr: "",
+        }),
+      ).toMatchObject({ layer });
+    }
+  });
+
+  it("keeps generated OpenClaw restart markers aligned with the classifier", () => {
+    const script = buildOpenClawGatewayRestartScript(18789);
+    const expectedMarkers: Array<
+      [string, ReturnType<typeof classifyGatewayRestartFailure>["layer"]]
+    > = [
+      [MARKERS.ROOT_EXEC_UNAVAILABLE, "root exec unavailable"],
+      [MARKERS.GOSU_MISSING, "root exec unavailable"],
+      [MARKERS.GATEWAY_USER_MISSING, "root exec unavailable"],
+      [MARKERS.GATEWAY_FAILED, "launch failure"],
     ] as const;
 
     for (const [marker, layer] of expectedMarkers) {

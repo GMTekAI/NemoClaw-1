@@ -18,13 +18,15 @@
 // generated shell shape and the live shell execution against stubbed binaries.
 
 import { shellQuote } from "../runner";
+import { GATEWAY_RESTART_MARKERS } from "./gateway-restart-markers";
 
 export const HERMES_SECRET_BOUNDARY_VALIDATOR_PATH =
   "/usr/local/lib/nemoclaw/validate-hermes-env-secret-boundary.py";
 
-export const SECRET_BOUNDARY_REFUSED_MARKER = "SECRET_BOUNDARY_REFUSED";
-export const SECRET_BOUNDARY_OK_MARKER = "SECRET_BOUNDARY_OK";
-export const SECRET_BOUNDARY_VALIDATOR_MISSING_MARKER = "SECRET_BOUNDARY_VALIDATOR_MISSING";
+export const SECRET_BOUNDARY_REFUSED_MARKER = GATEWAY_RESTART_MARKERS.SECRET_BOUNDARY_REFUSED;
+export const SECRET_BOUNDARY_OK_MARKER = GATEWAY_RESTART_MARKERS.SECRET_BOUNDARY_OK;
+export const SECRET_BOUNDARY_VALIDATOR_MISSING_MARKER =
+  GATEWAY_RESTART_MARKERS.SECRET_BOUNDARY_VALIDATOR_MISSING;
 
 const HERMES_GATEWAY_PROC_PATTERN = "[h]ermes[[:space:]]+gateway([[:space:]]|$)";
 const HERMES_DASHBOARD_PROC_PATTERN = "[h]ermes[[:space:]]+dashboard([[:space:]]|$)";
@@ -72,10 +74,10 @@ function buildHermesValidatorMissingLog(): string {
 // sandbox image still recovers. Target the cutoff for the first release whose
 // minimum supported `ghcr.io/nvidia/nemoclaw/hermes-sandbox-base` image is
 // rebuilt from this PR or newer, then flip the missing-file branch to
-// fail-closed (kill + `echo SECRET_BOUNDARY_VALIDATOR_MISSING; exit 1;`) and
-// update `runtime-hermes-secret-boundary-behavioural.test.ts` to assert the
-// refusal. Track the cutoff against the base-image version pinned in
-// `agents/hermes/Dockerfile` during the #2426 release checklist.
+// fail-closed (kill + `echo ${SECRET_BOUNDARY_VALIDATOR_MISSING_MARKER}; exit
+// 1;`) and update `runtime-hermes-secret-boundary-behavioural.test.ts` to
+// assert the refusal. Track the cutoff against the base-image version pinned
+// in `agents/hermes/Dockerfile` during the #2426 release checklist.
 
 /**
  * Build the shell snippet that re-runs the documented Hermes secret-boundary
@@ -100,7 +102,7 @@ export function buildHermesEnvFileBoundaryGuard(): string {
   const kill = buildHermesBoundaryKillSnippet();
   const missingLog = buildHermesValidatorMissingLog();
   const invocation = buildHermesValidatorInvocation("env-file /sandbox/.hermes/.env");
-  return `if [ ! -f ${shellQuote(validator)} ]; then ${missingLog} elif ! ${invocation}; then ${kill} echo SECRET_BOUNDARY_REFUSED; exit 1; fi;`;
+  return `if [ ! -f ${shellQuote(validator)} ]; then ${missingLog} elif ! ${invocation}; then ${kill} echo ${SECRET_BOUNDARY_REFUSED_MARKER}; exit 1; fi;`;
 }
 
 /**
@@ -119,7 +121,7 @@ export function buildHermesRuntimeEnvBoundaryGuard(): string {
   const kill = buildHermesBoundaryKillSnippet();
   const missingLog = buildHermesValidatorMissingLog();
   const invocation = buildHermesValidatorInvocation("runtime-env");
-  return `if [ ! -f ${shellQuote(validator)} ]; then ${missingLog} elif ! ${invocation}; then ${kill} echo SECRET_BOUNDARY_REFUSED; exit 1; fi;`;
+  return `if [ ! -f ${shellQuote(validator)} ]; then ${missingLog} elif ! ${invocation}; then ${kill} echo ${SECRET_BOUNDARY_REFUSED_MARKER}; exit 1; fi;`;
 }
 
 /**

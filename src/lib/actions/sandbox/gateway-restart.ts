@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { GATEWAY_RESTART_MARKERS as MARKERS } from "../../agent/gateway-restart-markers";
 import * as agentRuntime from "../../agent/runtime";
 import { G, R } from "../../cli/terminal-style";
 import { redactFull } from "../../security/redact";
@@ -113,19 +114,19 @@ export function classifyGatewayRestartFailure(result: GatewayRestartCommandResul
   const output = gatewayRestartOutput(result);
   const detail = sanitizeGatewayRestartFailureDetail(output.trim());
   if (
-    output.includes("ROOT_EXEC_UNAVAILABLE") ||
-    output.includes("GOSU_MISSING") ||
-    output.includes("GATEWAY_USER_MISSING")
+    output.includes(MARKERS.ROOT_EXEC_UNAVAILABLE) ||
+    output.includes(MARKERS.GOSU_MISSING) ||
+    output.includes(MARKERS.GATEWAY_USER_MISSING)
   ) {
     return { layer: "root exec unavailable", detail: detail || "root exec unavailable" };
   }
-  if (output.includes("SECRET_BOUNDARY_REFUSED")) {
+  if (output.includes(MARKERS.SECRET_BOUNDARY_REFUSED)) {
     return { layer: "secret-boundary refusal", detail: detail || "boundary refused" };
   }
   if (
-    output.includes("HERMES_UNSAFE_CONFIG_PATH") ||
-    output.includes("HERMES_RUNTIME_CONFIG_GUARD_MISSING") ||
-    output.includes("SECRET_BOUNDARY_VALIDATOR_MISSING") ||
+    output.includes(MARKERS.HERMES_UNSAFE_CONFIG_PATH) ||
+    output.includes(MARKERS.HERMES_RUNTIME_CONFIG_GUARD_MISSING) ||
+    output.includes(MARKERS.SECRET_BOUNDARY_VALIDATOR_MISSING) ||
     output.includes("refusing unsafe Hermes runtime config path") ||
     output.includes("refusing runtime config update") ||
     output.includes("refusing to follow symlink") ||
@@ -133,7 +134,7 @@ export function classifyGatewayRestartFailure(result: GatewayRestartCommandResul
   ) {
     return { layer: "unsafe config path", detail: detail || "unsafe config path" };
   }
-  if (output.includes("HERMES_LOCKED_HASH_MISMATCH")) {
+  if (output.includes(MARKERS.HERMES_LOCKED_HASH_MISMATCH)) {
     return {
       layer: "hash mismatch while locked",
       detail: detail || "Hermes config hash mismatch while locked",
