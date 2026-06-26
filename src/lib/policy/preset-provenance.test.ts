@@ -83,12 +83,12 @@ describe("classifyPresetProvenance", () => {
   });
 
   it("classifies nous-* gateway presets as hermes-agent-sourced on hermes sandboxes", () => {
-    expect(
-      classifyPresetProvenance("nous-web", { tierName: "open", agentName: "hermes" }),
-    ).toEqual({
-      source: "agent",
-      agent: "hermes",
-    });
+    expect(classifyPresetProvenance("nous-web", { tierName: "open", agentName: "hermes" })).toEqual(
+      {
+        source: "agent",
+        agent: "hermes",
+      },
+    );
     expect(classifyPresetProvenance("nous-code", { agentName: "hermes" })).toEqual({
       source: "agent",
       agent: "hermes",
