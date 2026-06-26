@@ -22,6 +22,11 @@ import { expect, test } from "../fixtures/e2e-test.ts";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
 const INSTALL_SCRIPT = path.join(REPO_ROOT, "scripts", "install-openshell.sh");
+const PINNED_OPEN_SHELL_SHA256 = {
+  cliLinuxX64: "41bf6c672b7048e82335588e08aa8ece2bd619f999575937cc5894a989ef1707",
+  gatewayLinuxX64: "e28e63b35cdf147c1be89bec361c9ba58690d08c94fd91ec90b1752b1900b99d",
+  sandboxLinuxX64: "7dce9cb100ff52d883ff7caccacaff4b2d06e58fa49aab6107fcf063ef0edbf6",
+};
 
 type GhDownloadMode = "success" | "fail";
 
@@ -29,32 +34,30 @@ function writeExecutable(target: string, contents: string): void {
   fs.writeFileSync(target, contents, { mode: 0o755 });
 }
 
-// Bash helpers shared by the gh and curl stubs: write a fake archive, compute
-// a real sha256 digest of it (so install-openshell.sh's `sha256sum -c` step
-// validates), and emit the matching checksum file.
+// Bash helpers shared by the gh and curl stubs: write a fake archive and emit
+// the same pinned digest lines the real OpenShell v0.0.67 release uses. A fake
+// sha256sum below keeps this test hermetic even though the tarball bytes are
+// synthetic.
 const SHARED_DOWNLOAD_BASH_HELPERS = `\
 write_asset() {
   local asset_name="$1"
   local asset_path="$2"
   printf 'fake OpenShell release asset: %s\\n' "$asset_name" >"$asset_path"
 }
-sha256_digest() {
-  if [ -x /usr/bin/sha256sum ]; then
-    /usr/bin/sha256sum "$1" | awk '{print $1}'
-  elif [ -x /bin/sha256sum ]; then
-    /bin/sha256sum "$1" | awk '{print $1}'
-  elif [ -x /usr/bin/shasum ]; then
-    /usr/bin/shasum -a 256 "$1" | awk '{print $1}'
-  else
-    exit 3
-  fi
+pinned_sha256() {
+  case "$1" in
+    openshell-x86_64-unknown-linux-musl.tar.gz) printf '%s\\n' ${JSON.stringify(PINNED_OPEN_SHELL_SHA256.cliLinuxX64)} ;;
+    openshell-gateway-x86_64-unknown-linux-gnu.tar.gz) printf '%s\\n' ${JSON.stringify(PINNED_OPEN_SHELL_SHA256.gatewayLinuxX64)} ;;
+    openshell-sandbox-x86_64-unknown-linux-gnu.tar.gz) printf '%s\\n' ${JSON.stringify(PINNED_OPEN_SHELL_SHA256.sandboxLinuxX64)} ;;
+    *) exit 4 ;;
+  esac
 }
 write_checksum() {
   local checksum_file="$1"
   local asset_name="$2"
   local asset_path="$3"
   [ -f "$asset_path" ] || write_asset "$asset_name" "$asset_path"
-  printf '%s  %s\\n' "$(sha256_digest "$asset_path")" "$asset_name" >"$checksum_file"
+  printf '%s  %s\\n' "$(pinned_sha256 "$asset_name")" "$asset_name" >"$checksum_file"
 }`;
 
 // Force Linux/x86_64 asset selection regardless of host arch (legacy script
@@ -228,6 +231,19 @@ cat "$@" 2>/dev/null || true`,
   );
 }
 
+function createFakeSha256sum(binDir: string): void {
+  writeExecutable(
+    path.join(binDir, "sha256sum"),
+    `#!/usr/bin/env bash
+if [ "\${1:-}" = "-c" ]; then
+  cat >/dev/null
+  echo "checksum OK"
+  exit 0
+fi
+exec /usr/bin/sha256sum "$@"`,
+  );
+}
+
 async function runVersionPinScenario(
   artifacts: ArtifactSink,
   options: { ghDownloadMode: GhDownloadMode },
@@ -254,6 +270,7 @@ async function runVersionPinScenario(
     createFakeCurl(fakeBin, downloadLog);
     createFakeTar(fakeBin, "0.0.67");
     createFakeStrings(fakeBin);
+    createFakeSha256sum(fakeBin);
 
     const result = spawnSync("bash", [INSTALL_SCRIPT], {
       env: {

@@ -10,12 +10,13 @@ import { describe, expect, it } from "vitest";
 
 const SCRIPT = path.join(import.meta.dirname, "..", "scripts", "brev-launchable-ci-cpu.sh");
 const ASSET = "openshell-x86_64-unknown-linux-musl.tar.gz";
+const PINNED_ASSET_SHA256 = "41bf6c672b7048e82335588e08aa8ece2bd619f999575937cc5894a989ef1707";
 
 function writeExecutable(target: string, contents: string): void {
   fs.writeFileSync(target, contents, { mode: 0o755 });
 }
 
-function makeFakeSystem(options: { checksum: "match" | "mismatch" }): {
+function makeFakeSystem(options: { checksum: "match" | "mismatch" | "unpinned" }): {
   cleanup: () => void;
   cloneDir: string;
   curlLog: string;
@@ -146,14 +147,10 @@ case "$(basename "$out")" in
     rm -rf "$tmp"
     ;;
   openshell-checksums-sha256.txt)
-    if [ ${JSON.stringify(options.checksum)} = "match" ]; then
-      if command -v sha256sum >/dev/null 2>&1; then
-        digest="$(sha256sum "$(dirname "$out")/${ASSET}" | awk '{print $1}')"
-      else
-        digest="$(shasum -a 256 "$(dirname "$out")/${ASSET}" | awk '{print $1}')"
-      fi
-    else
+    if [ ${JSON.stringify(options.checksum)} = "unpinned" ]; then
       digest="0000000000000000000000000000000000000000000000000000000000000000"
+    else
+      digest=${JSON.stringify(PINNED_ASSET_SHA256)}
     fi
     printf '%s  %s\\n' "$digest" "${ASSET}" > "$out"
     ;;
@@ -162,6 +159,21 @@ case "$(basename "$out")" in
     ;;
 esac
 exit 0
+`,
+  );
+  writeExecutable(
+    path.join(fakeBin, "sha256sum"),
+    `#!/usr/bin/env bash
+if [ "\${1:-}" = "-c" ]; then
+  cat >/dev/null
+  if [ ${JSON.stringify(options.checksum)} = "mismatch" ]; then
+    printf '%s: FAILED\\n' ${JSON.stringify(ASSET)} >&2
+    exit 1
+  fi
+  printf '%s: OK\\n' ${JSON.stringify(ASSET)}
+  exit 0
+fi
+exec /usr/bin/sha256sum "$@"
 `,
   );
 
@@ -176,7 +188,10 @@ exit 0
   };
 }
 
-function runLaunchable(options: { checksum: "match" | "mismatch"; openshellVersion?: string }) {
+function runLaunchable(options: {
+  checksum: "match" | "mismatch" | "unpinned";
+  openshellVersion?: string;
+}) {
   const fake = makeFakeSystem(options);
   const result = spawnSync("bash", [SCRIPT], {
     encoding: "utf-8",
@@ -228,6 +243,23 @@ describe("brev-launchable-ci-cpu.sh OpenShell checksum gate", { timeout: 30_000 
       const out = combinedLaunchableOutput(result, fake.launchLog);
       expect(result.status, out).toBe(1);
       expect(out).toContain(`OpenShell CLI checksum verification failed for ${ASSET}`);
+      expect(fs.existsSync(fake.tarLog) ? fs.readFileSync(fake.tarLog, "utf-8") : "").toBe("");
+      expect(fs.existsSync(fake.sudoLog) ? fs.readFileSync(fake.sudoLog, "utf-8") : "").not.toMatch(
+        /^install -m 755 .*openshell/m,
+      );
+    } finally {
+      fake.cleanup();
+    }
+  });
+
+  it("rejects a same-release checksum file that disagrees with the NemoClaw-pinned digest", () => {
+    const { fake, result } = runLaunchable({ checksum: "unpinned" });
+    try {
+      const out = combinedLaunchableOutput(result, fake.launchLog);
+      expect(result.status, out).toBe(1);
+      expect(out).toContain(
+        `OpenShell release checksum for ${ASSET} does not match NemoClaw-pinned v0.0.67 digest`,
+      );
       expect(fs.existsSync(fake.tarLog) ? fs.readFileSync(fake.tarLog, "utf-8") : "").toBe("");
       expect(fs.existsSync(fake.sudoLog) ? fs.readFileSync(fake.sudoLog, "utf-8") : "").not.toMatch(
         /^install -m 755 .*openshell/m,

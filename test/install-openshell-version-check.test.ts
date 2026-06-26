@@ -1,13 +1,21 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, it, expect } from "vitest";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { describe, expect, it } from "vitest";
 
 const SCRIPT = path.join(import.meta.dirname, "..", "scripts", "install-openshell.sh");
+const PINNED_OPEN_SHELL_SHA256 = {
+  cliDarwinArm64: "f3852e15266eff963a43b00e58533f1c35c851a82cb40f5a7c1c49372a34728f",
+  cliLinuxX64: "41bf6c672b7048e82335588e08aa8ece2bd619f999575937cc5894a989ef1707",
+  gatewayDarwinArm64: "36eaf14058e9f26119d052e1a0aab02292d5e61fbbe45c2bacb166c8b7f4394d",
+  gatewayLinuxX64: "e28e63b35cdf147c1be89bec361c9ba58690d08c94fd91ec90b1752b1900b99d",
+  sandboxLinuxX64: "7dce9cb100ff52d883ff7caccacaff4b2d06e58fa49aab6107fcf063ef0edbf6",
+};
+const ZERO_SHA256 = "0000000000000000000000000000000000000000000000000000000000000000";
 
 function writeExecutable(target: string, contents: string) {
   fs.writeFileSync(target, contents, { mode: 0o755 });
@@ -242,11 +250,11 @@ if [ -n "$out" ]; then
   case "$(basename "$out")" in
   openshell-checksums-sha256.txt)
     printf '%s\n' \
-      'ignored  openshell-aarch64-apple-darwin.tar.gz' > "$out"
+      '${PINNED_OPEN_SHELL_SHA256.cliDarwinArm64}  openshell-aarch64-apple-darwin.tar.gz' > "$out"
     ;;
   openshell-gateway-checksums-sha256.txt)
     printf '%s\n' \
-      'ignored  openshell-gateway-aarch64-apple-darwin.tar.gz' > "$out"
+      '${PINNED_OPEN_SHELL_SHA256.gatewayDarwinArm64}  openshell-gateway-aarch64-apple-darwin.tar.gz' > "$out"
     ;;
   *)
     : > "$out"
@@ -344,13 +352,13 @@ done
 if [ -n "$out" ]; then
   case "$(basename "$out")" in
   openshell-checksums-sha256.txt)
-    printf '%s\n' 'ignored  openshell-x86_64-unknown-linux-musl.tar.gz' > "$out"
+    printf '%s\n' '${PINNED_OPEN_SHELL_SHA256.cliLinuxX64}  openshell-x86_64-unknown-linux-musl.tar.gz' > "$out"
     ;;
   openshell-gateway-checksums-sha256.txt)
-    printf '%s\n' 'ignored  openshell-gateway-x86_64-unknown-linux-gnu.tar.gz' > "$out"
+    printf '%s\n' '${PINNED_OPEN_SHELL_SHA256.gatewayLinuxX64}  openshell-gateway-x86_64-unknown-linux-gnu.tar.gz' > "$out"
     ;;
   openshell-sandbox-checksums-sha256.txt)
-    printf '%s\n' 'ignored  openshell-sandbox-x86_64-unknown-linux-gnu.tar.gz' > "$out"
+    printf '%s\n' '${PINNED_OPEN_SHELL_SHA256.sandboxLinuxX64}  openshell-sandbox-x86_64-unknown-linux-gnu.tar.gz' > "$out"
     ;;
   *)
     : > "$out"
@@ -422,6 +430,101 @@ exit 0`,
       expect(installedTargets).toContain(path.join(activeBin, "openshell-gateway"));
       expect(installedTargets).toContain(path.join(activeBin, "openshell-sandbox"));
       expect(installedTargets).not.toContain("/usr/local/bin/openshell");
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects release checksum files that disagree with NemoClaw-pinned OpenShell digests", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-openshell-pinned-digest-"));
+    try {
+      const fakeBin = path.join(tmp, "bin");
+      const tarLog = path.join(tmp, "tar.log");
+      const installLog = path.join(tmp, "install.log");
+      fs.mkdirSync(fakeBin);
+
+      writeExecutable(
+        path.join(fakeBin, "uname"),
+        `#!/usr/bin/env bash
+if [ "\${1:-}" = "-m" ]; then echo "x86_64"; else echo "Linux"; fi`,
+      );
+      writeExecutable(
+        path.join(fakeBin, "openshell"),
+        `#!/usr/bin/env bash
+if [ "\${1:-}" = "--version" ]; then echo "openshell 0.0.36"; exit 0; fi
+# request-body-credential-rewrite websocket-credential-rewrite
+exit 0`,
+      );
+      writeExecutable(
+        path.join(fakeBin, "gh"),
+        `#!/usr/bin/env bash
+exit 1`,
+      );
+      writeExecutable(
+        path.join(fakeBin, "curl"),
+        `#!/usr/bin/env bash
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-o" ]; then
+    shift
+    out="$1"
+  fi
+  shift || true
+done
+if [ -n "$out" ]; then
+  case "$(basename "$out")" in
+  openshell-checksums-sha256.txt)
+    printf '%s\n' '${ZERO_SHA256}  openshell-x86_64-unknown-linux-musl.tar.gz' > "$out"
+    ;;
+  openshell-gateway-checksums-sha256.txt)
+    printf '%s\n' '${PINNED_OPEN_SHELL_SHA256.gatewayLinuxX64}  openshell-gateway-x86_64-unknown-linux-gnu.tar.gz' > "$out"
+    ;;
+  openshell-sandbox-checksums-sha256.txt)
+    printf '%s\n' '${PINNED_OPEN_SHELL_SHA256.sandboxLinuxX64}  openshell-sandbox-x86_64-unknown-linux-gnu.tar.gz' > "$out"
+    ;;
+  *)
+    : > "$out"
+    ;;
+  esac
+fi
+exit 0`,
+      );
+      writeExecutable(
+        path.join(fakeBin, "sha256sum"),
+        `#!/usr/bin/env bash
+cat >/dev/null
+echo "checksum OK"
+exit 0`,
+      );
+      writeExecutable(
+        path.join(fakeBin, "tar"),
+        `#!/usr/bin/env bash
+printf '%s\n' "$*" >> ${JSON.stringify(tarLog)}
+exit 0`,
+      );
+      writeExecutable(
+        path.join(fakeBin, "install"),
+        `#!/usr/bin/env bash
+printf '%s\n' "$*" >> ${JSON.stringify(installLog)}
+exit 0`,
+      );
+
+      const result = spawnSync("bash", [SCRIPT], {
+        env: {
+          ...process.env,
+          HOME: tmp,
+          NEMOCLAW_OPENSHELL_CHANNEL: "stable",
+          PATH: `${fakeBin}:/usr/bin:/bin`,
+        },
+        encoding: "utf8",
+      });
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
+      expect(result.stderr).toContain(
+        "OpenShell release checksum for openshell-x86_64-unknown-linux-musl.tar.gz does not match NemoClaw-pinned v0.0.67 digest",
+      );
+      expect(fs.existsSync(tarLog) ? fs.readFileSync(tarLog, "utf-8") : "").toBe("");
+      expect(fs.existsSync(installLog) ? fs.readFileSync(installLog, "utf-8") : "").toBe("");
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }

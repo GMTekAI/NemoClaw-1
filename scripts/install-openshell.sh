@@ -102,6 +102,44 @@ else
   RELEASE_TAG="v${PIN_VERSION}"
 fi
 
+openshell_pinned_sha256() {
+  local release_tag="$1" asset="$2"
+  case "${release_tag}:${asset}" in
+    v0.0.67:openshell-x86_64-unknown-linux-musl.tar.gz)
+      printf '%s\n' "41bf6c672b7048e82335588e08aa8ece2bd619f999575937cc5894a989ef1707"
+      ;;
+    v0.0.67:openshell-aarch64-unknown-linux-musl.tar.gz)
+      printf '%s\n' "f7c381659b910864b584c7c1f10126420d6f2baaae1118c657482e23bfde86ff"
+      ;;
+    v0.0.67:openshell-aarch64-apple-darwin.tar.gz)
+      printf '%s\n' "f3852e15266eff963a43b00e58533f1c35c851a82cb40f5a7c1c49372a34728f"
+      ;;
+    v0.0.67:openshell-gateway-x86_64-unknown-linux-gnu.tar.gz)
+      printf '%s\n' "e28e63b35cdf147c1be89bec361c9ba58690d08c94fd91ec90b1752b1900b99d"
+      ;;
+    v0.0.67:openshell-gateway-aarch64-unknown-linux-gnu.tar.gz)
+      printf '%s\n' "766236f7ca0e5ca4c600cc9e934947a0cd4c985c189dc874824476fec4a5be1f"
+      ;;
+    v0.0.67:openshell-gateway-aarch64-apple-darwin.tar.gz)
+      printf '%s\n' "36eaf14058e9f26119d052e1a0aab02292d5e61fbbe45c2bacb166c8b7f4394d"
+      ;;
+    v0.0.67:openshell-sandbox-x86_64-unknown-linux-gnu.tar.gz)
+      printf '%s\n' "7dce9cb100ff52d883ff7caccacaff4b2d06e58fa49aab6107fcf063ef0edbf6"
+      ;;
+    v0.0.67:openshell-sandbox-aarch64-unknown-linux-gnu.tar.gz)
+      printf '%s\n' "733ba3bf68151d1a763f9cdf76f042d26154767bebb58a03ab162d4322f84b6a"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+openshell_checksum_line() {
+  local checksum_file="$1" asset="$2"
+  awk -v asset="$asset" '$2 == asset { print; found=1; exit } END { if (!found) exit 1 }' "$checksum_file"
+}
+
 version_gte() {
   # Returns 0 (true) if $1 >= $2 — portable, no sort -V (BSD compat)
   local IFS=.
@@ -383,7 +421,16 @@ fi
 for i in "${!ASSETS[@]}"; do
   asset_name="${ASSETS[$i]}"
   checksum_file="${CHECKSUM_FILES[$i]}"
-  (cd "$tmpdir" && grep -F "$asset_name" "$checksum_file" | $SHA_CMD -c -) \
+  checksum_line="$(openshell_checksum_line "$tmpdir/$checksum_file" "$asset_name")" \
+    || fail "OpenShell checksum file $checksum_file does not list $asset_name"
+  if [ "$RELEASE_TAG" != "dev" ]; then
+    expected_sha="$(openshell_pinned_sha256 "$RELEASE_TAG" "$asset_name")" \
+      || fail "No NemoClaw-pinned SHA-256 for OpenShell $RELEASE_TAG asset $asset_name"
+    release_sha="$(printf '%s\n' "$checksum_line" | awk '{print $1}')"
+    [ "$release_sha" = "$expected_sha" ] \
+      || fail "OpenShell release checksum for $asset_name does not match NemoClaw-pinned $RELEASE_TAG digest"
+  fi
+  (cd "$tmpdir" && printf '%s\n' "$checksum_line" | $SHA_CMD -c -) \
     || fail "SHA-256 checksum verification failed for $asset_name"
 done
 

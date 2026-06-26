@@ -133,8 +133,29 @@ openshell_cli_asset_for_arch() {
   esac
 }
 
+openshell_cli_pinned_sha256() {
+  local release_tag="$1" asset="$2"
+  case "${release_tag}:${asset}" in
+    v0.0.67:openshell-x86_64-unknown-linux-musl.tar.gz)
+      printf '%s\n' "41bf6c672b7048e82335588e08aa8ece2bd619f999575937cc5894a989ef1707"
+      ;;
+    v0.0.67:openshell-aarch64-unknown-linux-musl.tar.gz)
+      printf '%s\n' "f7c381659b910864b584c7c1f10126420d6f2baaae1118c657482e23bfde86ff"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+openshell_checksum_line() {
+  local checksum_file="$1" asset="$2"
+  awk -v asset="$asset" '$2 == asset { print; found=1; exit } END { if (!found) exit 1 }' "$checksum_file"
+}
+
 verify_openshell_cli_asset() {
   local tmpdir="$1" asset="$2" checksum_file="openshell-checksums-sha256.txt"
+  local checksum_line expected_sha release_sha
   local -a sha_cmd
   if command -v sha256sum >/dev/null 2>&1; then
     sha_cmd=(sha256sum)
@@ -147,7 +168,14 @@ verify_openshell_cli_asset() {
   retry 3 10 "download openshell checksum" \
     curl -fsSL -o "$tmpdir/$checksum_file" \
     "https://github.com/NVIDIA/OpenShell/releases/download/${OPENSHELL_VERSION}/${checksum_file}"
-  (cd "$tmpdir" && grep -F "$asset" "$checksum_file" | "${sha_cmd[@]}" -c -) \
+  checksum_line="$(openshell_checksum_line "$tmpdir/$checksum_file" "$asset")" \
+    || fail "OpenShell checksum file does not list $asset"
+  expected_sha="$(openshell_cli_pinned_sha256 "$OPENSHELL_VERSION" "$asset")" \
+    || fail "No NemoClaw-pinned SHA-256 for OpenShell ${OPENSHELL_VERSION} asset ${asset}"
+  release_sha="$(printf '%s\n' "$checksum_line" | awk '{print $1}')"
+  [[ "$release_sha" == "$expected_sha" ]] \
+    || fail "OpenShell release checksum for $asset does not match NemoClaw-pinned ${OPENSHELL_VERSION} digest"
+  (cd "$tmpdir" && printf '%s\n' "$checksum_line" | "${sha_cmd[@]}" -c -) \
     || fail "OpenShell CLI checksum verification failed for $asset"
 }
 
