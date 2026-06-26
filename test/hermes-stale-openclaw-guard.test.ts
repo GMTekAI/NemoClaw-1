@@ -15,23 +15,14 @@ const DIFFERENT_DIGEST = `sha256:${"0".repeat(64)}`;
 
 function dockerRunCommandContaining(dockerfile: string, signature: string): string {
   const signatureIndex = dockerfile.indexOf(signature);
-  if (signatureIndex === -1) {
-    throw new Error(`Expected Dockerfile RUN signature: ${signature}`);
-  }
+  expect(signatureIndex, `Expected Dockerfile RUN signature: ${signature}`).not.toBe(-1);
   const runIndex = dockerfile.lastIndexOf("RUN set -eu;", signatureIndex);
-  if (runIndex === -1) {
-    throw new Error(`Expected RUN instruction before ${signature}`);
-  }
-  const runLines: string[] = [];
-  for (const line of dockerfile.slice(runIndex).split("\n")) {
-    runLines.push(line);
-    if (!line.trimEnd().endsWith("\\")) break;
-  }
-  const lastLine = runLines[runLines.length - 1]?.trimEnd() ?? "";
-  if (lastLine.endsWith("\\")) {
-    throw new Error(`Expected complete RUN instruction containing ${signature}`);
-  }
-  return runLines
+  expect(runIndex, `Expected RUN instruction before ${signature}`).not.toBe(-1);
+  const linesAfterRun = dockerfile.slice(runIndex).split("\n");
+  const endIndex = linesAfterRun.findIndex((line) => !line.trimEnd().endsWith("\\"));
+  expect(endIndex, `Expected complete RUN instruction containing ${signature}`).toBeGreaterThan(-1);
+  return linesAfterRun
+    .slice(0, endIndex + 1)
     .join("\n")
     .trim()
     .replace(/^RUN\s+/, "")
