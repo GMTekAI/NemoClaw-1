@@ -25,11 +25,26 @@ require_docker() {
   docker info >/dev/null 2>&1 || fail "docker daemon is not available"
 }
 
+require_safe_image_ref() {
+  local ref="$1"
+  if [ -z "$ref" ]; then
+    fail "set NEMOCLAW_HERMES_BASE_IMAGE or HERMES_BASE_IMAGE to the resolved Hermes base image"
+  fi
+  case "$ref" in
+    *[[:space:]]* | *[\;\`\"\']* | *\\*)
+      fail "Hermes base image ref contains unsafe characters: $ref"
+      ;;
+  esac
+  if [[ ! "$ref" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*([:@][A-Za-z0-9._:-]+)?$ ]]; then
+    fail "Hermes base image ref is not a supported Docker reference: $ref"
+  fi
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 RUN_ID="${GITHUB_RUN_ID:-local}-$$"
 BASE_IMAGE="${NEMOCLAW_HERMES_BASE_IMAGE:-${HERMES_BASE_IMAGE:-}}"
-BASE_IMAGE="${BASE_IMAGE:-$(sed -nE 's/^ARG BASE_IMAGE=(.*)$/\1/p' "${REPO_ROOT}/agents/hermes/Dockerfile" | head -n 1)}"
+require_safe_image_ref "$BASE_IMAGE"
 STALE_DIR_BASE="nemoclaw-hermes-stale-openclaw-dir-base:${RUN_ID}"
 STALE_DIR_IMAGE="nemoclaw-hermes-stale-openclaw-dir:${RUN_ID}"
 STALE_LINK_BASE="nemoclaw-hermes-stale-openclaw-link-base:${RUN_ID}"

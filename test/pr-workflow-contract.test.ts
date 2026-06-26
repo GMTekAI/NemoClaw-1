@@ -640,10 +640,12 @@ describe("pull request and main workflow contracts", () => {
 
   it("runs Hermes stale OpenClaw image validation in self-hosted PR CI", () => {
     const job = prSelfHostedWorkflow.jobs["build-hermes-stale-openclaw-image"];
+    const checkout = requiredWorkflowStep(job, "Checkout");
     const runs = stepRuns(job).join("\n");
 
     expect(job["runs-on"]).toBe("linux-amd64-cpu4");
     expect(job["timeout-minutes"]).toBe(30);
+    expect(checkout.with?.["persist-credentials"]).toBe(false);
     expect(stepUses(job)).toContain("./.github/actions/resolve-hermes-base-image");
     expect(runs).toContain("bash scripts/verify-hermes-stale-openclaw-image.sh");
   });
