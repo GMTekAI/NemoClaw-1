@@ -136,16 +136,20 @@ export function classifySandboxCreateFailure(output = ""): SandboxCreateFailure 
     return { kind: "gpu_cdi_injection_failed", uploadedToGateway };
   }
   // Require BOTH the failed Docker command block containing the plugin-install
-  // step AND a network/egress reachability error so that non-network failures
-  // (package-not-found, version conflicts, auth errors) fall through to the
-  // generic recovery rather than showing a misleading network-policy hint.
-  // [^']* matches newlines in JS character classes, so multi-line command text
-  // is handled correctly. See #4127 / follow-up from #4125.
+  // step AND an npm-prefixed network/egress error so that non-network failures
+  // (package-not-found, version conflicts, auth errors) and failures in later
+  // commands within the same RUN block (e.g. openclaw doctor --fix) fall
+  // through to the generic recovery rather than showing a misleading
+  // network-policy hint. Requiring the "npm error" prefix anchors the evidence
+  // to npm's own output — commands run after a successful plugin install
+  // produce different error formats and will not match. [^']* matches newlines
+  // in JS character classes, so multi-line command text is handled correctly.
+  // See #4127 / follow-up from #4125.
   if (
     /The command '[^']*(?:openclaw plugins install|npm:@openclaw\/)[^']*'\s*returned a non-zero code/i.test(
       text,
     ) &&
-    /ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ETIMEDOUT|ESOCKETTIMEDOUT|network request.*failed|getaddrinfo|fetch failed|socket hang up|network timeout/i.test(
+    /npm error.*(?:ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ETIMEDOUT|ESOCKETTIMEDOUT|network request.*failed|getaddrinfo|fetch failed|socket hang up|network timeout)/i.test(
       text,
     )
   ) {

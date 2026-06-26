@@ -340,6 +340,21 @@ describe("classifySandboxCreateFailure", () => {
     ].join("\n");
     expect(classifySandboxCreateFailure(output).kind).toBe("unknown");
   });
+
+  it("does NOT classify as plugin_install_network_denied when plugin install succeeded but a later command in the same RUN block failed with a network error", () => {
+    // The same RUN block runs `openclaw plugins install` followed by
+    // `openclaw doctor --fix`. If the install succeeds but doctor's network
+    // call fails, the block fails but npm never emits an "npm error" line,
+    // so the classifier must not fire the plugin-install hint.
+    const output = [
+      "The command '/bin/bash -o pipefail -c set -eu;",
+      '  openclaw plugins install "npm:@openclaw/brave-plugin@2026.5.27" --pin;',
+      "  BRAVE_API_KEY=openshell:resolve:env:BRAVE_API_KEY openclaw doctor --fix --non-interactive;",
+      "fi' returned a non-zero code: 1",
+      "error: getaddrinfo ENOTFOUND api.openclaw.ai",
+    ].join("\n");
+    expect(classifySandboxCreateFailure(output).kind).toBe("unknown");
+  });
 });
 
 describe("planSandboxCreateRecovery", () => {
