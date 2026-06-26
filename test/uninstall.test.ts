@@ -37,15 +37,13 @@ describe("uninstall CLI flags", () => {
     args: string[],
     extraEnv: NodeJS.ProcessEnv = {},
   ): ReturnType<typeof spawnSync> {
-    const fakeBin = path.join(tmp, "bin");
-    if (!fs.existsSync(fakeBin)) writeFakeTools(fakeBin);
     return spawnSync("bash", [UNINSTALL_SCRIPT, ...args], {
       cwd: path.join(import.meta.dirname, ".."),
       encoding: "utf-8",
       env: {
         ...process.env,
         HOME: tmp,
-        PATH: `${fakeBin}:/usr/bin:/bin`,
+        PATH: `${path.join(tmp, "bin")}:/usr/bin:/bin`,
         NEMOCLAW_NODE: process.execPath,
         TMPDIR: tmp,
         ...extraEnv,
@@ -89,6 +87,7 @@ describe("uninstall CLI flags", () => {
 
   it("--yes skips the confirmation prompt and completes successfully", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-uninstall-yes-"));
+    writeFakeTools(path.join(tmp, "bin"));
     try {
       const result = runUninstall(tmp, ["--yes"]);
 
@@ -103,6 +102,7 @@ describe("uninstall CLI flags", () => {
 
   it("--yes preserves rebuild-backups, backups, and sandboxes.json under ~/.nemoclaw", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-uninstall-yes-preserve-"));
+    writeFakeTools(path.join(tmp, "bin"));
     const stateDir = seedPreservedState(tmp);
     try {
       const result = runUninstall(tmp, ["--yes"]);
@@ -122,6 +122,7 @@ describe("uninstall CLI flags", () => {
 
   it("--yes --destroy-user-data purges preserved ~/.nemoclaw entries through the public wrapper", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-uninstall-destroy-"));
+    writeFakeTools(path.join(tmp, "bin"));
     const stateDir = seedPreservedState(tmp);
     try {
       const result = runUninstall(tmp, ["--yes", "--destroy-user-data"]);
@@ -137,6 +138,7 @@ describe("uninstall CLI flags", () => {
 
   it("--yes uses NemoHermes branding when Hermes is the active agent", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemohermes-uninstall-yes-"));
+    writeFakeTools(path.join(tmp, "bin"));
     try {
       const result = runUninstall(tmp, ["--yes"], { NEMOCLAW_AGENT: "hermes" });
 

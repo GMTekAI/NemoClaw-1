@@ -263,6 +263,7 @@ The uninstall command preserves `~/.nemoclaw/rebuild-backups/` (host-side snapsh
 Uninstall removes every other entry under `~/.nemoclaw/`.
 Interactive runs prompt before they remove the preserved entries; the default answer keeps them.
 For non-interactive runs (`--yes`, `NEMOCLAW_NON_INTERACTIVE=1`, or a non-TTY shell), pass `--destroy-user-data` (or set `NEMOCLAW_UNINSTALL_DESTROY_USER_DATA=1`) to acknowledge data loss and remove the preserved entries as well.
+`--yes` stays non-destructive by design: it only acknowledges the global confirmation prompt and never purges preserved user data on its own. Full purge always requires an explicit `--destroy-user-data` or the matching env var, so existing automation using `--yes` retains its safe behaviour.
 See the [Commands reference](../reference/commands#$$nemoclaw-uninstall) for the full preservation contract.
 </Note>
 

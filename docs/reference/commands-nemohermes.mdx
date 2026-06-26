@@ -1632,6 +1632,8 @@ To avoid uninstall destroying host-side user data, uninstall preserves the follo
 
 Uninstall removes every other entry under `~/.nemoclaw/` (gateway source, runtime state, the Ollama auth proxy PID file, etc.).
 
+`--yes` deliberately remains non-destructive for user data: it only acknowledges the global "Proceed?" prompt and still preserves the listed entries. Removing the preserved entries always requires an explicit opt-in (`--destroy-user-data` or `NEMOCLAW_UNINSTALL_DESTROY_USER_DATA=1`), so existing automation using `--yes` retains its safe behaviour and never loses host-side state by accident.
+
 Decision matrix:
 
 | Context | Behaviour |
