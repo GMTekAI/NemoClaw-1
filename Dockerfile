@@ -38,6 +38,7 @@ RUN ln -s /opt/nemoclaw/node_modules /opt/nemoclaw-root/node_modules \
 FROM ${BASE_IMAGE}
 ARG OPENCLAW_VERSION=2026.5.27
 ARG OPENCLAW_2026_5_27_INTEGRITY=sha512-2N93zhdAo88KAbHt6T7KvYXf4s7XIkYXBgv1npYpn7e1Y9FvrtgtpsA38my9rtFW+70uXEojRPX5/OqnuDqJPw==
+ARG MCPORTER_VERSION=0.7.3
 
 # OpenClaw 2026.5.27 loads some generated source through jiti. Disable its
 # filesystem transform cache so source fragments that mention provider marker
@@ -144,6 +145,11 @@ RUN set -eu; \
         # rmdir failure inside npm's own install path.
         rm -rf /usr/local/lib/node_modules/openclaw /usr/local/bin/openclaw; \
         npm install -g --no-audit --no-fund --no-progress "openclaw@${OPENCLAW_VERSION}"; \
+    fi; \
+    MCPORTER_CUR_VER=$(mcporter --version 2>/dev/null | awk '{print $NF}' || echo "0.0.0"); \
+    if [ "$MCPORTER_CUR_VER" != "$MCPORTER_VERSION" ]; then \
+        echo "INFO: Installing mcporter $MCPORTER_VERSION"; \
+        npm install -g --no-audit --no-fund --no-progress "mcporter@${MCPORTER_VERSION}"; \
     fi; \
     # Pre-install the codex-acp package so the embedded ACPx runtime can
     # call the local binary instead of `npx @zed-industries/codex-acp`.

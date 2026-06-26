@@ -67,6 +67,11 @@ inference:
   model_config_key: "models.default"
   proxy_support: implicit
 
+# ── MCP bridge support ───────────────────────────────────────────
+mcp:
+  support: disabled
+  reason: "The managed Deep Agents Code wrapper intentionally forces MCP off; NVIDIA/NemoClaw#566 tracks future design."
+
 package_registry:
   hosts:
     - pypi.org

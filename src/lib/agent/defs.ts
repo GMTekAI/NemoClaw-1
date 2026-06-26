@@ -60,6 +60,13 @@ export interface AgentInference {
   provider_options?: string[];
 }
 
+export type AgentMcpSupport = "bridge" | "disabled";
+
+export interface AgentMcpCapability {
+  support: AgentMcpSupport;
+  reason?: string;
+}
+
 export interface AgentLegacyPaths {
   dockerfileBase: string | null;
   dockerfile: string | null;
@@ -83,6 +90,7 @@ export interface AgentDefinition {
   health_probe?: AgentHealthProbe;
   config?: ManifestRecord;
   inference?: AgentInference;
+  mcp?: AgentMcpCapability;
   state_dirs?: string[];
   state_files?: AgentStateFile[];
   user_managed_files?: string[];
@@ -97,6 +105,7 @@ export interface AgentDefinition {
   readonly dashboardUi?: AgentDashboardUi | null;
   readonly configPaths: AgentConfigPaths;
   readonly inferenceProviderOptions: string[];
+  readonly mcpCapability: AgentMcpCapability;
   readonly stateDirs: string[];
   readonly stateFiles: AgentStateFile[];
   readonly userManagedFiles: string[];
@@ -369,6 +378,27 @@ function readInference(record: ManifestRecord): AgentInference | undefined {
   };
 }
 
+function readMcpCapability(record: ManifestRecord): AgentMcpCapability {
+  const mcp = readObject(record, "mcp");
+  if (!mcp) {
+    return {
+      support: "disabled",
+      reason: "MCP support is not declared for this agent.",
+    };
+  }
+
+  const support = readString(mcp, "support");
+  if (support !== "bridge" && support !== "disabled") {
+    throw new Error("Agent manifest field 'mcp.support' must be bridge or disabled");
+  }
+
+  const reason = readString(mcp, "reason")?.trim();
+  return {
+    support,
+    ...(reason ? { reason } : {}),
+  };
+}
+
 function loadManifestRecord(manifestPath: string): ManifestRecord {
   const parsed = yaml.load(fs.readFileSync(manifestPath, "utf8"));
   if (!isManifestRecord(parsed)) {
@@ -419,6 +449,7 @@ export function loadAgent(name: string): AgentDefinition {
   const healthProbe = readHealthProbe(raw);
   const config = readObject(raw, "config");
   const inference = readInference(raw);
+  const mcp = readMcpCapability(raw);
   const stateDirs = readStringArray(raw, "state_dirs");
   const stateFiles = readStateFiles(raw);
   const userManagedFiles = readUserManagedFiles(raw);
@@ -442,6 +473,7 @@ export function loadAgent(name: string): AgentDefinition {
     health_probe: healthProbe,
     config,
     inference,
+    mcp,
     state_dirs: stateDirs,
     state_files: stateFiles,
     user_managed_files: userManagedFiles,
@@ -496,6 +528,10 @@ export function loadAgent(name: string): AgentDefinition {
 
     get inferenceProviderOptions(): string[] {
       return inference?.provider_options ?? [];
+    },
+
+    get mcpCapability(): AgentMcpCapability {
+      return mcp;
     },
 
     get stateDirs(): string[] {
