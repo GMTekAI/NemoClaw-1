@@ -38,7 +38,9 @@ type TraceTimingAnalyzer = {
   evaluateOnboardPerformanceBudget: (...args: any[]) => any;
   formatTopPhaseChanges: (...args: any[]) => string;
   readOnboardPerformanceBudget: (rootDir?: string) => unknown;
-  selectOnboardTrace: (...args: any[]) => { totalMs: number; phases: Record<string, number> } | null;
+  selectOnboardTrace: (
+    ...args: any[]
+  ) => { totalMs: number; phases: Record<string, number> } | null;
   buildTraceSummaryLines: (...args: any[]) => string[];
 };
 
