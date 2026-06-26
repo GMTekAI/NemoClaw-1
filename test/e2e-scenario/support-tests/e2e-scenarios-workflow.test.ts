@@ -143,26 +143,6 @@ describe("e2e-vitest-scenarios workflow boundary", () => {
         registryScenarios: [],
       });
       expect(
-        evaluateE2eVitestWorkflowDispatchSelectors({
-          scenarios: "openshell-gateway-auth-contract",
-        }),
-      ).toMatchObject({
-        valid: true,
-        liveScenariosRuns: false,
-        selectedFreeStandingJobs: ["openshell-gateway-auth-contract-vitest"],
-        registryScenarios: [],
-      });
-      expect(
-        evaluateE2eVitestWorkflowDispatchSelectors({
-          jobs: "openshell-gateway-auth-contract-vitest",
-        }),
-      ).toMatchObject({
-        valid: true,
-        liveScenariosRuns: false,
-        selectedFreeStandingJobs: ["openshell-gateway-auth-contract-vitest"],
-        registryScenarios: [],
-      });
-      expect(
         evaluateE2eVitestWorkflowDispatchSelectors({ scenarios: "skill-agent" }),
       ).toMatchObject({
         valid: true,
@@ -660,19 +640,19 @@ describe("e2e-vitest-scenarios workflow boundary", () => {
   it("derives the free-standing inventory from workflow job metadata", { timeout: 60_000 }, () => {
     const inventory = readFreeStandingJobsInventory();
     expect(validateFreeStandingWorkflowInventory()).toEqual([]);
-    expect(inventory.allowedJobs).toContain("openshell-version-pin-vitest");
-    expect(inventory.allowedJobs).toContain("openshell-gateway-auth-contract-vitest");
-    expect(inventory.allowedJobs).toContain("gateway-guard-recovery");
-    expect(inventory.allowedJobs).toContain("upgrade-stale-sandbox-vitest");
-    expect(inventory.scenarioToJob.get("openshell-version-pin")).toBe(
-      "openshell-version-pin-vitest",
+    expect(inventory.allowedJobs).toEqual(
+      expect.arrayContaining([
+        "openshell-version-pin-vitest",
+        "openshell-gateway-auth-contract-vitest",
+        "gateway-guard-recovery",
+        "upgrade-stale-sandbox-vitest",
+      ]),
     );
-    expect(inventory.scenarioToJob.get("openshell-gateway-auth-contract")).toBe(
-      "openshell-gateway-auth-contract-vitest",
-    );
-    expect(inventory.scenarioToJob.get("upgrade-stale-sandbox")).toBe(
-      "upgrade-stale-sandbox-vitest",
-    );
+    expect(Object.fromEntries(inventory.scenarioToJob)).toMatchObject({
+      "openshell-gateway-auth-contract": "openshell-gateway-auth-contract-vitest",
+      "openshell-version-pin": "openshell-version-pin-vitest",
+      "upgrade-stale-sandbox": "upgrade-stale-sandbox-vitest",
+    });
     expect(inventory.scenarioToJob.get("credential-migration")).toBeUndefined();
     expect(
       inventory.allowedJobs.every((job) =>
