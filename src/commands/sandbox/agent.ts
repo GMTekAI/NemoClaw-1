@@ -16,10 +16,10 @@ export default class SandboxAgentCommand extends NemoClawCommand {
     "Pass through to `openclaw agent` inside the sandbox via `openshell sandbox exec`. Stream the agent's response back to stdout without owning a TTY; useful for driving the sandbox from another process (CI job, multi-agent platform, evaluation harness). All flags accepted by the in-sandbox OpenClaw CLI are forwarded verbatim, including `-m <text>`, `--session-id <id>`, `--agent <id>`, `--json`, `--thinking <level>`, `--deliver`, and `--reply-channel`. Currently supported on OpenClaw sandboxes only; Hermes sandboxes exit non-zero with a redirect to the OpenAI-compatible API on port 8642 inside the sandbox.";
   static usage = ["<name> [openclaw-agent-flags...]"];
   static examples = [
-    '<%= config.bin %> sandbox agent alpha -m "Summarise README.md"',
+    '<%= config.bin %> sandbox agent alpha --agent work -m "Summarise README.md"',
     '<%= config.bin %> sandbox agent alpha --agent work -m "Status update?"',
     '<%= config.bin %> sandbox agent alpha --session-id review-42 -m "Any new findings?"',
-    "<%= config.bin %> sandbox agent alpha --json -m 'ping'",
+    "<%= config.bin %> sandbox agent alpha --session-key intake-42 --json -m 'ping'",
   ];
 
   public async run(): Promise<void> {
@@ -34,7 +34,11 @@ export default class SandboxAgentCommand extends NemoClawCommand {
       printAgentPassthroughHelp();
       return;
     }
-    if (hasAgentPassthroughHelpToken(extraArgs)) {
+    // A bare `<name> agent` with no further args cannot succeed in-sandbox
+    // (`openclaw agent` requires `-m`), so treat it like a help request and
+    // print the wrapper summary locally instead of paying sandbox-exec latency
+    // only to surface an upstream "Missing required option -m" error (#5658).
+    if (extraArgs.length === 0 || hasAgentPassthroughHelpToken(extraArgs)) {
       printAgentPassthroughHelp();
       return;
     }
