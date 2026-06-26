@@ -303,10 +303,12 @@ export function listSandboxPolicies(sandboxName: string) {
     }
 
     let provenanceTag = "";
-    if (marker === "●") {
+    if (marker === "●" && inRegistry && inGateway === true) {
       provenanceTag = ` [${formatPresetProvenanceTag(
         classifyPresetProvenance(p.name, provenanceContext),
       )}]`;
+    } else if (marker === "●") {
+      provenanceTag = " [source unverified]";
     }
     console.log(`    ${marker} ${p.name}${provenanceTag} — ${p.description}${suffix}`);
   });

@@ -470,4 +470,36 @@ describe("listSandboxPolicies", () => {
     expect(output).toContain("● npm [user-added]");
     expect(output).not.toContain("[from balanced tier]");
   });
+
+  it("does not trust tier provenance for gateway-only active presets in desync", () => {
+    arrangeListing({
+      appliedNames: [],
+      gatewayNames: ["npm"],
+      tier: "balanced",
+      agent: "openclaw",
+    });
+
+    listSandboxPolicies("test-sandbox");
+
+    const output = printedText();
+    expect(output).not.toContain("● npm [from balanced tier]");
+    expect(output).toContain(
+      "● npm [source unverified] — npm and Yarn registry access (active on gateway, missing from local state)",
+    );
+  });
+
+  it("does not trust provenance for registry-only active presets when the gateway is unreachable", () => {
+    arrangeListing({
+      appliedNames: ["npm"],
+      gatewayNames: null,
+      tier: "balanced",
+      agent: "openclaw",
+    });
+
+    listSandboxPolicies("test-sandbox");
+
+    const output = printedText();
+    expect(output).not.toContain("● npm [from balanced tier]");
+    expect(output).toContain("● npm [source unverified]");
+  });
 });

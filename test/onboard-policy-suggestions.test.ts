@@ -179,6 +179,26 @@ describe("onboard policy preset suggestions", () => {
     }
   });
 
+  it("balanced OpenClaw with web search returns exactly brave brew huggingface npm openclaw-pricing pypi and excludes weather", () => {
+    const knownWithPricing = [...known, "openclaw-pricing"];
+    const suggestions = computeSetupPresetSuggestions("balanced", {
+      enabledChannels: [],
+      knownPresetNames: knownWithPricing,
+      agent: "openclaw",
+      webSearchConfig: { fetchEnabled: true },
+      webSearchSupported: true,
+    });
+    expect([...suggestions].sort()).toEqual([
+      "brave",
+      "brew",
+      "huggingface",
+      "npm",
+      "openclaw-pricing",
+      "pypi",
+    ]);
+    expect(suggestions).not.toContain("weather");
+  });
+
   it("adds openclaw-pricing to tier suggestions when agent is openclaw", () => {
     const knownWithPricing = [...known, "openclaw-pricing"];
     const openclawSuggestions = computeSetupPresetSuggestions("balanced", {
