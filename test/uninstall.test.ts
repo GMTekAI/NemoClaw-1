@@ -19,6 +19,40 @@ describe("uninstall CLI flags", () => {
     }
   }
 
+  function seedPreservedState(tmp: string): string {
+    const stateDir = path.join(tmp, ".nemoclaw");
+    fs.mkdirSync(path.join(stateDir, "rebuild-backups", "sb1", "20260101"), { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "rebuild-backups", "sb1", "20260101", "manifest.json"),
+      "{}",
+    );
+    fs.mkdirSync(path.join(stateDir, "backups", "20260320-120000"), { recursive: true });
+    fs.writeFileSync(path.join(stateDir, "backups", "20260320-120000", "USER.md"), "hello");
+    fs.writeFileSync(path.join(stateDir, "sandboxes.json"), "[]");
+    return stateDir;
+  }
+
+  function runUninstall(
+    tmp: string,
+    args: string[],
+    extraEnv: NodeJS.ProcessEnv = {},
+  ): ReturnType<typeof spawnSync> {
+    const fakeBin = path.join(tmp, "bin");
+    if (!fs.existsSync(fakeBin)) writeFakeTools(fakeBin);
+    return spawnSync("bash", [UNINSTALL_SCRIPT, ...args], {
+      cwd: path.join(import.meta.dirname, ".."),
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        HOME: tmp,
+        PATH: `${fakeBin}:/usr/bin:/bin`,
+        NEMOCLAW_NODE: process.execPath,
+        TMPDIR: tmp,
+        ...extraEnv,
+      },
+    });
+  }
+
   it("--help exits 0 and shows usage", () => {
     const result = spawnSync("bash", [UNINSTALL_SCRIPT, "--help"], {
       cwd: path.join(import.meta.dirname, ".."),
@@ -32,7 +66,6 @@ describe("uninstall CLI flags", () => {
     expect(output).toMatch(/--keep-openshell/);
     expect(output).toMatch(/--delete-models/);
     expect(output).toMatch(/--destroy-user-data/);
-    expect(output).toMatch(/--keep-user-data/);
   });
 
   it("--help uses NemoHermes branding when Hermes is the active agent", () => {
@@ -56,23 +89,8 @@ describe("uninstall CLI flags", () => {
 
   it("--yes skips the confirmation prompt and completes successfully", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-uninstall-yes-"));
-    const fakeBin = path.join(tmp, "bin");
-    writeFakeTools(fakeBin);
-
     try {
-      const result = spawnSync("bash", [UNINSTALL_SCRIPT, "--yes"], {
-        cwd: path.join(import.meta.dirname, ".."),
-        encoding: "utf-8",
-        env: {
-          ...process.env,
-          HOME: tmp,
-          PATH: `${fakeBin}:/usr/bin:/bin`,
-          // The wrapper needs Node even when the test constrains PATH to fake system tools.
-          NEMOCLAW_NODE: process.execPath,
-          // Keep helper-service glob cleanup isolated from concurrently running tests.
-          TMPDIR: tmp,
-        },
-      });
+      const result = runUninstall(tmp, ["--yes"]);
 
       expect(result.status).toBe(0);
       const output = `${result.stdout}${result.stderr}`;
@@ -83,72 +101,13 @@ describe("uninstall CLI flags", () => {
     }
   }, 60_000);
 
-  it("--yes purges preserved ~/.nemoclaw user data through the public wrapper", () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-uninstall-yes-purge-"));
-    const fakeBin = path.join(tmp, "bin");
-    writeFakeTools(fakeBin);
-    const stateDir = path.join(tmp, ".nemoclaw");
-    fs.mkdirSync(path.join(stateDir, "rebuild-backups", "sb1", "20260101"), { recursive: true });
-    fs.writeFileSync(
-      path.join(stateDir, "rebuild-backups", "sb1", "20260101", "manifest.json"),
-      "{}",
-    );
-    fs.mkdirSync(path.join(stateDir, "backups", "20260320-120000"), { recursive: true });
-    fs.writeFileSync(path.join(stateDir, "backups", "20260320-120000", "USER.md"), "hello");
-    fs.writeFileSync(path.join(stateDir, "sandboxes.json"), "[]");
-
+  it("--yes preserves rebuild-backups, backups, and sandboxes.json under ~/.nemoclaw", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-uninstall-yes-preserve-"));
+    const stateDir = seedPreservedState(tmp);
     try {
-      const result = spawnSync("bash", [UNINSTALL_SCRIPT, "--yes"], {
-        cwd: path.join(import.meta.dirname, ".."),
-        encoding: "utf-8",
-        env: {
-          ...process.env,
-          HOME: tmp,
-          PATH: `${fakeBin}:/usr/bin:/bin`,
-          NEMOCLAW_NODE: process.execPath,
-          TMPDIR: tmp,
-        },
-      });
+      const result = runUninstall(tmp, ["--yes"]);
 
       expect(result.status).toBe(0);
-      const output = `${result.stdout}${result.stderr}`;
-      expect(output).toMatch(/--yes acknowledged; purging user data under ~\/\.nemoclaw\//);
-      expect(fs.existsSync(stateDir)).toBe(false);
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
-  }, 60_000);
-
-  it("--yes --keep-user-data preserves rebuild-backups, backups, and sandboxes.json", () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-uninstall-keep-user-data-"));
-    const fakeBin = path.join(tmp, "bin");
-    writeFakeTools(fakeBin);
-    const stateDir = path.join(tmp, ".nemoclaw");
-    fs.mkdirSync(path.join(stateDir, "rebuild-backups", "sb1", "20260101"), { recursive: true });
-    fs.writeFileSync(
-      path.join(stateDir, "rebuild-backups", "sb1", "20260101", "manifest.json"),
-      "{}",
-    );
-    fs.mkdirSync(path.join(stateDir, "backups", "20260320-120000"), { recursive: true });
-    fs.writeFileSync(path.join(stateDir, "backups", "20260320-120000", "USER.md"), "hello");
-    fs.writeFileSync(path.join(stateDir, "sandboxes.json"), "[]");
-
-    try {
-      const result = spawnSync("bash", [UNINSTALL_SCRIPT, "--yes", "--keep-user-data"], {
-        cwd: path.join(import.meta.dirname, ".."),
-        encoding: "utf-8",
-        env: {
-          ...process.env,
-          HOME: tmp,
-          PATH: `${fakeBin}:/usr/bin:/bin`,
-          NEMOCLAW_NODE: process.execPath,
-          TMPDIR: tmp,
-        },
-      });
-
-      expect(result.status).toBe(0);
-      const output = `${result.stdout}${result.stderr}`;
-      expect(output).toMatch(/--keep-user-data set; preserving user data under ~\/\.nemoclaw\//);
       expect(
         fs.existsSync(path.join(stateDir, "rebuild-backups", "sb1", "20260101", "manifest.json")),
       ).toBe(true);
@@ -161,24 +120,25 @@ describe("uninstall CLI flags", () => {
     }
   }, 60_000);
 
+  it("--yes --destroy-user-data purges preserved ~/.nemoclaw entries through the public wrapper", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-uninstall-destroy-"));
+    const stateDir = seedPreservedState(tmp);
+    try {
+      const result = runUninstall(tmp, ["--yes", "--destroy-user-data"]);
+
+      expect(result.status).toBe(0);
+      const output = `${result.stdout}${result.stderr}`;
+      expect(output).toMatch(/--destroy-user-data set; purging user data under ~\/\.nemoclaw\//);
+      expect(fs.existsSync(stateDir)).toBe(false);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it("--yes uses NemoHermes branding when Hermes is the active agent", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemohermes-uninstall-yes-"));
-    const fakeBin = path.join(tmp, "bin");
-    writeFakeTools(fakeBin);
-
     try {
-      const result = spawnSync("bash", [UNINSTALL_SCRIPT, "--yes"], {
-        cwd: path.join(import.meta.dirname, ".."),
-        encoding: "utf-8",
-        env: {
-          ...process.env,
-          HOME: tmp,
-          NEMOCLAW_AGENT: "hermes",
-          PATH: `${fakeBin}:/usr/bin:/bin`,
-          NEMOCLAW_NODE: process.execPath,
-          TMPDIR: tmp,
-        },
-      });
+      const result = runUninstall(tmp, ["--yes"], { NEMOCLAW_AGENT: "hermes" });
 
       expect(result.status).toBe(0);
       const output = `${result.stdout}${result.stderr}`;

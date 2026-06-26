@@ -34,7 +34,6 @@ export interface UninstallRunOptions {
   destroyUserData?: boolean;
   gatewayName?: string;
   keepOpenShell: boolean;
-  keepUserData?: boolean;
 }
 
 export interface UninstallRunDeps {
@@ -283,13 +282,23 @@ function printBye(runtime: UninstallRuntime): void {
   runtime.log(branding.uninstallGoodbye);
 }
 
+function userDataDispositionLine(options: UninstallRunOptions, runtime: UninstallRuntime): string {
+  if (options.destroyUserData) {
+    return "  · ~/.nemoclaw (removes rebuild-backups/, backups/, sandboxes.json: --destroy-user-data set)";
+  }
+  if (runtime.env.NEMOCLAW_UNINSTALL_DESTROY_USER_DATA === "1") {
+    return "  · ~/.nemoclaw (removes rebuild-backups/, backups/, sandboxes.json: NEMOCLAW_UNINSTALL_DESTROY_USER_DATA=1)";
+  }
+  return "  · ~/.nemoclaw (preserves rebuild-backups/, backups/, sandboxes.json by default)";
+}
+
 function confirm(options: UninstallRunOptions, runtime: UninstallRuntime): boolean {
   const branding = runtimeBranding(runtime);
   if (options.assumeYes) return true;
   runtime.log("What will be removed:");
   runtime.log(`  · All OpenShell sandboxes, gateway, and ${branding.display} providers`);
   runtime.log("  · Related Docker containers, images, and volumes");
-  runtime.log("  · ~/.nemoclaw (preserves rebuild-backups/, backups/, sandboxes.json by default)");
+  runtime.log(userDataDispositionLine(options, runtime));
   runtime.log("  · ~/.config/openshell  ~/.config/nemoclaw");
   runtime.log(`  · Global ${branding.display} CLI (npm package: nemoclaw)`);
   runtime.log(
@@ -799,10 +808,6 @@ function resolvePreserveSet(
   options: UninstallRunOptions,
   runtime: UninstallRuntime,
 ): readonly string[] {
-  if (options.keepUserData) {
-    runtime.log("--keep-user-data set; preserving user data under ~/.nemoclaw/.");
-    return PRESERVED_USER_DATA_ENTRIES;
-  }
   if (options.destroyUserData) {
     runtime.log("--destroy-user-data set; purging user data under ~/.nemoclaw/.");
     return [];
@@ -818,10 +823,6 @@ function resolvePreserveSet(
   const nonInteractive =
     !runtime.isTty || options.assumeYes || runtime.env.NEMOCLAW_NON_INTERACTIVE === "1";
   if (nonInteractive) {
-    if (options.assumeYes) {
-      runtime.log("--yes acknowledged; purging user data under ~/.nemoclaw/.");
-      return [];
-    }
     runtime.log(`Preserving ${preservable.join(", ")} under ${paths.nemoclawStateDir}.`);
     runtime.log(
       "  Pass --destroy-user-data (or set NEMOCLAW_UNINSTALL_DESTROY_USER_DATA=1) to purge user data on uninstall.",

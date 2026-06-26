@@ -1610,15 +1610,14 @@ On Linux, uninstall removes `~/.local/state/nemoclaw`, which contains Docker-dri
 
 | Flag | Effect |
 |---|---|
-| `--yes` | Skip all confirmation prompts and remove preserved user data; pair with `--keep-user-data` to preserve |
+| `--yes` | Skip the confirmation prompt |
 | `--keep-openshell` | Leave OpenShell binaries installed |
 | `--delete-models` | Also remove NemoClaw-pulled Ollama models |
-| `--destroy-user-data` | Remove preserved user data (`rebuild-backups/`, `backups/`, `sandboxes.json`) without requiring `--yes` |
-| `--keep-user-data` | Preserve `rebuild-backups/`, `backups/`, and `sandboxes.json` under `~/.nemoclaw/` even with `--yes` |
+| `--destroy-user-data` | Also remove preserved user data (`rebuild-backups/`, `backups/`, `sandboxes.json`) |
 | `--gateway <name>` | Override the gateway name to remove (default: `nemohermes`) |
 
 ```bash
-nemohermes uninstall [--yes] [--keep-openshell] [--delete-models] [--destroy-user-data] [--keep-user-data] [--gateway <name>]
+nemohermes uninstall [--yes] [--keep-openshell] [--delete-models] [--destroy-user-data] [--gateway <name>]
 ```
 
 ##### User-data preservation under `~/.nemoclaw/`
@@ -1637,13 +1636,10 @@ Decision matrix:
 
 | Context | Behaviour |
 |---|---|
-| Interactive TTY, preserved entries present, no flag override | Prompts `Also remove them? [y/N]`. Default `N` keeps the entries. |
-| Interactive TTY, user answers `y` | Removes everything under `~/.nemoclaw/`. |
-| `--yes` (any context) | Acknowledges every prompt, including the data-loss prompt; removes everything under `~/.nemoclaw/`. |
-| `--yes --keep-user-data` (any context) | Acknowledges the uninstall but preserves the listed entries under `~/.nemoclaw/`. |
-| Non-interactive (`NEMOCLAW_NON_INTERACTIVE=1` or non-TTY shell) without `--yes` | Preserves the entries and prints a one-line notice. |
+| Interactive TTY, preserved entries present, no env override | Prompts `Also remove them? [y/N]`. Default `N` keeps the entries. |
+| Interactive TTY, user answers `y` | Removes everything under `~/.nemoclaw/` (the previous full-removal behaviour). |
+| Non-interactive (`--yes`, `NEMOCLAW_NON_INTERACTIVE=1`, or non-TTY shell) | Preserves the entries and prints a one-line notice. |
 | Any context with `--destroy-user-data` | Skips the prompt and removes everything under `~/.nemoclaw/`. Takes precedence over the env var. |
-| Any context with `--keep-user-data` | Skips the prompt and preserves the listed entries. Takes precedence over `--destroy-user-data`, `--yes`, and the env var. |
 | Any context with `NEMOCLAW_UNINSTALL_DESTROY_USER_DATA=1` | Skips the prompt and removes everything under `~/.nemoclaw/`. |
 
 The preserved entries survive uninstall as inert files on disk.

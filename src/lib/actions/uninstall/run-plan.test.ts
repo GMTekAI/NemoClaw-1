@@ -945,7 +945,7 @@ describe("uninstall run plan", () => {
       expect(logs.every((line) => !line.includes("preserved:"))).toBe(true);
     }
 
-    it("--yes purges preserved user data by default in non-interactive runs", () => {
+    it("preserves rebuild-backups/, backups/, and sandboxes.json by default in non-interactive runs", () => {
       const { tmpHome, stateDir } = setupStateDir();
       try {
         const logs: string[] = [];
@@ -955,29 +955,12 @@ describe("uninstall run plan", () => {
         );
 
         expect(result.exitCode).toBe(0);
-        expect(fs.existsSync(stateDir)).toBe(false);
-        expect(logs).toContain(`Removed ${stateDir}`);
-        expect(logs).toContain("--yes acknowledged; purging user data under ~/.nemoclaw/.");
-        expectNoPreserveSignals(logs);
-      } finally {
-        fs.rmSync(tmpHome, { recursive: true, force: true });
-      }
-    });
-
-    it("--yes --keep-user-data preserves rebuild-backups/, backups/, and sandboxes.json", () => {
-      const { tmpHome, stateDir } = setupStateDir();
-      try {
-        const logs: string[] = [];
-        const result = runUninstallPlan(
-          { assumeYes: true, deleteModels: false, keepOpenShell: true, keepUserData: true },
-          preserveCaseDeps(tmpHome, logs),
-        );
-
-        expect(result.exitCode).toBe(0);
         expectPreservedEntries(stateDir);
         expect(fs.existsSync(path.join(stateDir, "ollama-auth-proxy.pid"))).toBe(false);
         expect(fs.existsSync(path.join(stateDir, "source"))).toBe(false);
-        expect(logs).toContain("--keep-user-data set; preserving user data under ~/.nemoclaw/.");
+        expect(logs).toContain(
+          `Preserving rebuild-backups, backups, sandboxes.json under ${stateDir}.`,
+        );
         expect(
           logs.some((line) => line.includes("preserved: rebuild-backups, backups, sandboxes.json")),
         ).toBe(true);
@@ -986,45 +969,14 @@ describe("uninstall run plan", () => {
       }
     });
 
-    it("--keep-user-data takes precedence over --destroy-user-data and the env var", () => {
+    it("purges the whole state dir when NEMOCLAW_UNINSTALL_DESTROY_USER_DATA=1 is set", () => {
       const { tmpHome, stateDir } = setupStateDir();
       try {
         const logs: string[] = [];
         const result = runUninstallPlan(
-          {
-            assumeYes: true,
-            deleteModels: false,
-            destroyUserData: true,
-            keepOpenShell: true,
-            keepUserData: true,
-          },
+          { assumeYes: true, deleteModels: false, keepOpenShell: true },
           preserveCaseDeps(tmpHome, logs, {
             envOverrides: { NEMOCLAW_UNINSTALL_DESTROY_USER_DATA: "1" },
-          }),
-        );
-
-        expect(result.exitCode).toBe(0);
-        expectPreservedEntries(stateDir);
-        expect(logs).toContain("--keep-user-data set; preserving user data under ~/.nemoclaw/.");
-        expect(
-          logs.every(
-            (line) => line !== "--destroy-user-data set; purging user data under ~/.nemoclaw/.",
-          ),
-        ).toBe(true);
-      } finally {
-        fs.rmSync(tmpHome, { recursive: true, force: true });
-      }
-    });
-
-    it("purges the whole state dir when NEMOCLAW_UNINSTALL_DESTROY_USER_DATA=1 is set without --yes", () => {
-      const { tmpHome, stateDir } = setupStateDir();
-      try {
-        const logs: string[] = [];
-        const result = runUninstallPlan(
-          { assumeYes: false, deleteModels: false, keepOpenShell: true },
-          preserveCaseDeps(tmpHome, logs, {
-            envOverrides: { NEMOCLAW_UNINSTALL_DESTROY_USER_DATA: "1" },
-            readLine: () => "y",
           }),
         );
 
@@ -1074,6 +1026,56 @@ describe("uninstall run plan", () => {
         expect(logs).toContain("--destroy-user-data set; purging user data under ~/.nemoclaw/.");
         expect(logs.every((line) => line !== "Also remove them? [y/N]")).toBe(true);
         expect(readLine).not.toHaveBeenCalled();
+      } finally {
+        fs.rmSync(tmpHome, { recursive: true, force: true });
+      }
+    });
+
+    it("destroyUserData without --yes renders a purge-aware global confirmation and skips the user-data prompt", () => {
+      const { tmpHome, stateDir } = setupStateDir();
+      try {
+        const logs: string[] = [];
+        const result = runUninstallPlan(
+          { assumeYes: false, deleteModels: false, destroyUserData: true, keepOpenShell: true },
+          preserveCaseDeps(tmpHome, logs, { isTty: true, readLine: () => "y" }),
+        );
+
+        expect(result.exitCode).toBe(0);
+        expect(fs.existsSync(stateDir)).toBe(false);
+        expect(logs).toContain(
+          "  · ~/.nemoclaw (removes rebuild-backups/, backups/, sandboxes.json: --destroy-user-data set)",
+        );
+        expect(
+          logs.every(
+            (line) =>
+              line !==
+              "  · ~/.nemoclaw (preserves rebuild-backups/, backups/, sandboxes.json by default)",
+          ),
+        ).toBe(true);
+        expect(logs.every((line) => line !== "Also remove them? [y/N]")).toBe(true);
+      } finally {
+        fs.rmSync(tmpHome, { recursive: true, force: true });
+      }
+    });
+
+    it("env var without --yes renders a purge-aware global confirmation", () => {
+      const { tmpHome, stateDir } = setupStateDir();
+      try {
+        const logs: string[] = [];
+        const result = runUninstallPlan(
+          { assumeYes: false, deleteModels: false, keepOpenShell: true },
+          preserveCaseDeps(tmpHome, logs, {
+            envOverrides: { NEMOCLAW_UNINSTALL_DESTROY_USER_DATA: "1" },
+            isTty: true,
+            readLine: () => "y",
+          }),
+        );
+
+        expect(result.exitCode).toBe(0);
+        expect(fs.existsSync(stateDir)).toBe(false);
+        expect(logs).toContain(
+          "  · ~/.nemoclaw (removes rebuild-backups/, backups/, sandboxes.json: NEMOCLAW_UNINSTALL_DESTROY_USER_DATA=1)",
+        );
       } finally {
         fs.rmSync(tmpHome, { recursive: true, force: true });
       }
@@ -1212,7 +1214,7 @@ describe("uninstall run plan", () => {
         const logs: string[] = [];
         const warnings: string[] = [];
         const result = runUninstallPlan(
-          { assumeYes: true, deleteModels: false, keepOpenShell: true, keepUserData: true },
+          { assumeYes: true, deleteModels: false, keepOpenShell: true },
           {
             ...preserveCaseDeps(tmpHome, logs),
             error: (line) => warnings.push(line),
