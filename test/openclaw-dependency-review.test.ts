@@ -24,17 +24,13 @@ type Workflow = {
 
 function requiredStep(job: WorkflowJob, name: string): WorkflowStep {
   const step = job.steps?.find((candidate) => candidate.name === name);
-  if (!step) {
-    throw new Error(`Missing workflow step: ${name}`);
-  }
-  return step;
+  expect(step, `Missing workflow step: ${name}`).toBeDefined();
+  return step as WorkflowStep;
 }
 
 function requiredStepIndex(job: WorkflowJob, name: string): number {
   const index = job.steps?.findIndex((candidate) => candidate.name === name) ?? -1;
-  if (index === -1) {
-    throw new Error(`Missing workflow step: ${name}`);
-  }
+  expect(index, `Missing workflow step: ${name}`).toBeGreaterThanOrEqual(0);
   return index;
 }
 

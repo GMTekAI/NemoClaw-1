@@ -16,27 +16,23 @@ const REQUIRED_ENV_KEYS = [
   "MSTEAMS_E2E_MESSAGE_COMMAND",
 ] as const;
 
-const runTeamsE2E =
-  shouldRunLiveE2EScenarios() && process.env.MSTEAMS_E2E === "1" ? test : test.skip;
-
 function missingTeamsEnv(): string[] {
   return REQUIRED_ENV_KEYS.filter((key) => !process.env[key]?.trim());
 }
 
+const missingTeamsEnvKeys = missingTeamsEnv();
+const runTeamsE2E = test.skipIf(
+  !shouldRunLiveE2EScenarios() || process.env.MSTEAMS_E2E !== "1" || missingTeamsEnvKeys.length > 0,
+);
+
 runTeamsE2E(
   "Microsoft Teams onboarding webhook and message round-trip proof",
   { timeout: 60 * 60_000 },
-  async ({ artifacts, host, secrets, skip }) => {
-    const missing = missingTeamsEnv();
-    if (missing.length > 0) {
-      skip(`Teams live E2E requires ${missing.join(", ")}`);
-      return;
-    }
-
+  async ({ artifacts, host, secrets }) => {
     const webhookUrl = process.env.MSTEAMS_PUBLIC_WEBHOOK_URL as string;
-    if (!/^https:\/\//i.test(webhookUrl)) {
-      throw new Error("MSTEAMS_PUBLIC_WEBHOOK_URL must be a public HTTPS URL");
-    }
+    expect(webhookUrl, "MSTEAMS_PUBLIC_WEBHOOK_URL must be a public HTTPS URL").toMatch(
+      /^https:\/\//i,
+    );
 
     const redactions = REQUIRED_ENV_KEYS.map((key) => process.env[key] ?? "").filter(Boolean);
     const command = process.env.MSTEAMS_E2E_MESSAGE_COMMAND as string;
