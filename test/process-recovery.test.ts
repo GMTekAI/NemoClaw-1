@@ -606,6 +606,100 @@ beta  127.0.0.1  18789  12345  running`;
     }
   });
 
+  it("recovers a stopped Hermes gateway through root exec instead of sandbox-user SSH", () => {
+    const openshellRuntime = requireDist("../dist/lib/adapters/openshell/runtime.js");
+    const agentRuntime = requireDist("../dist/lib/agent/runtime.js");
+    const registry = requireDist("../dist/lib/state/registry.js");
+    const forwardHealth = requireDist("../dist/lib/actions/sandbox/forward-health.js");
+    const childProcess = requireDist("node:child_process");
+    const runningForward = `SANDBOX  BIND  PORT  PID  STATUS
+hermes-box  127.0.0.1  18789  12345  running`;
+    const previousWaitSeconds = process.env.NEMOCLAW_GATEWAY_RECOVERY_WAIT_SECONDS;
+    const previousPollInterval = process.env.NEMOCLAW_GATEWAY_RECOVERY_POLL_INTERVAL_SECONDS;
+    const previousSettleSeconds = process.env.NEMOCLAW_GATEWAY_RECOVERY_SETTLE_SECONDS;
+    const commands: string[] = [];
+    const execShells: string[] = [];
+    let restarted = false;
+
+    process.env.NEMOCLAW_GATEWAY_RECOVERY_WAIT_SECONDS = "2";
+    process.env.NEMOCLAW_GATEWAY_RECOVERY_POLL_INTERVAL_SECONDS = "0";
+    process.env.NEMOCLAW_GATEWAY_RECOVERY_SETTLE_SECONDS = "0";
+
+    try {
+      vi.spyOn(childProcess, "spawnSync").mockImplementation(
+        (command: unknown, rawArgs: unknown) => {
+          const args = Array.isArray(rawArgs) ? rawArgs.map(String) : [];
+          const shellCommand = getSandboxExecShellCommand(rawArgs);
+          const isSandboxExec = args[0] === "sandbox" && args[1] === "exec";
+          const isHealthProbe = shellCommand.includes("HTTP_CODE=$(curl");
+          const isHermesRestart = shellCommand.includes("export HERMES_HOME=/sandbox/.hermes");
+          const probeStatus = restarted ? "RUNNING" : "STOPPED";
+          const stdout = isHealthProbe
+            ? `__NEMOCLAW_SANDBOX_EXEC_STARTED__\n${probeStatus}\n`
+            : isHermesRestart
+              ? "__NEMOCLAW_SANDBOX_EXEC_STARTED__\nGATEWAY_PID=4242\n"
+              : "__NEMOCLAW_SANDBOX_EXEC_STARTED__\nRUNNING\n";
+          commands.push(String(command));
+          execShells.push(isSandboxExec ? shellCommand : "");
+          restarted = restarted || isHermesRestart;
+          return { status: 0, stdout, stderr: "" } as never;
+        },
+      );
+      vi.spyOn(agentRuntime, "getSessionAgent").mockReturnValue({
+        name: "hermes",
+        displayName: "Hermes Agent",
+        binary_path: "/usr/local/bin/hermes",
+        gateway_command: "hermes gateway run",
+        forwardPort: 18789,
+        forward_ports: [18789, 8642],
+        healthProbe: { url: "http://127.0.0.1:8642/health", port: 8642, timeout_seconds: 5 },
+        configPaths: {
+          dir: "/sandbox/.hermes",
+          configFile: "/sandbox/.hermes/config.yaml",
+          envFile: "/sandbox/.hermes/.env",
+          format: "yaml",
+        },
+      });
+      vi.spyOn(registry, "getSandbox").mockReturnValue({
+        name: "hermes-box",
+        agent: "hermes",
+        dashboardPort: 18789,
+      });
+      vi.spyOn(forwardHealth, "isLocalForwardReachable").mockReturnValue(true);
+      vi.spyOn(openshellRuntime, "captureOpenshell").mockReturnValue({
+        status: 0,
+        output: runningForward,
+      });
+      vi.spyOn(openshellRuntime, "runOpenshell").mockReturnValue({ status: 0 } as never);
+
+      expect(
+        withFakeOpenshellBinary(() =>
+          checkAndRecoverSandboxProcesses("hermes-box", { quiet: true }),
+        ),
+      ).toEqual({
+        checked: true,
+        wasRunning: false,
+        recovered: true,
+        forwardRecovered: true,
+      });
+      expect(commands).not.toContain("ssh");
+      expect(execShells.some((command) => command.includes("gosu 'gateway'"))).toBe(true);
+      expect(execShells.some((command) => command.includes("HERMES_HOME=/sandbox/.hermes"))).toBe(
+        true,
+      );
+    } finally {
+      previousWaitSeconds === undefined
+        ? delete process.env.NEMOCLAW_GATEWAY_RECOVERY_WAIT_SECONDS
+        : (process.env.NEMOCLAW_GATEWAY_RECOVERY_WAIT_SECONDS = previousWaitSeconds);
+      previousPollInterval === undefined
+        ? delete process.env.NEMOCLAW_GATEWAY_RECOVERY_POLL_INTERVAL_SECONDS
+        : (process.env.NEMOCLAW_GATEWAY_RECOVERY_POLL_INTERVAL_SECONDS = previousPollInterval);
+      previousSettleSeconds === undefined
+        ? delete process.env.NEMOCLAW_GATEWAY_RECOVERY_SETTLE_SECONDS
+        : (process.env.NEMOCLAW_GATEWAY_RECOVERY_SETTLE_SECONDS = previousSettleSeconds);
+    }
+  });
+
   it("re-establishes manifest-declared non-primary forward ports when only the primary is healthy", () => {
     const openshellRuntime = requireDist("../dist/lib/adapters/openshell/runtime.js");
     const agentRuntime = requireDist("../dist/lib/agent/runtime.js");

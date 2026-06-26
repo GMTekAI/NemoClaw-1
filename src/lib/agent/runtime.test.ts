@@ -377,6 +377,20 @@ describe("buildHermesGatewayRestartScript (#2426)", () => {
     expect(script).not.toContain("ALREADY_RUNNING");
   });
 
+  it("ignores custom Hermes gateway_command shell text for root-mediated restart", () => {
+    const script = buildHermesGatewayRestartScript(
+      makeAgent({
+        ...hermesAgent,
+        gateway_command: "hermes gateway run; touch /tmp/nemoclaw-review-finding",
+      }),
+      8642,
+    );
+
+    expect(script).toContain('"$AGENT_BIN" gateway run');
+    expect(script).not.toContain("touch /tmp/nemoclaw-review-finding");
+    expect(script).not.toContain("GATEWAY_CMD_BIN");
+  });
+
   it("keeps the root-exec shell compatible with sh", () => {
     const script = buildHermesGatewayRestartScript(hermesAgent, 8642);
     const configSection = script.slice(

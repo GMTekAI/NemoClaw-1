@@ -361,27 +361,14 @@ function buildHermesApiSocatRecoveryLines(): string[] {
 export function buildHermesGatewayRestartScript(agent: AgentDefinition, port: number): string {
   const binaryPath = agent.binary_path || "/usr/local/bin/hermes";
   const binaryName = binaryPath.split("/").pop() ?? "hermes";
-  const configuredGatewayCommand = agent.gateway_command?.trim() || `${binaryName} gateway run`;
-  const usesValidatedBinary = configuredGatewayCommand === `${binaryName} gateway run`;
-  const customGatewayExecutable = configuredGatewayCommand.split(/\s+/)[0] ?? binaryName;
-  const validationSteps = usesValidatedBinary
-    ? [
-        `AGENT_BIN=${shellQuote(binaryPath)}; if [ ! -x "$AGENT_BIN" ]; then AGENT_BIN="$(command -v ${shellQuote(binaryName)})"; fi;`,
-        'if [ -z "$AGENT_BIN" ]; then echo AGENT_MISSING; exit 1; fi;',
-      ]
-    : [
-        `GATEWAY_CMD_BIN=${shellQuote(customGatewayExecutable)};`,
-        'case "$GATEWAY_CMD_BIN" in */*) [ -x "$GATEWAY_CMD_BIN" ] || { echo AGENT_MISSING; exit 1; } ;; *) command -v "$GATEWAY_CMD_BIN" >/dev/null 2>&1 || { echo AGENT_MISSING; exit 1; } ;; esac;',
-      ];
-  const launchCommand = usesValidatedBinary
-    ? gatewayRootGosuLaunchCommand(
-        `env ${hermesGatewayEnvPrefix()} "$AGENT_BIN" gateway run`,
-        "gateway",
-      )
-    : gatewayRootGosuLaunchCommand(
-        `env ${hermesGatewayEnvPrefix()} ${configuredGatewayCommand}`,
-        "gateway",
-      );
+  const validationSteps = [
+    `AGENT_BIN=${shellQuote(binaryPath)}; if [ ! -x "$AGENT_BIN" ]; then AGENT_BIN="$(command -v ${shellQuote(binaryName)})"; fi;`,
+    'if [ -z "$AGENT_BIN" ]; then echo AGENT_MISSING; exit 1; fi;',
+  ];
+  const launchCommand = gatewayRootGosuLaunchCommand(
+    `env ${hermesGatewayEnvPrefix()} "$AGENT_BIN" gateway run`,
+    "gateway",
+  );
   const staleGatewayPattern = "[h]ermes[[:space:]]+gateway[[:space:]]+run([[:space:]]|$)";
 
   return [

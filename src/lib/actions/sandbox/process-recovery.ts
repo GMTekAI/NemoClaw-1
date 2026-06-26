@@ -383,9 +383,7 @@ export async function probeSandboxInferenceGatewayHealth(
 function recoverSandboxProcesses(sandboxName: string): boolean {
   const agent = agentRuntime.getSessionAgent(sandboxName);
   const dashboardPort = resolveSandboxDashboardPort(sandboxName);
-  const agentScript = agentRuntime.buildRecoveryScript(agent, dashboardPort, {
-    hermesDashboard: getHermesDashboardRecoveryConfig(sandboxName),
-  });
+  const persistedAgent = sandboxAgentName(sandboxName, registry.getSandbox);
   const hasRecoveryMarker = (result: SandboxCommandResult | null) =>
     !!(
       result &&
@@ -394,10 +392,27 @@ function recoverSandboxProcesses(sandboxName: string): boolean {
   const recoveredSsh = (result: SandboxCommandResult | null) =>
     !!(result && result.status === 0 && hasRecoveryMarker(result));
 
+  if (persistedAgent === "hermes") {
+    if (!isHermesAgent(agent)) {
+      const detail = "Hermes agent definition could not be loaded.";
+      printGatewayRestartFailure(sandboxName, "unsupported agent", detail);
+      return false;
+    }
+    const script = agentRuntime.buildHermesGatewayRestartScript(agent, dashboardPort);
+    const execResult = executeSandboxExecCommand(sandboxName, script, 30000);
+    if (hasRecoveryMarker(execResult)) return true;
+    const failure = classifyGatewayRestartFailure(execResult);
+    printGatewayRestartFailure(sandboxName, failure.layer, failure.detail);
+    return false;
+  }
+
+  const agentScript = agentRuntime.buildRecoveryScript(agent, dashboardPort, {
+    hermesDashboard: getHermesDashboardRecoveryConfig(sandboxName),
+  });
   if (agentRuntime.isTerminalAgentRecoveryScript(agentScript)) return false;
   if (agentScript) {
-    // Non-OpenClaw manifests do not yet declare a runtime user for root
-    // sandbox exec. Recover them over SSH so the launch inherits the sandbox
+    // Non-Hermes custom manifests do not yet declare a supported host-side
+    // runtime user. Recover them over SSH so the launch inherits the sandbox
     // login user instead of creating root-owned agent state under /sandbox.
     return recoveredSsh(executeSandboxCommand(sandboxName, agentScript));
   }
@@ -863,7 +878,9 @@ function recoverHermesDashboardProcessIfEnabled(sandboxName: string): boolean | 
   return recoverHermesDashboardProcess(sandboxName, { executeCommand: executeSandboxCommand });
 }
 
-function isHermesAgent(agent: ReturnType<typeof agentRuntime.getSessionAgent>): boolean {
+function isHermesAgent(
+  agent: ReturnType<typeof agentRuntime.getSessionAgent>,
+): agent is NonNullable<ReturnType<typeof agentRuntime.getSessionAgent>> & { name: "hermes" } {
   return !!agent && agent.name === "hermes";
 }
 
