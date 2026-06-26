@@ -9,6 +9,23 @@ network_policies:
   weather:
     name: weather
     endpoints:
+      # Hosts the bundled OpenClaw weather skill actually calls (web_fetch + curl).
+      # wttr.in is primary; wttr.is is the documented fallback host (OpenClaw >= 2026.6.2).
+      # Paths are /<location> (city, region, airport code, or coordinates) and /:help.
+      - host: wttr.in
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: GET, path: "/**" }
+          - allow: { method: HEAD, path: "/**" }
+      - host: wttr.is
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: GET, path: "/**" }
+          - allow: { method: HEAD, path: "/**" }
       - host: api.open-meteo.com
         port: 443
         protocol: rest
