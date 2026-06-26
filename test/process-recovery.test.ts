@@ -1195,7 +1195,6 @@ hermes-box  127.0.0.1  8642  12346  running`;
       output: `SANDBOX  BIND  PORT  PID  STATUS\nhermes-box  127.0.0.1  18789  12345  running`,
     });
     vi.spyOn(openshellRuntime, "runOpenshell").mockReturnValue({ status: 0 } as never);
-
     const result = withFakeOpenshellBinary(() =>
       checkAndRecoverSandboxProcesses("hermes-box", { quiet: true }),
     );
