@@ -101,7 +101,10 @@ verify_stale_link_final_image_fails() {
     fail "Hermes final image unexpectedly built from stale-symlink base"
   fi
   grep -F ".openclaw is a symlink" "$SYMLINK_BUILD_LOG" >/dev/null \
-    || { cat "$SYMLINK_BUILD_LOG" >&2; fail "symlink failure did not mention .openclaw"; }
+    || {
+      cat "$SYMLINK_BUILD_LOG" >&2
+      fail "symlink failure did not mention .openclaw"
+    }
   docker run --rm --entrypoint sh "$STALE_LINK_BASE" -lc \
     'test "$(cat /tmp/stale-openclaw-target/sentinel)" = "keep"' \
     || fail "stale-symlink base sentinel was not preserved"
