@@ -21,16 +21,17 @@ export function classifyPresetProvenance(
 ): PresetProvenance {
   const name = presetName.trim().toLowerCase();
   const tierName = context.tierName ?? null;
+  const agentName = context.agentName?.trim().toLowerCase() ?? null;
   if (tierName) {
     const tierDef = getTier(tierName);
     if (tierDef?.presets.some((preset) => preset.name === name)) {
       return { source: "tier", tier: tierDef.name };
     }
   }
-  if (OPENCLAW_ONLY_POLICY_PRESETS.has(name)) {
+  if (agentName === "openclaw" && OPENCLAW_ONLY_POLICY_PRESETS.has(name)) {
     return { source: "agent", agent: "openclaw" };
   }
-  if (HERMES_TOOL_GATEWAY_PRESET_NAMES.has(name)) {
+  if (agentName === "hermes" && HERMES_TOOL_GATEWAY_PRESET_NAMES.has(name)) {
     return { source: "agent", agent: "hermes" };
   }
   return { source: "user" };

@@ -25,7 +25,6 @@ const TIER_FIXTURES: Record<string, FakeTier> = {
       { name: "huggingface", access: "read-write" },
       { name: "brew", access: "read-write" },
       { name: "brave", access: "read-write" },
-      { name: "weather", access: "read" },
     ],
   },
   open: {
@@ -52,7 +51,7 @@ describe("classifyPresetProvenance", () => {
       source: "tier",
       tier: "balanced",
     });
-    expect(classifyPresetProvenance("weather", { tierName: "balanced" })).toEqual({
+    expect(classifyPresetProvenance("brave", { tierName: "balanced" })).toEqual({
       source: "tier",
       tier: "balanced",
     });
@@ -65,7 +64,7 @@ describe("classifyPresetProvenance", () => {
     });
   });
 
-  it("classifies openclaw-pricing as agent-sourced for openclaw", () => {
+  it("classifies openclaw-pricing as agent-sourced for openclaw sandboxes", () => {
     expect(
       classifyPresetProvenance("openclaw-pricing", {
         tierName: "balanced",
@@ -74,22 +73,50 @@ describe("classifyPresetProvenance", () => {
     ).toEqual({ source: "agent", agent: "openclaw" });
   });
 
-  it("classifies openclaw-diagnostics-otel-local as openclaw-agent-sourced", () => {
+  it("classifies openclaw-diagnostics-otel-local as openclaw-agent-sourced on openclaw sandboxes", () => {
     expect(
       classifyPresetProvenance("openclaw-diagnostics-otel-local", {
         tierName: "balanced",
+        agentName: "openclaw",
       }),
     ).toEqual({ source: "agent", agent: "openclaw" });
   });
 
-  it("classifies nous-* gateway presets as hermes-agent-sourced", () => {
-    expect(classifyPresetProvenance("nous-web", { tierName: "open" })).toEqual({
+  it("classifies nous-* gateway presets as hermes-agent-sourced on hermes sandboxes", () => {
+    expect(
+      classifyPresetProvenance("nous-web", { tierName: "open", agentName: "hermes" }),
+    ).toEqual({
       source: "agent",
       agent: "hermes",
     });
-    expect(classifyPresetProvenance("nous-code", {})).toEqual({
+    expect(classifyPresetProvenance("nous-code", { agentName: "hermes" })).toEqual({
       source: "agent",
       agent: "hermes",
+    });
+  });
+
+  it("does not label openclaw-only presets as agent-sourced on hermes sandboxes", () => {
+    expect(
+      classifyPresetProvenance("openclaw-pricing", {
+        tierName: "open",
+        agentName: "hermes",
+      }),
+    ).toEqual({ source: "user" });
+  });
+
+  it("does not label hermes-only presets as agent-sourced on openclaw sandboxes", () => {
+    expect(
+      classifyPresetProvenance("nous-web", {
+        tierName: "balanced",
+        agentName: "openclaw",
+      }),
+    ).toEqual({ source: "user" });
+  });
+
+  it("does not label agent-only presets without a known agentName", () => {
+    expect(classifyPresetProvenance("openclaw-pricing", {})).toEqual({ source: "user" });
+    expect(classifyPresetProvenance("nous-web", { agentName: null })).toEqual({
+      source: "user",
     });
   });
 
@@ -107,7 +134,12 @@ describe("classifyPresetProvenance", () => {
   });
 
   it("normalises preset name casing", () => {
-    expect(classifyPresetProvenance("OPENCLAW-PRICING", { tierName: "balanced" })).toEqual({
+    expect(
+      classifyPresetProvenance("OPENCLAW-PRICING", {
+        tierName: "balanced",
+        agentName: "OpenClaw",
+      }),
+    ).toEqual({
       source: "agent",
       agent: "openclaw",
     });

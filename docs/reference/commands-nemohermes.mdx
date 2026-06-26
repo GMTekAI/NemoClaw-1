@@ -749,9 +749,11 @@ NemoClaw does not render network-policy rule bodies as prose in `policy-list` ou
 
 Each active preset is annotated with its provenance so you can tell why it is applied:
 
-- `[from <tier> tier]` — pre-selected by the chosen policy tier (see [Policy Tiers](../reference/network-policies#policy-tiers)).
-- `[from hermes agent]` — added by NemoClaw to satisfy the active agent's required integrations (for example Nous-hosted managed-tool gateway presets).
-- `[user-added]` — applied later through `policy-add` or by including the preset during onboarding outside the tier defaults.
+- `[from <tier> tier]` — the preset name matches an entry in the sandbox's current tier definition (see [Policy Tiers](../reference/network-policies#policy-tiers)).
+- `[from openclaw agent]` or `[from hermes agent]` — the preset name matches a NemoClaw-managed agent preset and the active agent matches that label (for example `openclaw-pricing` on an OpenClaw sandbox, or Nous-hosted gateway presets on a Hermes sandbox).
+- `[user-added]` — anything else: presets applied later through `policy-add`, presets that match no tier or agent default, or presets that match the opposite agent's reserved names on a sandbox running the other agent.
+
+Provenance tags are inferred from the sandbox's current tier and agent metadata at display time and are not persisted per preset. A preset whose name appears in the sandbox's current tier YAML is labelled `[from <tier> tier]` even when an operator added it manually with `policy-add` after onboarding, and OpenClaw-only or Hermes-only preset names are only labelled `[from <agent> agent]` when the active agent matches that label.
 
 ```bash
 nemohermes my-assistant policy-list

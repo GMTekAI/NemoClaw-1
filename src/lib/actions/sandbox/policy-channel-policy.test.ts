@@ -425,4 +425,49 @@ describe("listSandboxPolicies", () => {
     expect(output).toMatch(/○ pypi —/);
     expect(output).not.toMatch(/○ pypi \[/);
   });
+
+  it("does not label openclaw-pricing as agent-sourced on a Hermes sandbox", () => {
+    arrangeListing({
+      appliedNames: ["openclaw-pricing"],
+      gatewayNames: ["openclaw-pricing"],
+      tier: "balanced",
+      agent: "hermes",
+    });
+
+    listSandboxPolicies("test-sandbox");
+
+    const output = printedText();
+    expect(output).toContain("● openclaw-pricing [user-added]");
+    expect(output).not.toContain("[from openclaw agent]");
+  });
+
+  it("does not label nous-* presets as agent-sourced on an OpenClaw sandbox", () => {
+    arrangeListing({
+      appliedNames: ["nous-web"],
+      gatewayNames: ["nous-web"],
+      tier: "balanced",
+      agent: "openclaw",
+    });
+
+    listSandboxPolicies("test-sandbox");
+
+    const output = printedText();
+    expect(output).toContain("● nous-web [user-added]");
+    expect(output).not.toContain("[from hermes agent]");
+  });
+
+  it("falls back to user-added when policyTier is missing", () => {
+    arrangeListing({
+      appliedNames: ["npm"],
+      gatewayNames: ["npm"],
+      tier: null,
+      agent: "openclaw",
+    });
+
+    listSandboxPolicies("test-sandbox");
+
+    const output = printedText();
+    expect(output).toContain("● npm [user-added]");
+    expect(output).not.toContain("[from balanced tier]");
+  });
 });
