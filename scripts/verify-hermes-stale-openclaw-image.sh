@@ -52,9 +52,6 @@ require_safe_image_ref() {
   if [[ "$ref" == ghcr.io/nvidia/nemoclaw/hermes-sandbox-base* ]]; then
     fail "Hermes base image ref is not an allowed Hermes base form: $ref"
   fi
-  if [[ ! "$ref" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*([:@][A-Za-z0-9._:-]+)?$ ]]; then
-    fail "Hermes base image ref is not a supported Docker reference: $ref"
-  fi
   fail "Hermes base image ref is outside the allowed Hermes base images: $ref"
 }
 

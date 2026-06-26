@@ -78,7 +78,7 @@ describe("Hermes stale OpenClaw guardrails", () => {
     fs.mkdirSync(fakeBin);
     fs.writeFileSync(
       path.join(fakeBin, "docker"),
-      "#!/usr/bin/env bash\nprintf 'docker %s\\n' \"$*\" >> \"$NEMOCLAW_FAKE_DOCKER_LOG\"\nexit 99\n",
+      '#!/usr/bin/env bash\nprintf \'docker %s\\n\' "$*" >> "$NEMOCLAW_FAKE_DOCKER_LOG"\nexit 99\n',
       { mode: 0o700 },
     );
 
