@@ -122,6 +122,7 @@ function validateOpenShellStyleSandboxJwt(options: {
   kid: string;
   gatewayId: string;
   now: number;
+  expectedSandboxId?: string;
 }): Record<string, unknown> | null {
   const [headerPart, payloadPart, signaturePart] = options.token.split(".");
   expect(headerPart, "JWT header segment").toBeTruthy();
@@ -137,6 +138,7 @@ function validateOpenShellStyleSandboxJwt(options: {
         publicKeyPath: options.publicKeyPath,
         gatewayId: options.gatewayId,
         now: options.now,
+        expectedSandboxId: options.expectedSandboxId,
       })
     : null;
 }
@@ -148,6 +150,7 @@ function validateOpenShellStyleSandboxJwtSignature(options: {
   publicKeyPath: string;
   gatewayId: string;
   now: number;
+  expectedSandboxId?: string;
 }): Record<string, unknown> {
   const signingInput = `${options.headerPart}.${options.payloadPart}`;
   const publicKey = createPublicKey(fs.readFileSync(options.publicKeyPath, "utf-8"));
@@ -163,6 +166,11 @@ function validateOpenShellStyleSandboxJwtSignature(options: {
   const identity = `openshell-gateway:${options.gatewayId}`;
   expect(payload.iss).toBe(identity);
   expect(payload.aud).toBe(identity);
+  if (options.expectedSandboxId !== undefined) {
+    expect(payload.sandbox_id, "OpenShell-style sandbox JWT sandbox binding").toBe(
+      options.expectedSandboxId,
+    );
+  }
   expect(String(payload.sub)).toBe(`${SANDBOX_JWT_SUBJECT_PREFIX}${payload.sandbox_id}`);
   const exp = typeof payload.exp === "number" ? payload.exp : Number.NaN;
   expect(exp === 0 || exp >= options.now - 60, "OpenShell-style sandbox JWT expiry").toBe(true);
@@ -374,6 +382,7 @@ describe("docker-driver-gateway-config", () => {
         kid,
         gatewayId,
         now,
+        expectedSandboxId: sandboxId,
       });
       expect(payload).toMatchObject({
         sandbox_id: sandboxId,
@@ -381,6 +390,16 @@ describe("docker-driver-gateway-config", () => {
         aud: `openshell-gateway:${gatewayId}`,
       });
       expect(payload?.exp).toBe(now + ttlSecs);
+      expect(() =>
+        validateOpenShellStyleSandboxJwt({
+          token,
+          publicKeyPath,
+          kid,
+          gatewayId,
+          now,
+          expectedSandboxId: `${sandboxId}-other`,
+        }),
+      ).toThrow("OpenShell-style sandbox JWT sandbox binding");
 
       expect(
         validateOpenShellStyleSandboxJwt({

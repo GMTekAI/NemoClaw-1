@@ -536,6 +536,25 @@ function skipUnavailableProbeImage(result: SpawnResult, skip: SkipFn): void {
   }
 }
 
+function probeDidNotReturnSandboxConfig(result: SpawnResult): boolean {
+  if (result.status !== 0) return true;
+  try {
+    const parsed = JSON.parse(result.stdout.trim()) as { grpcStatus?: string; httpStatus?: number };
+    return parsed.httpStatus !== 200 || parsed.grpcStatus !== "0";
+  } catch {
+    return false;
+  }
+}
+
+function createDockerBindableTempDir(prefix: string): string {
+  const root =
+    process.env.NEMOCLAW_E2E_DOCKER_BIND_TMP ??
+    path.join(os.homedir(), ".cache", "nemoclaw", "e2e-tmp");
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  fs.chmodSync(root, 0o700);
+  return fs.mkdtempSync(path.join(root, prefix));
+}
+
 export async function runOpenShellGatewayAuthSourceContractScenario({
   artifacts,
   cleanup,
@@ -552,7 +571,7 @@ export async function runOpenShellGatewayAuthSourceContractScenario({
   await requireDockerDaemon({ dockerBin, host, skip });
 
   const port = await pickPort();
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-openshell-auth-contract-"));
+  const stateDir = createDockerBindableTempDir("nemoclaw-openshell-auth-contract-");
   const networkName = `nemoclaw-auth-contract-${process.pid}-${port}`;
   cleanup.add("remove OpenShell auth contract temp state", () =>
     fs.rmSync(stateDir, { recursive: true, force: true }),
@@ -605,8 +624,9 @@ export async function runOpenShellGatewayAuthSourceContractScenario({
       "NemoClaw-generated OPENSHELL_GATEWAY_CONFIG enables local mTLS and sandbox JWT auth",
       "inherited OPENSHELL_DISABLE_GATEWAY_AUTH is scrubbed before launch",
       "no-token Docker-origin access to user-callable gateway APIs is rejected or unreachable",
-      "mTLS-only Docker-origin access to sandbox-only gateway APIs is rejected",
+      "mTLS-only Docker-origin access without sandbox JWT does not return sandbox config",
       "valid sandbox JWT access from Docker origin to sandbox-allowlisted APIs reaches OpenShell auth",
+      "a sandbox JWT minted for one sandbox cannot access another sandbox config",
     ],
     gatewayBin,
     networkName,
@@ -651,9 +671,10 @@ export async function runOpenShellGatewayAuthSourceContractScenario({
   });
   await artifacts.writeJson("mtls-only-container-probe.json", mtlsOnlyContainerCall);
   skipUnavailableProbeImage(mtlsOnlyContainerCall, skip);
-  expect(noTokenProbeWasRejected(mtlsOnlyContainerCall), commandOutput(mtlsOnlyContainerCall)).toBe(
-    true,
-  );
+  expect(
+    probeDidNotReturnSandboxConfig(mtlsOnlyContainerCall),
+    commandOutput(mtlsOnlyContainerCall),
+  ).toBe(true);
 
   const sandboxToken = mintSandboxJwt({ configPath, sandboxId });
   const sandboxCall = await callGrpc({
@@ -683,6 +704,21 @@ export async function runOpenShellGatewayAuthSourceContractScenario({
   expect(sandboxContainerResult.httpStatus, JSON.stringify(sandboxContainerResult)).toBe(200);
   expect(sandboxContainerResult.grpcStatus, JSON.stringify(sandboxContainerResult)).toBeDefined();
   expect(["7", "16"]).not.toContain(sandboxContainerResult.grpcStatus);
+
+  const crossSandboxContainerCall = sandboxTokenContainerProbe({
+    authorization: `Bearer ${sandboxToken}`,
+    dockerBin,
+    networkName,
+    payload: getSandboxConfigRequest("sandbox-auth-contract-other"),
+    port,
+    stateDir,
+  });
+  await artifacts.writeJson("cross-sandbox-jwt-container-probe.json", crossSandboxContainerCall);
+  skipUnavailableProbeImage(crossSandboxContainerCall, skip);
+  expect(
+    probeDidNotReturnSandboxConfig(crossSandboxContainerCall),
+    commandOutput(crossSandboxContainerCall),
+  ).toBe(true);
 
   await artifacts.writeText("openshell-gateway.log", gatewayLog);
 }

@@ -713,6 +713,190 @@ function validateOpenShellVersionPinVitestJob(
   }
 }
 
+function validateOpenShellGatewayAuthContractVitestJob(
+  errors: string[],
+  jobs: WorkflowRecord,
+): void {
+  const jobName = "openshell-gateway-auth-contract-vitest";
+  const job = asRecord(jobs[jobName]);
+  if (Object.keys(job).length === 0) {
+    errors.push("workflow missing openshell-gateway-auth-contract-vitest job");
+    return;
+  }
+
+  if (job["runs-on"] !== "ubuntu-latest") {
+    errors.push(
+      "openshell-gateway-auth-contract-vitest job must run on ubuntu-latest",
+    );
+  }
+  validateFreeStandingJobSelector(
+    errors,
+    jobs,
+    jobName,
+    "openshell-gateway-auth-contract",
+  );
+
+  const jobEnv = asRecord(job.env);
+  if (jobEnv.NEMOCLAW_RUN_E2E_SCENARIOS !== "1") {
+    errors.push(
+      "openshell-gateway-auth-contract-vitest job must set NEMOCLAW_RUN_E2E_SCENARIOS=1",
+    );
+  }
+  if (
+    jobEnv.E2E_ARTIFACT_DIR !==
+    "${{ github.workspace }}/e2e-artifacts/vitest/openshell-gateway-auth-contract"
+  ) {
+    errors.push(
+      "openshell-gateway-auth-contract-vitest job must write artifacts under e2e-artifacts/vitest/openshell-gateway-auth-contract",
+    );
+  }
+  requireEnvDoesNotExposeSecret(
+    errors,
+    "openshell-gateway-auth-contract-vitest job",
+    jobEnv,
+    "NVIDIA_INFERENCE_API_KEY",
+  );
+
+  const steps = asSteps(job.steps);
+  requireNoDispatchInputInterpolation(errors, steps);
+  for (const step of steps) {
+    requireEnvDoesNotExposeSecret(
+      errors,
+      `openshell-gateway-auth-contract-vitest step '${step.name ?? step.uses ?? "<unnamed>"}'`,
+      asRecord(step.env),
+      "NVIDIA_INFERENCE_API_KEY",
+    );
+  }
+
+  const checkout = steps.find((step) =>
+    stringValue(step.uses).startsWith("actions/checkout@"),
+  );
+  if (!checkout) {
+    errors.push(
+      "openshell-gateway-auth-contract-vitest job missing checkout step",
+    );
+  }
+  requireFullShaAction(
+    errors,
+    checkout,
+    "openshell-gateway-auth-contract-vitest checkout",
+  );
+  if (asRecord(checkout?.with)["persist-credentials"] !== false) {
+    errors.push(
+      "openshell-gateway-auth-contract-vitest checkout step must set persist-credentials=false",
+    );
+  }
+
+  const setupNode = namedStep(steps, "Set up Node");
+  if (!setupNode) {
+    errors.push(
+      "openshell-gateway-auth-contract-vitest job missing step: Set up Node",
+    );
+  }
+  requireFullShaAction(
+    errors,
+    setupNode,
+    "openshell-gateway-auth-contract-vitest setup-node",
+  );
+
+  const installRootDependencies = requireJobStep(
+    errors,
+    jobName,
+    steps,
+    "Install root dependencies",
+  );
+  requireRunContains(
+    errors,
+    installRootDependencies,
+    "npm ci --ignore-scripts",
+  );
+
+  const buildCli = requireJobStep(errors, jobName, steps, "Build CLI");
+  requireRunContains(errors, buildCli, "npm run build:cli");
+
+  const installOpenShell = requireJobStep(
+    errors,
+    jobName,
+    steps,
+    "Install OpenShell CLI",
+  );
+  requireRunContains(
+    errors,
+    installOpenShell,
+    "bash scripts/install-openshell.sh",
+  );
+
+  const runVitest = requireJobStep(
+    errors,
+    jobName,
+    steps,
+    "Run OpenShell gateway auth contract live test",
+  );
+  requireRunContains(
+    errors,
+    runVitest,
+    'export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"',
+  );
+  requireRunContains(
+    errors,
+    runVitest,
+    'OPENSHELL_GATEWAY_BIN="$(command -v openshell-gateway)"',
+  );
+  requireRunContains(errors, runVitest, "export OPENSHELL_GATEWAY_BIN");
+  requireRunContains(
+    errors,
+    runVitest,
+    "npx vitest run --project e2e-scenarios-live",
+  );
+  requireRunContains(
+    errors,
+    runVitest,
+    "test/e2e-scenario/live/openshell-gateway-auth-source-contract.test.ts",
+  );
+
+  const upload = requireJobStep(
+    errors,
+    jobName,
+    steps,
+    "Upload OpenShell gateway auth contract artifacts",
+  );
+  requireFullShaAction(
+    errors,
+    upload,
+    "openshell-gateway-auth-contract-vitest upload-artifact",
+  );
+  const uploadWith = asRecord(upload?.with);
+  if (
+    uploadWith.name !==
+    "e2e-vitest-scenarios-openshell-gateway-auth-contract"
+  ) {
+    errors.push(
+      "openshell-gateway-auth-contract-vitest artifact upload name must be stable",
+    );
+  }
+  const uploadPath = stringValue(uploadWith.path);
+  requireUploadPathContains(
+    errors,
+    uploadPath,
+    "e2e-artifacts/vitest/openshell-gateway-auth-contract/",
+  );
+  if (uploadWith["include-hidden-files"] !== false) {
+    errors.push(
+      "openshell-gateway-auth-contract-vitest artifact upload must set include-hidden-files: false",
+    );
+  }
+  if (uploadWith["if-no-files-found"] !== "ignore") {
+    errors.push(
+      "openshell-gateway-auth-contract-vitest artifact upload must ignore missing fixture artifacts",
+    );
+  }
+  if (uploadWith["retention-days"] !== 14) {
+    errors.push(
+      "openshell-gateway-auth-contract-vitest artifact upload retention-days must be 14",
+    );
+  }
+}
+
 function validateSkillAgentVitestJob(
   errors: string[],
   jobs: WorkflowRecord,
@@ -7717,6 +7901,7 @@ export function validateE2eVitestScenariosWorkflowBoundary(
   }
 
   validateOpenShellVersionPinVitestJob(errors, jobs);
+  validateOpenShellGatewayAuthContractVitestJob(errors, jobs);
   validateOnboardNegativePathsVitestJob(errors, jobs);
   validateSkillAgentVitestJob(errors, jobs);
   validateFreeStandingJobSelector(errors, jobs, "credential-migration-vitest");

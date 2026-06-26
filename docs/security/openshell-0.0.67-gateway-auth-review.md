@@ -48,7 +48,7 @@ Package-managed Docker-driver gateways also reject `NEMOCLAW_GATEWAY_BIND_ADDRES
 `test/e2e-scenario/live/openshell-gateway-auth-source-contract.test.ts` is the live/source-contract scenario for this PR. It uses OpenShell 0.0.67 plus NemoClaw-generated `OPENSHELL_GATEWAY_CONFIG` and verifies:
 
 - no-token Docker sandbox-origin access to a user-callable gateway API is rejected or unreachable;
-- valid sandbox JWT access from Docker origin to an allowlisted sandbox method reaches OpenShell auth over `host.openshell.internal` with the generated guest mTLS material, and is not rejected as unauthenticated or cross-sandbox;
+- valid sandbox JWT access from Docker origin to an allowlisted sandbox method reaches OpenShell auth over `host.openshell.internal` with the generated guest mTLS material, and a token minted for one sandbox is rejected when it requests another sandbox config;
 - inherited `OPENSHELL_DISABLE_GATEWAY_AUTH=true` remains scrubbed from the launch env.
 
 Local run against `NVIDIA/OpenShell@v0.0.67`:
