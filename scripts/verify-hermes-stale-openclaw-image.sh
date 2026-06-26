@@ -4,6 +4,8 @@
 
 set -euo pipefail
 
+# Bash is required for process-substitution log mirroring below and for the
+# validation-only test path.
 LOG_PATH="${NEMOCLAW_HERMES_STALE_OPENCLAW_IMAGE_LOG:-/tmp/nemoclaw-hermes-stale-openclaw-image.log}"
 : >"$LOG_PATH"
 exec > >(tee -a "$LOG_PATH") 2>&1
@@ -35,26 +37,45 @@ require_safe_image_ref() {
       fail "Hermes base image ref contains unsafe characters: $ref"
       ;;
   esac
+  if [[ "$ref" == nemoclaw-hermes-base-local ]]; then
+    return 0
+  fi
+  if [[ "$ref" =~ ^ghcr\.io/nvidia/nemoclaw/hermes-sandbox-base(@sha256:[a-f0-9]{64}|:[A-Za-z0-9._-]+)$ ]]; then
+    return 0
+  fi
+  if [[ "$ref" == ghcr.io/nvidia/nemoclaw/hermes-sandbox-base@sha256:* ]]; then
+    fail "Hermes base image ref has an invalid sha256 digest: $ref"
+  fi
+  if [[ "$ref" == ghcr.io/nvidia/nemoclaw/hermes-sandbox-base:* ]]; then
+    fail "Hermes base image ref has an invalid tag: $ref"
+  fi
+  if [[ "$ref" == ghcr.io/nvidia/nemoclaw/hermes-sandbox-base* ]]; then
+    fail "Hermes base image ref is not an allowed Hermes base form: $ref"
+  fi
   if [[ ! "$ref" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*([:@][A-Za-z0-9._:-]+)?$ ]]; then
     fail "Hermes base image ref is not a supported Docker reference: $ref"
   fi
+  fail "Hermes base image ref is outside the allowed Hermes base images: $ref"
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 RUN_ID="${GITHUB_RUN_ID:-local}-$$"
-BASE_IMAGE="${NEMOCLAW_HERMES_BASE_IMAGE:-${HERMES_BASE_IMAGE:-}}"
-require_safe_image_ref "$BASE_IMAGE"
 STALE_DIR_BASE="nemoclaw-hermes-stale-openclaw-dir-base:${RUN_ID}"
 STALE_DIR_IMAGE="nemoclaw-hermes-stale-openclaw-dir:${RUN_ID}"
 STALE_LINK_BASE="nemoclaw-hermes-stale-openclaw-link-base:${RUN_ID}"
 STALE_LINK_IMAGE="nemoclaw-hermes-stale-openclaw-link:${RUN_ID}"
-SYMLINK_BUILD_LOG="$(mktemp -t nemoclaw-hermes-stale-openclaw-build.XXXXXX.log)"
+SYMLINK_BUILD_LOG=""
+CLEANUP_DOCKER_IMAGES=0
 
 cleanup() {
-  rm -f "$SYMLINK_BUILD_LOG"
-  docker rmi -f "$STALE_DIR_IMAGE" "$STALE_DIR_BASE" "$STALE_LINK_BASE" "$STALE_LINK_IMAGE" \
-    >/dev/null 2>&1 || true
+  if [ -n "$SYMLINK_BUILD_LOG" ]; then
+    rm -f "$SYMLINK_BUILD_LOG"
+  fi
+  if [ "$CLEANUP_DOCKER_IMAGES" = "1" ]; then
+    docker rmi -f "$STALE_DIR_IMAGE" "$STALE_DIR_BASE" "$STALE_LINK_BASE" "$STALE_LINK_IMAGE" \
+      >/dev/null 2>&1 || true
+  fi
 }
 trap cleanup EXIT
 
@@ -126,8 +147,22 @@ verify_stale_link_final_image_fails() {
   pass "Hermes final image refuses symlinked stale /sandbox/.openclaw"
 }
 
-require_docker
-build_stale_dir_base
-verify_stale_dir_final_image
-build_stale_link_base
-verify_stale_link_final_image_fails
+main() {
+  if [ "${1:-}" = "--validate-ref-only" ]; then
+    require_safe_image_ref "${2:-}"
+    pass "Hermes base image ref is allowed"
+    return 0
+  fi
+
+  BASE_IMAGE="${NEMOCLAW_HERMES_BASE_IMAGE:-${HERMES_BASE_IMAGE:-}}"
+  require_safe_image_ref "$BASE_IMAGE"
+  require_docker
+  SYMLINK_BUILD_LOG="$(mktemp -t nemoclaw-hermes-stale-openclaw-build.XXXXXX.log)"
+  CLEANUP_DOCKER_IMAGES=1
+  build_stale_dir_base
+  verify_stale_dir_final_image
+  build_stale_link_base
+  verify_stale_link_final_image_fails
+}
+
+main "$@"

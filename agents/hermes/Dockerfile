@@ -255,11 +255,16 @@ USER root
 # invalid state baked into already-published bases.
 # NEMOCLAW_STALE_OPENCLAW_BASE_DIGEST is the removal trigger: update or remove
 # this cleanup when the Dockerfile's default pinned Hermes base digest advances
-# past the stale layout. OpenShell starts the sandbox as the sandbox user, so
-# runtime migration cannot rely on root privileges inside the pod. Regression
-# coverage lives in scripts/verify-hermes-stale-openclaw-image.sh.
+# past the stale layout. Official GHCR bases must be digest-pinned while this
+# temporary repair exists; local and verifier-built bases are intentionally
+# exempt because their digest is not an upstream publication boundary. OpenShell
+# starts the sandbox as the sandbox user, so runtime migration cannot rely on
+# root privileges inside the pod. Regression coverage lives in
+# scripts/verify-hermes-stale-openclaw-image.sh.
 # Refuse symlinked stale state before rm -rf so a compromised base cannot point
 # cleanup outside the Hermes sandbox root.
+# Docker image layers cannot persist bind mounts at /sandbox/.openclaw, so the
+# build-time traversal threat here is a symlinked path baked into the base layer.
 # hadolint ignore=DL4006
 RUN set -eu; \
     stale_base_digest="${NEMOCLAW_STALE_OPENCLAW_BASE_DIGEST:?}"; \
@@ -269,6 +274,10 @@ RUN set -eu; \
                 echo "ERROR: remove stale Hermes .openclaw cleanup or update the tracked stale-base digest; BASE_IMAGE=$BASE_IMAGE tracked=$stale_base_digest" >&2; \
                 exit 1; \
             fi; \
+            ;; \
+        ghcr.io/nvidia/nemoclaw/hermes-sandbox-base:*) \
+            echo "ERROR: use an immutable Hermes base digest while stale .openclaw cleanup is present; BASE_IMAGE=$BASE_IMAGE" >&2; \
+            exit 1; \
             ;; \
     esac; \
     config_dir=/sandbox/.hermes; \
