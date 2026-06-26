@@ -446,7 +446,7 @@ function recoverSandboxProcesses(
     const restartPort = isValidPort(agent.healthProbe?.port)
       ? agent.healthProbe.port
       : dashboardPort;
-    const script = agentRuntime.buildHermesGatewayRestartScript(agent, restartPort);
+    const script = agentRuntime.buildHermesGatewayRecoveryScript(agent, restartPort);
     const execResult = executeSandboxExecCommand(sandboxName, script, 30000);
     if (hasRecoveryMarker(execResult)) return true;
     const failure = classifyGatewayRestartFailure(execResult);

@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 // Import from compiled dist/ so coverage is attributed correctly.
 import {
   buildHermesDashboardProcessRecoveryScript,
+  buildHermesGatewayRecoveryScript,
   buildHermesGatewayRestartScript,
   buildManualRecoveryCommand,
   buildOpenClawGatewayRestartScript,
@@ -448,6 +449,19 @@ describe("buildHermesGatewayRestartScript (#2426)", () => {
     expect(script).toContain("TCP-LISTEN");
     expect(script).toContain("18642");
     expect(script).toContain("8642");
+  });
+});
+
+describe("buildHermesGatewayRecoveryScript (#2426)", () => {
+  it("keeps recover idempotent while relaunching stopped Hermes gateways as gateway", () => {
+    const script = buildHermesGatewayRecoveryScript(hermesAgent, 8642);
+
+    expect(script).toContain("ALREADY_RUNNING");
+    expect(script).toContain("gosu 'gateway'");
+    expect(script).toContain("HERMES_HOME=/sandbox/.hermes");
+    expect(script).toContain('"$AGENT_BIN" gateway run');
+    expect(script).not.toContain('"$AGENT_BIN" gateway run --port 8642');
+    expect(script).not.toContain("_NEMOCLAW_RESTART_HEALTH_PORT");
   });
 });
 

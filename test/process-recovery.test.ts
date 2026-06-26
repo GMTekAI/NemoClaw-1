@@ -681,7 +681,8 @@ hermes-box  127.0.0.1  18789  12345  running`;
       const execLog = execShells.join("\n");
       expect(execLog).toContain("gosu 'gateway'");
       expect(execLog).toContain("HERMES_HOME=/sandbox/.hermes");
-      expect(execLog).toContain("_NEMOCLAW_RESTART_HEALTH_PORT=8642");
+      expect(execLog).toContain("ALREADY_RUNNING");
+      expect(execLog).not.toContain("_NEMOCLAW_RESTART_HEALTH_PORT=8642");
     } finally {
       previousWaitSeconds === undefined
         ? delete process.env.NEMOCLAW_GATEWAY_RECOVERY_WAIT_SECONDS
