@@ -28,6 +28,7 @@ const UNPINNED_OPENCLAW_VERSION = "2026.6.10";
 const PINNED_OPENCLAW_VERSION = "2026.6.9";
 const PINNED_OPENCLAW_INTEGRITY =
   "sha512-y0PGUdE87S8QtQXABPDL0CjNKhH3q/R1h9/WiRQkhVCGSBVhs63/M1iZn2DYVyJCAbDyMz3KNyAE0WzSQIWCRg==";
+const PINNED_OPENCLAW_TARBALL = "https://registry.npmjs.org/openclaw/-/openclaw-2026.6.9.tgz";
 const PINNED_CODEX_ACP_VERSION = "0.11.1";
 const PINNED_CODEX_ACP_TARBALL =
   "https://registry.npmjs.org/@zed-industries/codex-acp/-/codex-acp-0.11.1.tgz";
@@ -50,8 +51,12 @@ const PINNED_WECHAT_PLUGIN_INTEGRITY =
 const LEGACY_REBUILD_OPENCLAW_VERSION = "2026.3.11";
 const LEGACY_REBUILD_OPENCLAW_INTEGRITY =
   "sha512-bxwiBmHPakwfpY5tqC9lrV5TCu5PKf0c1bHNc3nhrb+pqKcPEWV4zOjDVFLQUHr98ihgWA+3pacy4b3LQ8wduQ==";
+const LEGACY_REBUILD_OPENCLAW_TARBALL =
+  "https://registry.npmjs.org/openclaw/-/openclaw-2026.3.11.tgz";
 const LEGACY_GATEWAY_UPGRADE_OPENCLAW_INTEGRITY =
   "sha512-W6u4XeIIP4+uG4DYV9G3JeS6QNuKwfhQIej1GIoL4BdcnUFgrnB8kHYNXL3MxiHRKuhZB9OYwUMGs8jKFZR/Vg==";
+const LEGACY_GATEWAY_UPGRADE_OPENCLAW_TARBALL =
+  "https://registry.npmjs.org/openclaw/-/openclaw-2026.4.24.tgz";
 
 function extractRunBlock(file: string, startMarker: string, endMarker: string): string {
   const source = fs.readFileSync(file, "utf-8");
@@ -80,9 +85,12 @@ function runInstallBlock(
     openclawVersion?: string;
     committedIntegrity?: string;
     registryIntegrity?: string;
+    registryTarball?: string;
+    packIntegrity?: string;
     codexAcpCommittedIntegrity?: string;
     codexAcpRegistryIntegrity?: string;
     codexAcpRegistryTarball?: string;
+    codexAcpPackIntegrity?: string;
     allowLegacyFixture?: boolean;
   } = {},
 ) {
@@ -90,9 +98,12 @@ function runInstallBlock(
     openclawVersion = UNPINNED_OPENCLAW_VERSION,
     committedIntegrity = "sha512-reviewed-pin",
     registryIntegrity = committedIntegrity,
+    registryTarball = PINNED_OPENCLAW_TARBALL,
+    packIntegrity = committedIntegrity,
     codexAcpCommittedIntegrity = PINNED_CODEX_ACP_INTEGRITY,
     codexAcpRegistryIntegrity = codexAcpCommittedIntegrity,
     codexAcpRegistryTarball = PINNED_CODEX_ACP_TARBALL,
+    codexAcpPackIntegrity = codexAcpCommittedIntegrity,
     allowLegacyFixture = false,
   } = options;
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-openclaw-integrity-"));
@@ -105,9 +116,12 @@ function runInstallBlock(
     `call_log=${JSON.stringify(log)}`,
     `OPENCLAW_VERSION=${JSON.stringify(openclawVersion)}`,
     `OPENCLAW_2026_6_9_INTEGRITY=${JSON.stringify(committedIntegrity)}`,
+    `OPENCLAW_2026_6_9_TARBALL=${JSON.stringify(PINNED_OPENCLAW_TARBALL)}`,
     `NEMOCLAW_E2E_FIXTURE_LEGACY_OPENCLAW=${allowLegacyFixture ? "1" : "0"}`,
     `OPENCLAW_2026_3_11_INTEGRITY=${JSON.stringify(LEGACY_REBUILD_OPENCLAW_INTEGRITY)}`,
+    `OPENCLAW_2026_3_11_TARBALL=${JSON.stringify(LEGACY_REBUILD_OPENCLAW_TARBALL)}`,
     `OPENCLAW_2026_4_24_INTEGRITY=${JSON.stringify(LEGACY_GATEWAY_UPGRADE_OPENCLAW_INTEGRITY)}`,
+    `OPENCLAW_2026_4_24_TARBALL=${JSON.stringify(LEGACY_GATEWAY_UPGRADE_OPENCLAW_TARBALL)}`,
     `CODEX_ACP_0_11_1_INTEGRITY=${JSON.stringify(codexAcpCommittedIntegrity)}`,
     'openclaw() { if [ "${1:-}" = "--version" ]; then printf \'openclaw 2026.3.11\\n\'; else return 127; fi; }',
     "codex-acp() { :; }",
@@ -117,6 +131,21 @@ function runInstallBlock(
     `  if [ "\${1:-}" = "view" ] && [ "\${2:-}" = "@zed-industries/codex-acp@${PINNED_CODEX_ACP_VERSION}" ] && [ "\${3:-}" = "dist.integrity" ]; then printf "%s\\n" ${JSON.stringify(codexAcpRegistryIntegrity)}; return 0; fi`,
     `  if [ "\${1:-}" = "view" ] && [ "\${2:-}" = "@zed-industries/codex-acp@${PINNED_CODEX_ACP_VERSION}" ] && [ "\${3:-}" = "dist.tarball" ]; then printf "%s\\n" ${JSON.stringify(codexAcpRegistryTarball)}; return 0; fi`,
     `  if [ "\${1:-}" = "view" ] && [ "\${3:-}" = "dist.integrity" ]; then printf "%s\\n" ${JSON.stringify(registryIntegrity)}; return 0; fi`,
+    `  if [ "\${1:-}" = "view" ] && [ "\${3:-}" = "dist.tarball" ]; then printf "%s\\n" ${JSON.stringify(registryTarball)}; return 0; fi`,
+    '  if [ "${1:-}" = "pack" ]; then',
+    '    pack_spec="${2:-}"; pack_dir="";',
+    '    while [ "$#" -gt 0 ]; do',
+    '      if [ "${1:-}" = "--pack-destination" ]; then pack_dir="${2:-}"; shift 2; continue; fi',
+    "      shift",
+    "    done",
+    '    test -n "$pack_dir";',
+    '    pack_file="$(basename "$pack_spec")";',
+    '    case "$pack_file" in *.tgz) ;; *) pack_file="${pack_file}.tgz" ;; esac',
+    '    printf "fake tarball" > "$pack_dir/$pack_file";',
+    `    case "$pack_spec" in *"codex-acp"*) pack_integrity=${JSON.stringify(codexAcpPackIntegrity)} ;; *) pack_integrity=${JSON.stringify(packIntegrity)} ;; esac`,
+    '    printf \'[{"filename":"%s","integrity":"%s"}]\\n\' "$pack_file" "$pack_integrity";',
+    "    return 0",
+    "  fi",
     "}",
     "pip3() { return 0; }",
     command
@@ -177,10 +206,24 @@ function runOptionalOpenClawPluginBlock(
     'openclaw() { printf \'openclaw %s\\n\' "$*" >> "$call_log"; }',
     "npm() {",
     '  printf "npm %s\\n" "$*" >> "$call_log";',
-    '  if [ "${1:-}" != "view" ] || [ "${3:-}" != "dist.integrity" ]; then exit 1; fi',
+    '  if [ "${1:-}" = "pack" ]; then',
+    '    pack_spec="${2:-}"; pack_dir="";',
+    '    while [ "$#" -gt 0 ]; do',
+    '      if [ "${1:-}" = "--pack-destination" ]; then pack_dir="${2:-}"; shift 2; continue; fi',
+    "      shift",
+    "    done",
+    '    test -n "$pack_dir"; pack_file="$(basename "$pack_spec")";',
+    '    printf "fake plugin tarball" > "$pack_dir/$pack_file";',
+    '    case "$pack_spec" in',
+    `      *"diagnostics-otel"*) printf '[{"filename":"%s","integrity":"%s"}]\\n' "$pack_file" ${JSON.stringify(diagnosticsRegistryIntegrity)}; return 0 ;;`,
+    `      *"brave-plugin"*) printf '[{"filename":"%s","integrity":"%s"}]\\n' "$pack_file" ${JSON.stringify(braveRegistryIntegrity)}; return 0 ;;`,
+    "    esac",
+    "    return 1",
+    "  fi",
+    '  if [ "${1:-}" != "view" ]; then exit 1; fi',
     '  case "${2:-}" in',
-    `    "@openclaw/diagnostics-otel@${PINNED_OPENCLAW_VERSION}") printf "%s\\n" ${JSON.stringify(diagnosticsRegistryIntegrity)}; return 0 ;;`,
-    `    "@openclaw/brave-plugin@${PINNED_OPENCLAW_VERSION}") printf "%s\\n" ${JSON.stringify(braveRegistryIntegrity)}; return 0 ;;`,
+    `    "@openclaw/diagnostics-otel@${PINNED_OPENCLAW_VERSION}") if [ "\${3:-}" = "dist.integrity" ]; then printf "%s\\n" ${JSON.stringify(diagnosticsRegistryIntegrity)}; return 0; fi; if [ "\${3:-}" = "dist.tarball" ]; then printf "%s\\n" "https://registry.npmjs.org/@openclaw/diagnostics-otel/-/diagnostics-otel-2026.6.9.tgz"; return 0; fi ;;`,
+    `    "@openclaw/brave-plugin@${PINNED_OPENCLAW_VERSION}") if [ "\${3:-}" = "dist.integrity" ]; then printf "%s\\n" ${JSON.stringify(braveRegistryIntegrity)}; return 0; fi; if [ "\${3:-}" = "dist.tarball" ]; then printf "%s\\n" "https://registry.npmjs.org/@openclaw/brave-plugin/-/brave-plugin-2026.6.9.tgz"; return 0; fi ;;`,
     "  esac",
     "  return 1",
     "}",
@@ -200,6 +243,7 @@ describe("OpenClaw npm integrity pins", () => {
 
     expect(reviewNote).toContain(`openclaw@${PINNED_OPENCLAW_VERSION}`);
     expect(reviewNote).toContain(PINNED_OPENCLAW_INTEGRITY);
+    expect(reviewNote).toContain(PINNED_OPENCLAW_TARBALL);
     expect(reviewNote).toContain(`@zed-industries/codex-acp@${PINNED_CODEX_ACP_VERSION}`);
     expect(reviewNote).toContain(PINNED_CODEX_ACP_TARBALL);
     expect(reviewNote).toContain(PINNED_CODEX_ACP_INTEGRITY);
@@ -217,15 +261,11 @@ describe("OpenClaw npm integrity pins", () => {
     expect(reviewNote).toContain(PINNED_OPENCLAW_MSTEAMS_INTEGRITY);
     expect(reviewNote).toContain("@tencent-weixin/openclaw-weixin@2.4.3");
     expect(reviewNote).toContain(PINNED_WECHAT_PLUGIN_INTEGRITY);
+    expect(reviewNote).toContain("downloaded tarball integrity");
+    expect(reviewNote).toContain("bind reviewed npm installs to verified local archives");
+    expect(reviewNote).toContain("npm pack --json");
     expect(reviewNote).toContain("each reviewed npm plugin registry integrity");
-    expect(reviewNote).toContain("not lockfile-style artifact binding");
-    expect(reviewNote).toContain(
-      "Accepted residual risk: a compromised or inconsistent registry mirror",
-    );
-    expect(reviewNote).toContain(
-      "Do not treat the OpenClaw/plugin checks as proving lockfile-enforced",
-    );
-    expect(reviewNote).toContain("add a split-registry fake test");
+    expect(reviewNote).toContain("install the verified archive path");
     expect(reviewNote).toContain("OpenClaw Compiled-Dist Patch Runtime Boundary");
     expect(reviewNote).toContain(
       "The long-term source of truth for these behaviors remains upstream OpenClaw",
@@ -321,14 +361,22 @@ describe("OpenClaw npm integrity pins", () => {
       `npm view @openclaw/diagnostics-otel@${PINNED_OPENCLAW_VERSION} dist.integrity`,
     );
     expect(calls).toContain(
-      `openclaw plugins install npm:@openclaw/diagnostics-otel@${PINNED_OPENCLAW_VERSION} --pin`,
+      `npm view @openclaw/diagnostics-otel@${PINNED_OPENCLAW_VERSION} dist.tarball`,
     );
+    expect(calls).toContain(
+      "npm pack https://registry.npmjs.org/@openclaw/diagnostics-otel/-/diagnostics-otel-2026.6.9.tgz --pack-destination",
+    );
+    expect(calls).toContain("diagnostics-otel-2026.6.9.tgz --pin");
     expect(calls).toContain(
       `npm view @openclaw/brave-plugin@${PINNED_OPENCLAW_VERSION} dist.integrity`,
     );
     expect(calls).toContain(
-      `openclaw plugins install npm:@openclaw/brave-plugin@${PINNED_OPENCLAW_VERSION} --pin`,
+      `npm view @openclaw/brave-plugin@${PINNED_OPENCLAW_VERSION} dist.tarball`,
     );
+    expect(calls).toContain(
+      "npm pack https://registry.npmjs.org/@openclaw/brave-plugin/-/brave-plugin-2026.6.9.tgz --pack-destination",
+    );
+    expect(calls).toContain("brave-plugin-2026.6.9.tgz --pin");
   });
 
   it("fails closed before optional OpenClaw plugin install when registry integrity drifts", () => {
@@ -348,7 +396,7 @@ describe("OpenClaw npm integrity pins", () => {
     expect(calls).toContain(
       `npm view @openclaw/brave-plugin@${PINNED_OPENCLAW_VERSION} dist.integrity`,
     );
-    expect(calls).not.toContain("openclaw plugins install npm:@openclaw/brave-plugin");
+    expect(calls).not.toContain("openclaw plugins install");
   });
 
   it("fails closed for optional OpenClaw plugin version overrides without committed pins", () => {
@@ -361,7 +409,7 @@ describe("OpenClaw npm integrity pins", () => {
     expect(`${result.stdout}${result.stderr}`).toContain(
       `OpenClaw plugin @openclaw/diagnostics-otel@${UNPINNED_OPENCLAW_VERSION} has no committed npm integrity pin`,
     );
-    expect(calls).not.toContain("openclaw plugins install npm:@openclaw/diagnostics-otel");
+    expect(calls).not.toContain("openclaw plugins install");
   });
 
   it("installs the reviewed pin when registry integrity matches the committed pin", () => {
@@ -408,21 +456,25 @@ describe("OpenClaw npm integrity pins", () => {
     expect(production.calls).toContain(
       `npm view openclaw@${PINNED_OPENCLAW_VERSION} dist.integrity`,
     );
+    expect(production.calls).toContain(`npm view openclaw@${PINNED_OPENCLAW_VERSION} dist.tarball`);
+    expect(production.calls).toContain(`npm pack ${PINNED_OPENCLAW_TARBALL} --pack-destination`);
     expect(codexAcp.calls).toContain(
       `npm view @zed-industries/codex-acp@${PINNED_CODEX_ACP_VERSION} dist.integrity`,
     );
     expect(codexAcp.calls).toContain(
       `npm view @zed-industries/codex-acp@${PINNED_CODEX_ACP_VERSION} dist.tarball`,
     );
-    expect(production.calls).toContain(
-      `npm install -g --no-audit --no-fund --no-progress openclaw@${PINNED_OPENCLAW_VERSION}`,
-    );
-    expect(codexAcp.calls).toContain(
-      `npm install -g --no-audit --no-fund --no-progress ${PINNED_CODEX_ACP_TARBALL}`,
-    );
+    expect(codexAcp.calls).toContain(`npm pack ${PINNED_CODEX_ACP_TARBALL} --pack-destination`);
+    expect(production.calls).toContain("npm install -g --no-audit --no-fund --no-progress ");
+    expect(production.calls).toContain(`openclaw-${PINNED_OPENCLAW_VERSION}.tgz`);
+    expect(codexAcp.calls).toContain("npm install -g --no-audit --no-fund --no-progress ");
+    expect(codexAcp.calls).toContain(`codex-acp-${PINNED_CODEX_ACP_VERSION}.tgz`);
     expect(base.calls).toContain(`npm view openclaw@${PINNED_OPENCLAW_VERSION} version`);
     expect(base.calls).toContain(`npm view openclaw@${PINNED_OPENCLAW_VERSION} dist.integrity`);
-    expect(base.calls).toContain(`npm install -g openclaw@${PINNED_OPENCLAW_VERSION}`);
+    expect(base.calls).toContain(`npm view openclaw@${PINNED_OPENCLAW_VERSION} dist.tarball`);
+    expect(base.calls).toContain(`npm pack ${PINNED_OPENCLAW_TARBALL} --pack-destination`);
+    expect(base.calls).toContain("npm install -g ");
+    expect(base.calls).toContain(`openclaw-${PINNED_OPENCLAW_VERSION}.tgz`);
   });
 
   it("rejects legacy fixture pins unless stale-upgrade fixture mode is explicit", () => {
@@ -435,6 +487,8 @@ describe("OpenClaw npm integrity pins", () => {
       {
         openclawVersion: LEGACY_REBUILD_OPENCLAW_VERSION,
         registryIntegrity: LEGACY_REBUILD_OPENCLAW_INTEGRITY,
+        registryTarball: LEGACY_REBUILD_OPENCLAW_TARBALL,
+        packIntegrity: LEGACY_REBUILD_OPENCLAW_INTEGRITY,
       },
     );
     const base = runInstallBlock(
@@ -446,6 +500,8 @@ describe("OpenClaw npm integrity pins", () => {
       {
         openclawVersion: LEGACY_REBUILD_OPENCLAW_VERSION,
         registryIntegrity: LEGACY_REBUILD_OPENCLAW_INTEGRITY,
+        registryTarball: LEGACY_REBUILD_OPENCLAW_TARBALL,
+        packIntegrity: LEGACY_REBUILD_OPENCLAW_INTEGRITY,
       },
     );
     const fixtureBase = runInstallBlock(
@@ -457,6 +513,8 @@ describe("OpenClaw npm integrity pins", () => {
       {
         openclawVersion: LEGACY_REBUILD_OPENCLAW_VERSION,
         registryIntegrity: LEGACY_REBUILD_OPENCLAW_INTEGRITY,
+        registryTarball: LEGACY_REBUILD_OPENCLAW_TARBALL,
+        packIntegrity: LEGACY_REBUILD_OPENCLAW_INTEGRITY,
         allowLegacyFixture: true,
       },
     );
@@ -476,8 +534,12 @@ describe("OpenClaw npm integrity pins", () => {
       `npm view openclaw@${LEGACY_REBUILD_OPENCLAW_VERSION} dist.integrity`,
     );
     expect(fixtureBase.calls).toContain(
-      `npm install -g openclaw@${LEGACY_REBUILD_OPENCLAW_VERSION}`,
+      `npm view openclaw@${LEGACY_REBUILD_OPENCLAW_VERSION} dist.tarball`,
     );
+    expect(fixtureBase.calls).toContain(
+      `npm pack ${LEGACY_REBUILD_OPENCLAW_TARBALL} --pack-destination`,
+    );
+    expect(fixtureBase.calls).toContain(`openclaw-${LEGACY_REBUILD_OPENCLAW_VERSION}.tgz`);
   });
 
   it("guards production Docker build args from the legacy OpenClaw fixture flag", () => {
@@ -541,6 +603,32 @@ describe("OpenClaw npm integrity pins", () => {
       );
       expect(calls, block.label).not.toContain("npm install -g");
     }
+  });
+
+  it("fails closed before npm install when the downloaded OpenClaw tarball integrity drifts", () => {
+    const { result, calls } = runInstallBlock(
+      extractRunBlock(
+        DOCKERFILE,
+        "# OPENCLAW_VERSION is the NemoClaw runtime build target",
+        "# Patch OpenClaw media fetch",
+      ),
+      {
+        openclawVersion: PINNED_OPENCLAW_VERSION,
+        committedIntegrity: PINNED_OPENCLAW_INTEGRITY,
+        registryIntegrity: PINNED_OPENCLAW_INTEGRITY,
+        packIntegrity: "sha512-downloaded-drift",
+      },
+    );
+    const output = `${result.stdout}${result.stderr}`;
+
+    expect(result.status).not.toBe(0);
+    expect(output).toContain(
+      `OpenClaw ${PINNED_OPENCLAW_VERSION} downloaded tarball integrity mismatch`,
+    );
+    expect(output).toContain(`Expected: ${PINNED_OPENCLAW_INTEGRITY}`);
+    expect(output).toContain("Actual:   sha512-downloaded-drift");
+    expect(calls).toContain(`npm pack ${PINNED_OPENCLAW_TARBALL} --pack-destination`);
+    expect(calls).not.toContain("npm install -g");
   });
 
   it("fails closed before npm install for unpinned production Dockerfile overrides", () => {
@@ -621,6 +709,33 @@ describe("OpenClaw npm integrity pins", () => {
     expect(calls).not.toContain(
       `npm install -g --no-audit --no-fund --no-progress ${PINNED_CODEX_ACP_TARBALL}`,
     );
+  });
+
+  it("fails closed before installing codex-acp when its downloaded tarball integrity drifts", () => {
+    const { result, calls } = runInstallBlock(
+      extractRunBlock(
+        DOCKERFILE,
+        "# Pre-install the codex-acp package",
+        "# Upgrade OpenClaw if the base image is stale.",
+      ),
+      {
+        openclawVersion: PINNED_OPENCLAW_VERSION,
+        committedIntegrity: PINNED_OPENCLAW_INTEGRITY,
+        registryIntegrity: PINNED_OPENCLAW_INTEGRITY,
+        codexAcpCommittedIntegrity: PINNED_CODEX_ACP_INTEGRITY,
+        codexAcpRegistryIntegrity: PINNED_CODEX_ACP_INTEGRITY,
+        codexAcpPackIntegrity: "sha512-codex-downloaded-drift",
+      },
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toContain(
+      `@zed-industries/codex-acp@${PINNED_CODEX_ACP_VERSION} downloaded tarball integrity mismatch`,
+    );
+    expect(`${result.stdout}${result.stderr}`).toContain(`Expected: ${PINNED_CODEX_ACP_INTEGRITY}`);
+    expect(`${result.stdout}${result.stderr}`).toContain("Actual:   sha512-codex-downloaded-drift");
+    expect(calls).toContain(`npm pack ${PINNED_CODEX_ACP_TARBALL} --pack-destination`);
+    expect(calls).not.toContain("npm install -g");
   });
 
   it("fails closed before npm install for unpinned base Dockerfile overrides", () => {

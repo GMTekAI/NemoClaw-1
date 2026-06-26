@@ -3,8 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { discordManifest } from "../../channels/discord/manifest.ts";
@@ -613,11 +621,15 @@ export function openClawDoctorEnvOverrides(
 
 export function installOpenClawMessagingPlugins(plan: MessagingBuildPlan | null, env: Env): void {
   for (const install of collectOpenClawMessagingPluginInstalls(plan, env)) {
-    verifyOpenClawPluginNpmIntegrity(install, env);
-    runCommand(
-      ["openclaw", "plugins", "install", install.spec, ...(install.pin ? ["--pin"] : [])],
-      env,
-    );
+    const packed = packVerifiedOpenClawPluginArchive(install, env);
+    try {
+      runCommand(
+        ["openclaw", "plugins", "install", packed.archivePath, ...(install.pin ? ["--pin"] : [])],
+        env,
+      );
+    } finally {
+      rmSync(packed.rootDir, { recursive: true, force: true });
+    }
   }
 }
 
@@ -1083,7 +1095,77 @@ function runCommand(args: readonly string[], env: Env): void {
   }
 }
 
-function verifyOpenClawPluginNpmIntegrity(install: OpenClawPluginInstall, env: Env): void {
+function npmViewString(packageSpec: string, field: string, env: Env): string {
+  const result = spawnSync("npm", ["view", packageSpec, field], {
+    encoding: "utf-8",
+    env: env as NodeJS.ProcessEnv,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    const detail = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim();
+    throw new MessagingBuildApplierError(
+      `npm view ${packageSpec} ${field} failed${detail ? `: ${detail}` : ""}`,
+    );
+  }
+  return String(result.stdout ?? "").trim();
+}
+
+function packNpmArchive(
+  packageSpec: string,
+  expectedIntegrity: string,
+  env: Env,
+): { readonly archivePath: string; readonly rootDir: string } {
+  const rootDir = mkdtempSync(join(tmpdir(), "nemoclaw-openclaw-plugin-pack-"));
+  const result = spawnSync("npm", ["pack", packageSpec, "--pack-destination", rootDir, "--json"], {
+    encoding: "utf-8",
+    env: env as NodeJS.ProcessEnv,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.error) {
+    rmSync(rootDir, { recursive: true, force: true });
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    const detail = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim();
+    rmSync(rootDir, { recursive: true, force: true });
+    throw new MessagingBuildApplierError(
+      `npm pack ${packageSpec} failed${detail ? `: ${detail}` : ""}`,
+    );
+  }
+
+  let packed: unknown;
+  try {
+    packed = JSON.parse(String(result.stdout ?? ""));
+  } catch (error) {
+    rmSync(rootDir, { recursive: true, force: true });
+    throw new MessagingBuildApplierError(
+      `npm pack ${packageSpec} did not return JSON: ${String(error)}`,
+    );
+  }
+  const [entry] = Array.isArray(packed) ? packed : [];
+  const filename = isObject(entry) && typeof entry.filename === "string" ? entry.filename : "";
+  const actualIntegrity =
+    isObject(entry) && typeof entry.integrity === "string" ? entry.integrity : "";
+  if (!filename || !actualIntegrity) {
+    rmSync(rootDir, { recursive: true, force: true });
+    throw new MessagingBuildApplierError(
+      `npm pack ${packageSpec} did not report filename and integrity`,
+    );
+  }
+  if (actualIntegrity !== expectedIntegrity) {
+    rmSync(rootDir, { recursive: true, force: true });
+    throw new MessagingBuildApplierError(
+      `OpenClaw plugin ${packageSpec} downloaded tarball integrity mismatch. Expected: ${expectedIntegrity}. Actual: ${actualIntegrity}`,
+    );
+  }
+  return { archivePath: join(rootDir, filename), rootDir };
+}
+
+function packVerifiedOpenClawPluginArchive(
+  install: OpenClawPluginInstall,
+  env: Env,
+): { readonly archivePath: string; readonly rootDir: string } {
   if (!install.npmPackageSpec) {
     throw new MessagingBuildApplierError(
       `OpenClaw plugin spec ${install.spec} must use an npm: package with committed integrity pin`,
@@ -1094,24 +1176,13 @@ function verifyOpenClawPluginNpmIntegrity(install: OpenClawPluginInstall, env: E
       `OpenClaw plugin ${install.npmPackageSpec} has no committed npm integrity pin`,
     );
   }
-  const result = spawnSync("npm", ["view", install.npmPackageSpec, "dist.integrity"], {
-    encoding: "utf-8",
-    env: env as NodeJS.ProcessEnv,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  if (result.error) throw result.error;
-  if (result.status !== 0) {
-    const detail = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim();
-    throw new MessagingBuildApplierError(
-      `npm view ${install.npmPackageSpec} dist.integrity failed${detail ? `: ${detail}` : ""}`,
-    );
-  }
-  const actual = String(result.stdout ?? "").trim();
+  const actual = npmViewString(install.npmPackageSpec, "dist.integrity", env);
   if (actual !== install.integrity) {
     throw new MessagingBuildApplierError(
       `OpenClaw plugin ${install.npmPackageSpec} npm integrity mismatch. Expected: ${install.integrity}. Actual: ${actual}`,
     );
   }
+  return packNpmArchive(install.npmPackageSpec, install.integrity, env);
 }
 
 type CredentialPlaceholderRule = {

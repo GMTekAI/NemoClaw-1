@@ -149,6 +149,14 @@ function readDockerfileOpenClawIntegrity(): string {
   );
 }
 
+function readDockerfileOpenClawTarball(): string {
+  return readRequiredMatch(
+    DOCKERFILE,
+    /^ARG OPENCLAW_2026_6_9_TARBALL=([^\s]+)/m,
+    "OpenClaw runtime tarball",
+  );
+}
+
 function dockerRunCommandBetween(startMarker: string, endMarker: string): string {
   const dockerfile = fs.readFileSync(DOCKERFILE, "utf-8");
   const start = dockerfile.indexOf(startMarker);
@@ -180,6 +188,7 @@ function runOpenClawUpgradeBlock(currentVersion: string) {
   const openclawShim = path.join(tmp, "openclaw-bin");
   const openclawVersion = readDockerfileOpenClawVersion();
   const openclawIntegrity = readDockerfileOpenClawIntegrity();
+  const openclawTarball = readDockerfileOpenClawTarball();
   fs.writeFileSync(blueprint, `min_openclaw_version: "${readBlueprintMinOpenClawVersion()}"\n`);
   fs.mkdirSync(openclawInstall, { recursive: true });
   fs.writeFileSync(openclawShim, "");
@@ -196,12 +205,32 @@ function runOpenClawUpgradeBlock(currentVersion: string) {
     `call_log=${JSON.stringify(log)}`,
     `OPENCLAW_VERSION=${JSON.stringify(openclawVersion)}`,
     `OPENCLAW_2026_6_9_INTEGRITY=${JSON.stringify(openclawIntegrity)}`,
+    `OPENCLAW_2026_6_9_TARBALL=${JSON.stringify(openclawTarball)}`,
     `openclaw() { if [ "\${1:-}" = "--version" ]; then printf 'openclaw ${currentVersion}\\n'; else return 127; fi; }`,
     "npm() {",
     '  printf "npm %s\\n" "$*" >> "$call_log";',
     '  if [ "${1:-}" = "view" ] && [ "${2:-}" = "openclaw@${OPENCLAW_VERSION}" ] && [ "${3:-}" = "dist.integrity" ]; then',
     '    printf "%s\\n" "$OPENCLAW_2026_6_9_INTEGRITY";',
+    "    return 0",
     "  fi",
+    '  if [ "${1:-}" = "view" ] && [ "${2:-}" = "openclaw@${OPENCLAW_VERSION}" ] && [ "${3:-}" = "dist.tarball" ]; then',
+    '    printf "%s\\n" "$OPENCLAW_2026_6_9_TARBALL";',
+    "    return 0",
+    "  fi",
+    '  if [ "${1:-}" = "pack" ]; then',
+    '    pack_dir="";',
+    '    while [ "$#" -gt 0 ]; do',
+    '      if [ "${1:-}" = "--pack-destination" ]; then pack_dir="${2:-}"; shift 2; continue; fi',
+    "      shift",
+    "    done",
+    '    test -n "$pack_dir";',
+    '    pack_file="openclaw-${OPENCLAW_VERSION}.tgz";',
+    '    printf "fake openclaw tarball" > "$pack_dir/$pack_file";',
+    '    printf \'[{"filename":"%s","integrity":"%s"}]\\n\' "$pack_file" "$OPENCLAW_2026_6_9_INTEGRITY";',
+    "    return 0",
+    "  fi",
+    '  if [ "${1:-}" = "install" ]; then return 0; fi',
+    "  return 1",
     "}",
     'command() { if [ "${1:-}" = "-v" ] && [ "${2:-}" = "codex-acp" ]; then return 0; fi; builtin command "$@"; }',
     command,
@@ -389,7 +418,11 @@ describe("fetch-guard patch regression guard", () => {
       `upgrading to ${CURRENT_REVIEWED_OPENCLAW_PATCH_CLASSIFIER_VERSION}`,
     );
     expect(stale.calls).toContain(
-      `npm install -g --no-audit --no-fund --no-progress openclaw@${CURRENT_REVIEWED_OPENCLAW_PATCH_CLASSIFIER_VERSION}`,
+      `npm pack https://registry.npmjs.org/openclaw/-/openclaw-${CURRENT_REVIEWED_OPENCLAW_PATCH_CLASSIFIER_VERSION}.tgz --pack-destination`,
+    );
+    expect(stale.calls).toContain("npm install -g --no-audit --no-fund --no-progress ");
+    expect(stale.calls).toContain(
+      `openclaw-${CURRENT_REVIEWED_OPENCLAW_PATCH_CLASSIFIER_VERSION}.tgz`,
     );
 
     const current = runOpenClawUpgradeBlock(CURRENT_REVIEWED_OPENCLAW_PATCH_CLASSIFIER_VERSION);
@@ -398,8 +431,9 @@ describe("fetch-guard patch regression guard", () => {
       `matches reviewed target ${CURRENT_REVIEWED_OPENCLAW_PATCH_CLASSIFIER_VERSION}`,
     );
     expect(current.calls).not.toContain(
-      `npm install -g --no-audit --no-fund --no-progress openclaw@${CURRENT_REVIEWED_OPENCLAW_PATCH_CLASSIFIER_VERSION}`,
+      `npm pack https://registry.npmjs.org/openclaw/-/openclaw-${CURRENT_REVIEWED_OPENCLAW_PATCH_CLASSIFIER_VERSION}.tgz --pack-destination`,
     );
+    expect(current.calls).not.toContain("npm install -g --no-audit --no-fund --no-progress ");
 
     const newer = runOpenClawUpgradeBlock("2026.6.10");
     expect(newer.result.status).toBe(1);
@@ -407,8 +441,9 @@ describe("fetch-guard patch regression guard", () => {
       "newer than reviewed target " + CURRENT_REVIEWED_OPENCLAW_PATCH_CLASSIFIER_VERSION,
     );
     expect(newer.calls).not.toContain(
-      `npm install -g --no-audit --no-fund --no-progress openclaw@${CURRENT_REVIEWED_OPENCLAW_PATCH_CLASSIFIER_VERSION}`,
+      `npm pack https://registry.npmjs.org/openclaw/-/openclaw-${CURRENT_REVIEWED_OPENCLAW_PATCH_CLASSIFIER_VERSION}.tgz --pack-destination`,
     );
+    expect(newer.calls).not.toContain("npm install -g --no-audit --no-fund --no-progress ");
   });
 
   it("requires classifier review and integrity evidence when the OpenClaw build pin changes", () => {

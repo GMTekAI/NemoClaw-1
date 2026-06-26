@@ -17,6 +17,31 @@ const DEPENDENCY_REVIEW = path.join(
 );
 const CODEX_ACP_TARBALL =
   "https://registry.npmjs.org/@zed-industries/codex-acp/-/codex-acp-0.11.1.tgz";
+const OPENCLAW_TARBALL = "https://registry.npmjs.org/openclaw/-/openclaw-2026.6.9.tgz";
+const MESSAGING_BUILD_APPLIER = path.join(
+  REPO_ROOT,
+  "src",
+  "lib",
+  "messaging",
+  "applier",
+  "build",
+  "messaging-build-applier.mts",
+);
+const TEAMS_LIVE_TEST = path.join(
+  REPO_ROOT,
+  "test",
+  "e2e-scenario",
+  "live",
+  "teams-message-round-trip.test.ts",
+);
+const REBUILD_RESUME_SESSION = path.join(
+  REPO_ROOT,
+  "src",
+  "lib",
+  "actions",
+  "sandbox",
+  "rebuild-resume-session.ts",
+);
 
 type Workflow = {
   jobs: Record<string, WorkflowJob>;
@@ -61,9 +86,10 @@ describe("OpenClaw 2026.6.9 dependency review contract", () => {
     const review = readFileSync(DEPENDENCY_REVIEW, "utf-8");
 
     expect(review).toContain(CODEX_ACP_TARBALL);
-    expect(review).toContain(
-      "Codex ACP helper is also installed from the reviewed npm tarball URL",
-    );
+    expect(review).toContain("bind reviewed npm installs to verified local archives");
+    expect(review).toContain("downloaded tarball integrity");
+    expect(review).toContain("npm pack --json");
+    expect(review).toContain("install the verified archive path");
     expect(review).toContain("OpenClaw Patch Source-of-Truth Table");
     expect(review).toContain(
       "| Patch | Invalid state | Source boundary | Why upstream/source cannot be fixed here | Regression test | Removal condition |",
@@ -106,37 +132,109 @@ describe("OpenClaw 2026.6.9 dependency review contract", () => {
     expect(review).toContain("Advisor Disposition");
     expect(review).toContain("src/lib/messaging/channels/manifests.test.ts");
     expect(review).toContain("npm audit result in this note is a manual snapshot");
+    expect(review).toContain(
+      "CI job for `npm install --package-lock-only --ignore-scripts && npm audit --omit=dev --json`",
+    );
     expect(review).toContain("stale nonterminal rebuild-resume repair");
+    expect(review).toContain("tracked against #4533");
     expect(review).toContain("scripts/check-production-build-args.sh");
     expect(review).toContain('OPENCLAW_VERSION="${OPENCLAW_VERSION}"');
+    expect(review).toContain("test/messaging-build-applier-integrity.test.ts");
     expect(review).toContain("test/messaging-build-applier-render-safety.test.ts");
     expect(review).toContain("test/onboard-resume-provider-recovery.test.ts");
   });
 
-  it("keeps Dockerfile installs tied to the reviewed codex-acp tarball and OpenClaw build arg", () => {
+  it("keeps Dockerfile installs archive-bound and OpenClaw build arg explicit", () => {
     const result = spawnSync(
       "bash",
       [
         "-lc",
         `
 set -euo pipefail
+
+messaging_build_applier=${JSON.stringify(MESSAGING_BUILD_APPLIER)}
+
+check_contains() {
+  haystack="$1"
+  needle="$2"
+  label="$3"
+  case "$haystack" in
+    *"$needle"*) ;;
+    *) echo "missing $label: $needle" >&2; exit 1 ;;
+  esac
+}
+
 codex_acp_block="$(sed -n '/# Pre-install the codex-acp package/,/# Upgrade OpenClaw if the base image is stale./p' Dockerfile)"
-grep -Fq "CODEX_ACP_TARBALL='${CODEX_ACP_TARBALL}'" <<<"$codex_acp_block"
-grep -Fq 'npm view "\${CODEX_ACP_SPEC}" dist.integrity' <<<"$codex_acp_block"
-grep -Fq 'npm view "\${CODEX_ACP_SPEC}" dist.tarball' <<<"$codex_acp_block"
-grep -Fq '"\${CODEX_ACP_TARBALL}"' <<<"$codex_acp_block"
-if grep -Fq '"\${CODEX_ACP_SPEC}";' <<<"$codex_acp_block"; then
-  echo 'codex-acp install still uses the package spec' >&2
-  exit 1
-fi
-count="$(grep -Ec '^RUN OPENCLAW_VERSION="\\$\\{OPENCLAW_VERSION\\}" node --experimental-strip-types /src/lib/messaging/applier/build/messaging-build-applier\\.mts --agent openclaw --phase (runtime-setup|agent-install|post-agent-install)$' Dockerfile)"
-test "$count" -eq 3
+check_contains "$codex_acp_block" "CODEX_ACP_TARBALL='${CODEX_ACP_TARBALL}'" "codex-acp tarball"
+check_contains "$codex_acp_block" 'npm view "\${CODEX_ACP_SPEC}" dist.integrity' "codex-acp registry integrity"
+check_contains "$codex_acp_block" 'npm view "\${CODEX_ACP_SPEC}" dist.tarball' "codex-acp registry tarball"
+check_contains "$codex_acp_block" 'npm pack "$pack_spec" --pack-destination "$pack_dir" --json' "codex-acp pack"
+check_contains "$codex_acp_block" 'CODEX_ACP_PACK_PATH="$(pack_reviewed_npm_tarball "$CODEX_ACP_TARBALL" "$CODEX_ACP_0_11_1_INTEGRITY" "$CODEX_ACP_PACK_DIR" "$CODEX_ACP_SPEC")"' "codex-acp pack path"
+check_contains "$codex_acp_block" '"$CODEX_ACP_PACK_PATH"' "codex-acp local install path"
+
+for dockerfile in Dockerfile Dockerfile.base; do
+  case "$dockerfile" in
+    Dockerfile) end_marker='# Patch OpenClaw media fetch' ;;
+    Dockerfile.base) end_marker='# Baseline health check.' ;;
+  esac
+  openclaw_block="$(sed -n "/ARG OPENCLAW_VERSION=2026.6.9/,/$end_marker/p" "$dockerfile")"
+  check_contains "$openclaw_block" "ARG OPENCLAW_2026_6_9_TARBALL=${OPENCLAW_TARBALL}" "$dockerfile tarball arg"
+  check_contains "$openclaw_block" 'npm view "openclaw@\${OPENCLAW_VERSION}" dist.integrity' "$dockerfile registry integrity"
+  check_contains "$openclaw_block" 'npm view "openclaw@\${OPENCLAW_VERSION}" dist.tarball' "$dockerfile registry tarball"
+  check_contains "$openclaw_block" 'OPENCLAW_PACK_PATH="$(pack_reviewed_npm_tarball "$EXPECTED_TARBALL" "$EXPECTED_INTEGRITY" "$OPENCLAW_PACK_DIR"' "$dockerfile pack path"
+  check_contains "$openclaw_block" '"$OPENCLAW_PACK_PATH"' "$dockerfile local install path"
+done
+
+optional_plugin_block="$(sed -n '/# Install non-messaging OpenClaw plugins that need to match the runtime./,/^RUN OPENCLAW_VERSION=/p' Dockerfile)"
+check_contains "$optional_plugin_block" 'npm view "$plugin_spec" dist.integrity' "optional plugin registry integrity"
+check_contains "$optional_plugin_block" 'npm view "$plugin_spec" dist.tarball' "optional plugin registry tarball"
+check_contains "$optional_plugin_block" 'npm pack "$expected_tarball" --pack-destination "$NEMOCLAW_OPENCLAW_PLUGIN_PACK_DIR" --json' "optional plugin pack"
+check_contains "$optional_plugin_block" 'openclaw plugins install "$plugin_archive" --pin' "optional plugin archive install"
+
+grep -Fq 'spawnSync("npm", ["pack", packageSpec, "--pack-destination", rootDir, "--json"]' "$messaging_build_applier"
+grep -Fq '["openclaw", "plugins", "install", packed.archivePath, ...(install.pin ? ["--pin"] : [])]' "$messaging_build_applier"
+grep -Fq 'downloaded tarball integrity mismatch' "$messaging_build_applier"
+
+phase_count="$(grep -Ec '^RUN OPENCLAW_VERSION="[$][{]OPENCLAW_VERSION[}]" node --experimental-strip-types /src/lib/messaging/applier/build/messaging-build-applier\\.mts --agent openclaw --phase (runtime-setup|agent-install|post-agent-install)$' Dockerfile)"
+test "$phase_count" -eq 3
+grep -Fq -- '--phase runtime-setup' Dockerfile
+grep -Fq -- '--phase agent-install' Dockerfile
+grep -Fq -- '--phase post-agent-install' Dockerfile
 `,
       ],
-      { cwd: REPO_ROOT, encoding: "utf-8" },
+      {
+        cwd: REPO_ROOT,
+        encoding: "utf-8",
+      },
     );
 
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+  });
+
+  it("keeps the Teams live scenario explicit and credential gated", () => {
+    const teamsLiveTest = readFileSync(TEAMS_LIVE_TEST, "utf-8");
+
+    expect(teamsLiveTest).toContain("test.skipIf(");
+    expect(teamsLiveTest).toContain('process.env.MSTEAMS_E2E !== "1"');
+    expect(teamsLiveTest).toContain("missingTeamsEnvKeys.length > 0");
+    expect(teamsLiveTest).toContain("shouldRunLiveE2EScenarios()");
+    expect(teamsLiveTest).toContain("NVIDIA_INFERENCE_API_KEY");
+    expect(teamsLiveTest).toContain("MSTEAMS_APP_ID");
+    expect(teamsLiveTest).toContain("MSTEAMS_APP_PASSWORD");
+    expect(teamsLiveTest).toContain("MSTEAMS_TENANT_ID");
+    expect(teamsLiveTest).toContain("MSTEAMS_ALLOWED_USERS");
+    expect(teamsLiveTest).toContain("MSTEAMS_PUBLIC_WEBHOOK_URL");
+    expect(teamsLiveTest).toContain("MSTEAMS_E2E_MESSAGE_COMMAND");
+    expect(teamsLiveTest).toContain("real Microsoft tenant, Bot Framework credentials");
+    expect(teamsLiveTest).toContain("toMatch(");
+  });
+
+  it("keeps the rebuild-resume compatibility shim tied to its removal tracker", () => {
+    const source = readFileSync(REBUILD_RESUME_SESSION, "utf-8");
+
+    expect(source).toContain("Invalid legacy shape");
+    expect(source).toContain("Removal condition");
+    expect(source).toContain("#4533");
   });
 
   it("keeps production Docker build workflows behind the build-arg guard", () => {

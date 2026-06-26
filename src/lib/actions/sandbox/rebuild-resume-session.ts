@@ -46,7 +46,8 @@ export function rewindSessionForRebuildResume(
   // delete and recreate the sandbox, so normalize the loaded session here.
   // Removal condition: drop this legacy repair once a session-version migration
   // or producer-level test proves recreate sessions are always persisted at a
-  // resumable pre-sandbox boundary.
+  // resumable pre-sandbox boundary. Tracking: #4533 owns the broader onboard
+  // FSM/resume compatibility boundary that should retire this shim.
   s.sandboxName = sandboxName;
   s.resumable = true;
   s.status = "in_progress";

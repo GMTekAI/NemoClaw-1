@@ -40,13 +40,18 @@ FROM ${BASE_IMAGE}
 # docs/security/openclaw-2026.6.9-dependency-review.md.
 ARG OPENCLAW_VERSION=2026.6.9
 ARG OPENCLAW_2026_6_9_INTEGRITY=sha512-y0PGUdE87S8QtQXABPDL0CjNKhH3q/R1h9/WiRQkhVCGSBVhs63/M1iZn2DYVyJCAbDyMz3KNyAE0WzSQIWCRg==
+ARG OPENCLAW_2026_6_9_TARBALL=https://registry.npmjs.org/openclaw/-/openclaw-2026.6.9.tgz
 ARG OPENCLAW_DIAGNOSTICS_OTEL_2026_6_9_INTEGRITY=sha512-jU2q4L6L3qdZZDEIDXrWgwCWOGUaTSF+YzUlfgHED42TB4N3maF6seYchFpwKLB8neOzIDpnzMagEMjxZ/7Wqw==
 ARG OPENCLAW_BRAVE_PLUGIN_2026_6_9_INTEGRITY=sha512-8HawXB5ylo+vkvkmDJZAE9uhOtm0l9YtzrVqJdM4UqwXeF4uGAkVEOrR3Hxy0sI3Moi5ZBzq2Jx/K5ZQKdiWjQ==
-# Legacy fixture pins used by stale-sandbox/rebuild E2Es that intentionally
-# build an older OpenClaw base image before proving upgrade behavior.
+# E2E-only legacy fixture pins used by stale-sandbox/rebuild tests that
+# intentionally build an older OpenClaw base image before proving upgrade
+# behavior. Production workflows must reject
+# NEMOCLAW_E2E_FIXTURE_LEGACY_OPENCLAW=1 before docker build.
 ARG NEMOCLAW_E2E_FIXTURE_LEGACY_OPENCLAW=0
 ARG OPENCLAW_2026_3_11_INTEGRITY=sha512-bxwiBmHPakwfpY5tqC9lrV5TCu5PKf0c1bHNc3nhrb+pqKcPEWV4zOjDVFLQUHr98ihgWA+3pacy4b3LQ8wduQ==
+ARG OPENCLAW_2026_3_11_TARBALL=https://registry.npmjs.org/openclaw/-/openclaw-2026.3.11.tgz
 ARG OPENCLAW_2026_4_24_INTEGRITY=sha512-W6u4XeIIP4+uG4DYV9G3JeS6QNuKwfhQIej1GIoL4BdcnUFgrnB8kHYNXL3MxiHRKuhZB9OYwUMGs8jKFZR/Vg==
+ARG OPENCLAW_2026_4_24_TARBALL=https://registry.npmjs.org/openclaw/-/openclaw-2026.4.24.tgz
 ARG CODEX_ACP_0_11_1_INTEGRITY=sha512-My2VSlBtvJipJhImHjFDej2ut/p00QqOISRnZgLgLrSIzjgvdcQvAhaZviWj7XPhk4UIdIb0OoA+Lrls824uiQ==
 
 # OpenClaw 2026.6.9 loads some generated source through jiti. Disable its
@@ -126,6 +131,21 @@ RUN chmod 755 /usr/local/lib/nemoclaw/patch-openclaw-tool-catalog.js \
 RUN set -eu; \
     CODEX_ACP_SPEC='@zed-industries/codex-acp@0.11.1'; \
     CODEX_ACP_TARBALL='https://registry.npmjs.org/@zed-industries/codex-acp/-/codex-acp-0.11.1.tgz'; \
+    pack_reviewed_npm_tarball() { \
+        pack_spec="$1"; expected_integrity="$2"; pack_dir="$3"; label="$4"; \
+        pack_json="$(npm pack "$pack_spec" --pack-destination "$pack_dir" --json)"; \
+        pack_integrity="$(PACK_JSON="$pack_json" node -e 'const p = JSON.parse(process.env.PACK_JSON); process.stdout.write(String(p[0]?.integrity ?? ""));')"; \
+        pack_filename="$(PACK_JSON="$pack_json" node -e 'const p = JSON.parse(process.env.PACK_JSON); process.stdout.write(String(p[0]?.filename ?? ""));')"; \
+        if [ -z "$pack_integrity" ] || [ -z "$pack_filename" ]; then \
+            echo "ERROR: ${label} npm pack did not report filename and integrity" >&2; exit 1; \
+        fi; \
+        if [ "$pack_integrity" != "$expected_integrity" ]; then \
+            echo "ERROR: ${label} downloaded tarball integrity mismatch" >&2; \
+            echo "Expected: ${expected_integrity}" >&2; \
+            echo "Actual:   ${pack_integrity}" >&2; exit 1; \
+        fi; \
+        printf '%s\n' "${pack_dir}/${pack_filename}"; \
+    }; \
     REGISTRY_CODEX_ACP_INTEGRITY=$(npm view "${CODEX_ACP_SPEC}" dist.integrity); \
     REGISTRY_CODEX_ACP_TARBALL=$(npm view "${CODEX_ACP_SPEC}" dist.tarball); \
     if [ "$REGISTRY_CODEX_ACP_INTEGRITY" != "$CODEX_ACP_0_11_1_INTEGRITY" ]; then \
@@ -138,8 +158,11 @@ RUN set -eu; \
         echo "Expected: ${CODEX_ACP_TARBALL}" >&2; \
         echo "Actual:   ${REGISTRY_CODEX_ACP_TARBALL}" >&2; exit 1; \
     fi; \
+    CODEX_ACP_PACK_DIR="$(mktemp -d)"; \
+    CODEX_ACP_PACK_PATH="$(pack_reviewed_npm_tarball "$CODEX_ACP_TARBALL" "$CODEX_ACP_0_11_1_INTEGRITY" "$CODEX_ACP_PACK_DIR" "$CODEX_ACP_SPEC")"; \
     npm install -g --no-audit --no-fund --no-progress \
-        "${CODEX_ACP_TARBALL}"; \
+        "$CODEX_ACP_PACK_PATH"; \
+    rm -rf "$CODEX_ACP_PACK_DIR"; \
     command -v codex-acp >/dev/null
 
 # Upgrade OpenClaw if the base image is stale.
@@ -167,17 +190,39 @@ RUN set -eu; \
         fi; \
     fi; \
     EXPECTED_INTEGRITY=""; \
-    if [ "$OPENCLAW_VERSION" = "2026.6.9" ]; then EXPECTED_INTEGRITY="$OPENCLAW_2026_6_9_INTEGRITY"; fi; \
-    if [ "$OPENCLAW_VERSION" = "2026.3.11" ]; then EXPECTED_INTEGRITY="$OPENCLAW_2026_3_11_INTEGRITY"; fi; \
-    if [ "$OPENCLAW_VERSION" = "2026.4.24" ]; then EXPECTED_INTEGRITY="$OPENCLAW_2026_4_24_INTEGRITY"; fi; \
+    EXPECTED_TARBALL=""; \
+    if [ "$OPENCLAW_VERSION" = "2026.6.9" ]; then EXPECTED_INTEGRITY="$OPENCLAW_2026_6_9_INTEGRITY"; EXPECTED_TARBALL="$OPENCLAW_2026_6_9_TARBALL"; fi; \
+    if [ "$OPENCLAW_VERSION" = "2026.3.11" ]; then EXPECTED_INTEGRITY="$OPENCLAW_2026_3_11_INTEGRITY"; EXPECTED_TARBALL="$OPENCLAW_2026_3_11_TARBALL"; fi; \
+    if [ "$OPENCLAW_VERSION" = "2026.4.24" ]; then EXPECTED_INTEGRITY="$OPENCLAW_2026_4_24_INTEGRITY"; EXPECTED_TARBALL="$OPENCLAW_2026_4_24_TARBALL"; fi; \
     if [ -z "$EXPECTED_INTEGRITY" ]; then \
         echo "ERROR: OpenClaw ${OPENCLAW_VERSION} has no committed npm integrity pin" >&2; exit 1; \
     fi; \
+    pack_reviewed_npm_tarball() { \
+        pack_spec="$1"; expected_integrity="$2"; pack_dir="$3"; label="$4"; \
+        pack_json="$(npm pack "$pack_spec" --pack-destination "$pack_dir" --json)"; \
+        pack_integrity="$(PACK_JSON="$pack_json" node -e 'const p = JSON.parse(process.env.PACK_JSON); process.stdout.write(String(p[0]?.integrity ?? ""));')"; \
+        pack_filename="$(PACK_JSON="$pack_json" node -e 'const p = JSON.parse(process.env.PACK_JSON); process.stdout.write(String(p[0]?.filename ?? ""));')"; \
+        if [ -z "$pack_integrity" ] || [ -z "$pack_filename" ]; then \
+            echo "ERROR: ${label} npm pack did not report filename and integrity" >&2; exit 1; \
+        fi; \
+        if [ "$pack_integrity" != "$expected_integrity" ]; then \
+            echo "ERROR: ${label} downloaded tarball integrity mismatch" >&2; \
+            echo "Expected: ${expected_integrity}" >&2; \
+            echo "Actual:   ${pack_integrity}" >&2; exit 1; \
+        fi; \
+        printf '%s\n' "${pack_dir}/${pack_filename}"; \
+    }; \
     REGISTRY_INTEGRITY=$(npm view "openclaw@${OPENCLAW_VERSION}" dist.integrity); \
     if [ "$REGISTRY_INTEGRITY" != "$EXPECTED_INTEGRITY" ]; then \
         echo "ERROR: OpenClaw ${OPENCLAW_VERSION} npm integrity mismatch" >&2; \
         echo "Expected: ${EXPECTED_INTEGRITY}" >&2; \
         echo "Actual:   ${REGISTRY_INTEGRITY}" >&2; exit 1; \
+    fi; \
+    REGISTRY_TARBALL=$(npm view "openclaw@${OPENCLAW_VERSION}" dist.tarball); \
+    if [ "$REGISTRY_TARBALL" != "$EXPECTED_TARBALL" ]; then \
+        echo "ERROR: OpenClaw ${OPENCLAW_VERSION} npm tarball URL mismatch" >&2; \
+        echo "Expected: ${EXPECTED_TARBALL}" >&2; \
+        echo "Actual:   ${REGISTRY_TARBALL}" >&2; exit 1; \
     fi; \
     CUR_VER=$(openclaw --version 2>/dev/null | awk '{print $2}' || true); \
     CUR_VER="${CUR_VER:-0.0.0}"; \
@@ -193,7 +238,10 @@ RUN set -eu; \
         # at the shell level first gives npm a clean slate and avoids the
         # rmdir failure inside npm's own install path.
         rm -rf /usr/local/lib/node_modules/openclaw /usr/local/bin/openclaw; \
-        npm install -g --no-audit --no-fund --no-progress "openclaw@${OPENCLAW_VERSION}"; \
+        OPENCLAW_PACK_DIR="$(mktemp -d)"; \
+        OPENCLAW_PACK_PATH="$(pack_reviewed_npm_tarball "$EXPECTED_TARBALL" "$EXPECTED_INTEGRITY" "$OPENCLAW_PACK_DIR" "OpenClaw ${OPENCLAW_VERSION}")"; \
+        npm install -g --no-audit --no-fund --no-progress "$OPENCLAW_PACK_PATH"; \
+        rm -rf "$OPENCLAW_PACK_DIR"; \
     fi
 
 # Patch OpenClaw media fetch for proxy-only sandbox (NVIDIA/NemoClaw#1755).
@@ -747,9 +795,10 @@ RUN set -eu; \
     verify_openclaw_plugin_integrity() { \
         plugin_spec="$1"; \
         expected_integrity=""; \
+        expected_tarball=""; \
         case "$plugin_spec" in \
-            "@openclaw/diagnostics-otel@2026.6.9") expected_integrity="$OPENCLAW_DIAGNOSTICS_OTEL_2026_6_9_INTEGRITY" ;; \
-            "@openclaw/brave-plugin@2026.6.9") expected_integrity="$OPENCLAW_BRAVE_PLUGIN_2026_6_9_INTEGRITY" ;; \
+            "@openclaw/diagnostics-otel@2026.6.9") expected_integrity="$OPENCLAW_DIAGNOSTICS_OTEL_2026_6_9_INTEGRITY"; expected_tarball="https://registry.npmjs.org/@openclaw/diagnostics-otel/-/diagnostics-otel-2026.6.9.tgz" ;; \
+            "@openclaw/brave-plugin@2026.6.9") expected_integrity="$OPENCLAW_BRAVE_PLUGIN_2026_6_9_INTEGRITY"; expected_tarball="https://registry.npmjs.org/@openclaw/brave-plugin/-/brave-plugin-2026.6.9.tgz" ;; \
         esac; \
         if [ -z "$expected_integrity" ]; then \
             echo "ERROR: OpenClaw plugin ${plugin_spec} has no committed npm integrity pin" >&2; exit 1; \
@@ -764,12 +813,33 @@ RUN set -eu; \
             echo "Actual:   $registry_integrity" >&2; \
             exit 1; \
         fi; \
+        registry_tarball="$(npm view "$plugin_spec" dist.tarball)"; \
+        if [ "$registry_tarball" != "$expected_tarball" ]; then \
+            echo "ERROR: OpenClaw plugin ${plugin_spec} npm tarball URL mismatch" >&2; \
+            echo "Expected: $expected_tarball" >&2; \
+            echo "Actual:   $registry_tarball" >&2; \
+            exit 1; \
+        fi; \
+        plugin_pack_json="$(npm pack "$expected_tarball" --pack-destination "$NEMOCLAW_OPENCLAW_PLUGIN_PACK_DIR" --json)"; \
+        plugin_pack_integrity="$(PACK_JSON="$plugin_pack_json" node -e 'const p = JSON.parse(process.env.PACK_JSON); process.stdout.write(String(p[0]?.integrity ?? ""));')"; \
+        plugin_pack_filename="$(PACK_JSON="$plugin_pack_json" node -e 'const p = JSON.parse(process.env.PACK_JSON); process.stdout.write(String(p[0]?.filename ?? ""));')"; \
+        if [ "$plugin_pack_integrity" != "$expected_integrity" ]; then \
+            echo "ERROR: OpenClaw plugin ${plugin_spec} downloaded tarball integrity mismatch" >&2; \
+            echo "Expected: $expected_integrity" >&2; \
+            echo "Actual:   $plugin_pack_integrity" >&2; \
+            exit 1; \
+        fi; \
+        if [ -z "$plugin_pack_filename" ]; then \
+            echo "ERROR: OpenClaw plugin ${plugin_spec} npm pack did not report a filename" >&2; exit 1; \
+        fi; \
+        printf '%s\n' "$NEMOCLAW_OPENCLAW_PLUGIN_PACK_DIR/$plugin_pack_filename"; \
     }; \
     install_reviewed_openclaw_plugin() { \
         plugin_spec="${1}@${OPENCLAW_VERSION}"; \
-        verify_openclaw_plugin_integrity "$plugin_spec"; \
-        openclaw plugins install "npm:${plugin_spec}" --pin; \
+        plugin_archive="$(verify_openclaw_plugin_integrity "$plugin_spec")"; \
+        openclaw plugins install "$plugin_archive" --pin; \
     }; \
+    NEMOCLAW_OPENCLAW_PLUGIN_PACK_DIR="$(mktemp -d)"; \
     if [ "$NEMOCLAW_OPENCLAW_OTEL" = "1" ] || [ "$NEMOCLAW_WEB_SEARCH_ENABLED" = "1" ]; then \
         test -n "$OPENCLAW_VERSION"; \
     fi; \
@@ -781,7 +851,8 @@ RUN set -eu; \
         BRAVE_API_KEY=openshell:resolve:env:BRAVE_API_KEY openclaw doctor --fix --non-interactive; \
     elif [ "$NEMOCLAW_OPENCLAW_OTEL" = "1" ]; then \
         openclaw doctor --fix --non-interactive; \
-    fi
+    fi; \
+    rm -rf "$NEMOCLAW_OPENCLAW_PLUGIN_PACK_DIR"
 
 # hadolint ignore=DL3059,DL4006
 RUN OPENCLAW_VERSION="${OPENCLAW_VERSION}" node --experimental-strip-types /src/lib/messaging/applier/build/messaging-build-applier.mts --agent openclaw --phase agent-install
