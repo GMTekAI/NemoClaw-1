@@ -122,7 +122,7 @@ function validateOpenShellStyleSandboxJwt(options: {
   kid: string;
   gatewayId: string;
   now: number;
-  expectedSandboxId?: string;
+  expectedSandboxId: string;
 }): Record<string, unknown> | null {
   const [headerPart, payloadPart, signaturePart] = options.token.split(".");
   expect(headerPart, "JWT header segment").toBeTruthy();
@@ -150,7 +150,7 @@ function validateOpenShellStyleSandboxJwtSignature(options: {
   publicKeyPath: string;
   gatewayId: string;
   now: number;
-  expectedSandboxId?: string;
+  expectedSandboxId: string;
 }): Record<string, unknown> {
   const signingInput = `${options.headerPart}.${options.payloadPart}`;
   const publicKey = createPublicKey(fs.readFileSync(options.publicKeyPath, "utf-8"));
@@ -166,11 +166,9 @@ function validateOpenShellStyleSandboxJwtSignature(options: {
   const identity = `openshell-gateway:${options.gatewayId}`;
   expect(payload.iss).toBe(identity);
   expect(payload.aud).toBe(identity);
-  if (options.expectedSandboxId !== undefined) {
-    expect(payload.sandbox_id, "OpenShell-style sandbox JWT sandbox binding").toBe(
-      options.expectedSandboxId,
-    );
-  }
+  expect(payload.sandbox_id, "OpenShell-style sandbox JWT sandbox binding").toBe(
+    options.expectedSandboxId,
+  );
   expect(String(payload.sub)).toBe(`${SANDBOX_JWT_SUBJECT_PREFIX}${payload.sandbox_id}`);
   const exp = typeof payload.exp === "number" ? payload.exp : Number.NaN;
   expect(exp === 0 || exp >= options.now - 60, "OpenShell-style sandbox JWT expiry").toBe(true);
@@ -408,6 +406,7 @@ describe("docker-driver-gateway-config", () => {
           kid: "wrong-kid",
           gatewayId,
           now,
+          expectedSandboxId: sandboxId,
         }),
       ).toBeNull();
       expect(() =>
@@ -417,6 +416,7 @@ describe("docker-driver-gateway-config", () => {
           kid,
           gatewayId: "wrong-gateway",
           now,
+          expectedSandboxId: sandboxId,
         }),
       ).toThrow("expected");
 
@@ -435,6 +435,7 @@ describe("docker-driver-gateway-config", () => {
           kid,
           gatewayId,
           now,
+          expectedSandboxId: sandboxId,
         }),
       ).toThrow("OpenShell-style sandbox JWT expiry");
     } finally {
