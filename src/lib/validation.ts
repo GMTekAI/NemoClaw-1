@@ -136,24 +136,29 @@ export function classifySandboxCreateFailure(output = ""): SandboxCreateFailure 
     return { kind: "gpu_cdi_injection_failed", uploadedToGateway };
   }
   // Require BOTH the failed Docker command block containing the plugin-install
-  // step AND an npm-prefixed network/egress error so that non-network failures
-  // (package-not-found, version conflicts, auth errors) and failures in later
-  // commands within the same RUN block (e.g. openclaw doctor --fix) fall
-  // through to the generic recovery rather than showing a misleading
-  // network-policy hint. Requiring the "npm error" prefix anchors the evidence
-  // to npm's own output — commands run after a successful plugin install
-  // produce different error formats and will not match. [^']* matches newlines
-  // in JS character classes, so multi-line command text is handled correctly.
-  // See #4127 / follow-up from #4125.
-  if (
-    /The command '[^']*(?:openclaw plugins install|npm:@openclaw\/)[^']*'\s*returned a non-zero code/i.test(
+  // step AND an npm-prefixed network/egress error within the text leading up to
+  // (and including) that block. Searching only the prefix of the output up to
+  // the Docker error boundary prevents a network failure in an unrelated later
+  // RUN block — or a different npm script in the same RUN block that runs after
+  // the plugin install succeeds — from triggering the hint. [^']* matches
+  // newlines in JS character classes, so multi-line command text is handled
+  // correctly. See #4127 / follow-up from #4125.
+  const pluginInstallErrorMatch =
+    /The command '[^']*(?:openclaw plugins install|npm:@openclaw\/)[^']*'\s*returned a non-zero code/i.exec(
       text,
-    ) &&
-    /npm error.*(?:ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ETIMEDOUT|ESOCKETTIMEDOUT|network request.*failed|getaddrinfo|fetch failed|socket hang up|network timeout)/i.test(
-      text,
-    )
-  ) {
-    return { kind: "plugin_install_network_denied", uploadedToGateway };
+    );
+  if (pluginInstallErrorMatch) {
+    const segment = text.slice(
+      0,
+      pluginInstallErrorMatch.index + pluginInstallErrorMatch[0].length,
+    );
+    if (
+      /npm error.*(?:ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ETIMEDOUT|ESOCKETTIMEDOUT|network request.*failed|getaddrinfo|fetch failed|socket hang up|network timeout)/i.test(
+        segment,
+      )
+    ) {
+      return { kind: "plugin_install_network_denied", uploadedToGateway };
+    }
   }
   if (/Created sandbox:/i.test(text)) {
     return { kind: "sandbox_create_incomplete", uploadedToGateway: true };
