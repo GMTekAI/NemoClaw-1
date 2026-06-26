@@ -47,7 +47,7 @@ type SpawnResult = {
 };
 
 type SandboxTokenContainerProbeOptions = {
-  authorization: string;
+  authorization?: string;
   dockerBin: string;
   networkName: string;
   payload: Buffer;
@@ -451,8 +451,7 @@ export function buildSandboxTokenContainerProbeDockerArgs(
     `${path.resolve(bundle.clientCertPath)}:${CONTAINER_PROBE_CLIENT_CERT_PATH}:ro`,
     "--volume",
     `${path.resolve(bundle.clientKeyPath)}:${CONTAINER_PROBE_CLIENT_KEY_PATH}:ro`,
-    "--env",
-    `PROBE_AUTHORIZATION=${options.authorization}`,
+    ...(options.authorization ? ["--env", `PROBE_AUTHORIZATION=${options.authorization}`] : []),
     "--env",
     "PROBE_GRPC_PATH=/openshell.v1.OpenShell/GetSandboxConfig",
     "--env",
@@ -606,6 +605,7 @@ export async function runOpenShellGatewayAuthSourceContractScenario({
       "NemoClaw-generated OPENSHELL_GATEWAY_CONFIG enables local mTLS and sandbox JWT auth",
       "inherited OPENSHELL_DISABLE_GATEWAY_AUTH is scrubbed before launch",
       "no-token Docker-origin access to user-callable gateway APIs is rejected or unreachable",
+      "mTLS-only Docker-origin access to sandbox-only gateway APIs is rejected",
       "valid sandbox JWT access from Docker origin to sandbox-allowlisted APIs reaches OpenShell auth",
     ],
     gatewayBin,
@@ -642,6 +642,19 @@ export async function runOpenShellGatewayAuthSourceContractScenario({
   const configPath = String(launch.env.OPENSHELL_GATEWAY_CONFIG || "");
   expect(configPath).toBe(path.join(stateDir, "openshell-gateway.toml"));
   const sandboxId = "sandbox-auth-contract";
+  const mtlsOnlyContainerCall = sandboxTokenContainerProbe({
+    dockerBin,
+    networkName,
+    payload: getSandboxConfigRequest(sandboxId),
+    port,
+    stateDir,
+  });
+  await artifacts.writeJson("mtls-only-container-probe.json", mtlsOnlyContainerCall);
+  skipUnavailableProbeImage(mtlsOnlyContainerCall, skip);
+  expect(noTokenProbeWasRejected(mtlsOnlyContainerCall), commandOutput(mtlsOnlyContainerCall)).toBe(
+    true,
+  );
+
   const sandboxToken = mintSandboxJwt({ configPath, sandboxId });
   const sandboxCall = await callGrpc({
     authorization: `Bearer ${sandboxToken}`,

@@ -8,6 +8,9 @@ import path from "node:path";
 
 export const DOCKER_DRIVER_GATEWAY_LOCAL_TLS_DIR_NAME = "tls";
 
+const REQUIRED_SERVER_DNS_SANS = ["host.openshell.internal", "localhost"];
+const REQUIRED_SERVER_IP_SANS = ["127.0.0.1"];
+
 export type DockerDriverGatewayLocalTlsBundle = {
   localTlsDir: string;
   caPath: string;
@@ -68,7 +71,8 @@ export function dockerDriverGatewayLocalTlsBundleIsComplete(stateDir: string): b
     certificateMatchesPrivateKey(serverCert, serverKey) &&
     certificateMatchesPrivateKey(clientCert, clientKey) &&
     certificateVerifiesAgainstCa(serverCert, ca) &&
-    certificateVerifiesAgainstCa(clientCert, ca)
+    certificateVerifiesAgainstCa(clientCert, ca) &&
+    certificateHasRequiredServerSubjectAltNames(serverCert)
   );
 }
 
@@ -128,6 +132,22 @@ function certificateVerifiesAgainstCa(certificate: X509Certificate, ca: X509Cert
   }
 }
 
+function certificateHasRequiredServerSubjectAltNames(certificate: X509Certificate): boolean {
+  const subjectAltNames = new Set(
+    (certificate.subjectAltName ?? "")
+      .split(",")
+      .map((entry) => entry.trim().toLowerCase())
+      .filter(Boolean),
+  );
+  return (
+    REQUIRED_SERVER_DNS_SANS.every((dnsName) => subjectAltNames.has(`dns:${dnsName}`)) &&
+    REQUIRED_SERVER_IP_SANS.every(
+      (ipAddress) =>
+        subjectAltNames.has(`ip address:${ipAddress}`) || subjectAltNames.has(`ip:${ipAddress}`),
+    )
+  );
+}
+
 function normalizeDockerDriverGatewayLocalTlsBundlePermissions(
   bundle: DockerDriverGatewayLocalTlsBundle,
 ): void {
@@ -157,6 +177,10 @@ export function ensureDockerDriverGatewayLocalTlsBundle({
       bundle.localTlsDir,
       "--server-san",
       "host.openshell.internal",
+      "--server-san",
+      "localhost",
+      "--server-san",
+      "127.0.0.1",
     ],
     {
       encoding: "utf-8",

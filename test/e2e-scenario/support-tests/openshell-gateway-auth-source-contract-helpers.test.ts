@@ -30,6 +30,7 @@ describe("OpenShell gateway auth source contract helpers", () => {
     ]);
     expect(valuesAfterFlag(args, "--env")).toEqual(
       expect.arrayContaining([
+        "PROBE_AUTHORIZATION=Bearer sandbox-token",
         "PROBE_CA_PATH=/tmp/nemoclaw-probe-ca.crt",
         "PROBE_CLIENT_CERT_PATH=/tmp/nemoclaw-probe-client.crt",
         "PROBE_CLIENT_KEY_PATH=/tmp/nemoclaw-probe-client.key",
@@ -41,5 +42,19 @@ describe("OpenShell gateway auth source contract helpers", () => {
     expect(serializedArgs).not.toContain("jwt/signing.pem");
     expect(serializedArgs).not.toContain("jwt/kid");
     expect(serializedArgs).not.toContain("openshell-gateway.toml");
+  });
+
+  it("omits sandbox JWT material from the mTLS-only Docker probe", () => {
+    const args = buildSandboxTokenContainerProbeDockerArgs({
+      dockerBin: "docker",
+      networkName: "nemoclaw-auth-source-net",
+      payload: Buffer.from("sandbox request"),
+      port: 47321,
+      stateDir: path.resolve("/tmp/nemoclaw-auth-source-state"),
+    });
+
+    expect(
+      valuesAfterFlag(args, "--env").some((value) => value.startsWith("PROBE_AUTHORIZATION=")),
+    ).toBe(false);
   });
 });
