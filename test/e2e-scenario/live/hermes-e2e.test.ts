@@ -193,9 +193,8 @@ function forwardListHasRunningPort(output: string, sandboxName: string, port: st
 
 function parseGatewayProcess(output: string): { owner: string; pid: string } {
   const [owner = "", pid = ""] = output.trim().split(/\s+/);
-  if (!owner || !/^[0-9]+$/.test(pid)) {
-    throw new Error(`expected gateway process owner and pid, got ${JSON.stringify(output)}`);
-  }
+  expect(owner, `expected gateway process owner, got ${JSON.stringify(output)}`).not.toBe("");
+  expect(pid, `expected gateway process pid, got ${JSON.stringify(output)}`).toMatch(/^[0-9]+$/);
   return { owner, pid };
 }
 
@@ -590,9 +589,9 @@ test.skipIf(!shouldRunLiveE2EScenarios())(
     });
     expect(restartForwardList.exitCode, resultText(restartForwardList)).toBe(0);
     expect(forwardListHasRunningPort(restartForwardList.stdout, SANDBOX_NAME, "8642")).toBe(true);
-    if (hermesDashboardE2eEnabled()) {
+    for (const dashboardPort of hermesDashboardE2eEnabled() ? [HERMES_DASHBOARD_PORT] : []) {
       expect(
-        forwardListHasRunningPort(restartForwardList.stdout, SANDBOX_NAME, HERMES_DASHBOARD_PORT),
+        forwardListHasRunningPort(restartForwardList.stdout, SANDBOX_NAME, dashboardPort),
       ).toBe(true);
     }
 
