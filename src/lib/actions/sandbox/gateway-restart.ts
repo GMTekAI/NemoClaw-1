@@ -91,6 +91,14 @@ function sanitizeGatewayRestartFailureLine(line: string): string {
   return redactFull(line.replace(ANSI_CONTROL_RE, ""));
 }
 
+function sanitizeGatewayRestartFailureDetail(detail: string): string {
+  return detail
+    .split(/\r?\n/)
+    .map((line) => sanitizeGatewayRestartFailureLine(line.trim()))
+    .filter(Boolean)
+    .join("\n");
+}
+
 export function classifyGatewayRestartFailure(result: GatewayRestartCommandResult | null): {
   layer: GatewayRestartFailureLayer;
   detail: string;
@@ -103,15 +111,16 @@ export function classifyGatewayRestartFailure(result: GatewayRestartCommandResul
   }
 
   const output = gatewayRestartOutput(result);
+  const detail = sanitizeGatewayRestartFailureDetail(output.trim());
   if (
     output.includes("ROOT_EXEC_UNAVAILABLE") ||
     output.includes("GOSU_MISSING") ||
     output.includes("GATEWAY_USER_MISSING")
   ) {
-    return { layer: "root exec unavailable", detail: output.trim() || "root exec unavailable" };
+    return { layer: "root exec unavailable", detail: detail || "root exec unavailable" };
   }
   if (output.includes("SECRET_BOUNDARY_REFUSED")) {
-    return { layer: "secret-boundary refusal", detail: output.trim() || "boundary refused" };
+    return { layer: "secret-boundary refusal", detail: detail || "boundary refused" };
   }
   if (
     output.includes("HERMES_UNSAFE_CONFIG_PATH") ||
@@ -122,15 +131,15 @@ export function classifyGatewayRestartFailure(result: GatewayRestartCommandResul
     output.includes("refusing to follow symlink") ||
     output.includes("refusing hardlinked runtime config path")
   ) {
-    return { layer: "unsafe config path", detail: output.trim() || "unsafe config path" };
+    return { layer: "unsafe config path", detail: detail || "unsafe config path" };
   }
   if (output.includes("HERMES_LOCKED_HASH_MISMATCH")) {
     return {
       layer: "hash mismatch while locked",
-      detail: output.trim() || "Hermes config hash mismatch while locked",
+      detail: detail || "Hermes config hash mismatch while locked",
     };
   }
-  return { layer: "launch failure", detail: output.trim() || `restart exited ${result.status}` };
+  return { layer: "launch failure", detail: detail || `restart exited ${result.status}` };
 }
 
 export function printGatewayRestartFailure(

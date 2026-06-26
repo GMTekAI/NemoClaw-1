@@ -285,6 +285,11 @@ describe("restartSandboxGateway — host-mediated gateway restart", () => {
       const result = restartSandboxGateway("alpha", { deps });
 
       expect(result).toMatchObject({ ok: false, failureLayer: "launch failure" });
+      expect(result.ok).toBe(false);
+      const failure = result as Extract<typeof result, { ok: false }>;
+      expect(failure.detail).toContain("OPENAI_API_KEY=<REDACTED>");
+      expect(failure.detail).not.toContain("\u001b");
+      expect(failure.detail).not.toContain("sk-review-secret");
       const errorOutput = vi.mocked(console.error).mock.calls.join("\n");
       expect(errorOutput).toContain("Failure layer: launch failure");
       expect(errorOutput).toContain("OPENAI_API_KEY=<REDACTED>");

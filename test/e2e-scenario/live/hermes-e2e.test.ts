@@ -595,6 +595,57 @@ test.skipIf(!shouldRunLiveE2EScenarios())(
       ).toBe(true);
     }
 
+    const stopGatewayForRecover = await sandbox.execShell(
+      SANDBOX_NAME,
+      trustedSandboxShellScript(
+        [
+          "set -eu",
+          `pid=${shellQuote(afterGateway.pid)}`,
+          'kill -TERM "$pid" 2>/dev/null || true',
+          'for _i in 1 2 3 4 5; do state=$(ps -p "$pid" -o stat= 2>/dev/null || true); case "$state" in \'\'|Z*) echo GATEWAY_STOPPED; exit 0 ;; esac; sleep 1; done',
+          'kill -KILL "$pid" 2>/dev/null || true',
+          'for _i in 1 2 3 4 5; do state=$(ps -p "$pid" -o stat= 2>/dev/null || true); case "$state" in \'\'|Z*) echo GATEWAY_STOPPED; exit 0 ;; esac; sleep 1; done',
+          'echo GATEWAY_STOP_FAILED; ps -p "$pid" -o pid,stat,args=; exit 1',
+        ].join("; "),
+      ),
+      {
+        artifactName: "phase-5-stop-hermes-gateway-before-recover",
+        env: commandEnv(),
+        timeoutMs: 30_000,
+      },
+    );
+    expect(stopGatewayForRecover.exitCode, resultText(stopGatewayForRecover)).toBe(0);
+    expect(stopGatewayForRecover.stdout).toContain("GATEWAY_STOPPED");
+
+    const recoverStoppedGateway = await host.command("nemohermes", [SANDBOX_NAME, "recover"], {
+      artifactName: "phase-5-nemohermes-recover-stopped-gateway",
+      env: commandEnv(),
+      timeoutMs: 180_000,
+    });
+    expect(recoverStoppedGateway.exitCode, resultText(recoverStoppedGateway)).toBe(0);
+
+    const afterRecoverProcess = await sandbox.execShell(SANDBOX_NAME, gatewayProcessScript, {
+      artifactName: "phase-5-hermes-gateway-process-after-recover",
+      env: commandEnv(),
+      timeoutMs: 30_000,
+    });
+    expect(afterRecoverProcess.exitCode, resultText(afterRecoverProcess)).toBe(0);
+    const recoveredGateway = parseGatewayProcess(afterRecoverProcess.stdout);
+    expect(recoveredGateway.owner).toBe("gateway");
+    expect(recoveredGateway.pid).not.toBe(afterGateway.pid);
+
+    const recoverHostHealth = await host.command(
+      "curl",
+      ["-sf", "--max-time", "10", HERMES_HOST_HEALTH_URL],
+      {
+        artifactName: "phase-5-hermes-host-health-after-recover",
+        env: commandEnv(),
+        timeoutMs: 30_000,
+      },
+    );
+    expect(recoverHostHealth.exitCode, resultText(recoverHostHealth)).toBe(0);
+    expect(resultText(recoverHostHealth)).toMatch(/"ok"/i);
+
     // Phase 6: live inference through both the external provider and the
     // sandbox's inference.local route.
     const directChat = await retryHostedInference(
@@ -693,17 +744,99 @@ test.skipIf(!shouldRunLiveE2EScenarios())(
     expect(manifestCheck.stdout).toMatch(/hermes_display:.*Hermes/);
     expect(manifestCheck.stdout).toMatch(/agents:.*(openclaw.*hermes|hermes.*openclaw)/);
 
-    // Phase 8: explicit cleanup and post-destroy registry proof.
+    // Phase 8: locked Hermes config drift is refused instead of adopted.
+    const shieldsUp = await host.command("nemohermes", [SANDBOX_NAME, "shields", "up"], {
+      artifactName: "phase-8-nemohermes-shields-up",
+      env: commandEnv(),
+      timeoutMs: 120_000,
+    });
+    expect(shieldsUp.exitCode, resultText(shieldsUp)).toBe(0);
+
+    const lockedDriftMarker = `issue_2426_locked_${Date.now()}`;
+    const introduceLockedDrift = await sandbox.execShell(
+      SANDBOX_NAME,
+      trustedSandboxShellScript(
+        [
+          "set -eu",
+          `marker=${shellQuote(lockedDriftMarker)}`,
+          'for path in /sandbox/.hermes /sandbox/.hermes/config.yaml /sandbox/.hermes/.env /etc/nemoclaw/hermes.config-hash /sandbox/.hermes/.config-hash; do chattr -i "$path" 2>/dev/null || true; done',
+          "chmod u+w /sandbox/.hermes/.env",
+          'printf "\\nNEMOCLAW_E2E_LOCKED_DRIFT_MARKER=%s\\n" "$marker" >> /sandbox/.hermes/.env',
+          "chown root:root /sandbox/.hermes /sandbox/.hermes/config.yaml /sandbox/.hermes/.env /etc/nemoclaw/hermes.config-hash /sandbox/.hermes/.config-hash",
+          "chmod 755 /sandbox/.hermes",
+          "chmod 444 /sandbox/.hermes/config.yaml /sandbox/.hermes/.env /etc/nemoclaw/hermes.config-hash /sandbox/.hermes/.config-hash",
+          "echo LOCKED_DRIFT_READY",
+        ].join("; "),
+      ),
+      {
+        artifactName: "phase-8-introduce-locked-hermes-drift",
+        env: commandEnv(),
+        timeoutMs: 30_000,
+      },
+    );
+    expect(introduceLockedDrift.exitCode, resultText(introduceLockedDrift)).toBe(0);
+    expect(introduceLockedDrift.stdout).toContain("LOCKED_DRIFT_READY");
+
+    const lockedRestart = await host.command(
+      "nemohermes",
+      [SANDBOX_NAME, "gateway", "restart", "--quiet"],
+      {
+        artifactName: "phase-8-nemohermes-gateway-restart-locked-drift",
+        env: commandEnv(),
+        timeoutMs: 180_000,
+      },
+    );
+    expect(lockedRestart.exitCode, resultText(lockedRestart)).not.toBe(0);
+    expect(resultText(lockedRestart)).toMatch(
+      /hash mismatch while locked|HERMES_LOCKED_HASH_MISMATCH/,
+    );
+
+    const afterLockedRefusalProcess = await sandbox.execShell(SANDBOX_NAME, gatewayProcessScript, {
+      artifactName: "phase-8-hermes-gateway-process-after-locked-refusal",
+      env: commandEnv(),
+      timeoutMs: 30_000,
+    });
+    expect(afterLockedRefusalProcess.exitCode, resultText(afterLockedRefusalProcess)).toBe(0);
+    const gatewayAfterLockedRefusal = parseGatewayProcess(afterLockedRefusalProcess.stdout);
+    expect(gatewayAfterLockedRefusal.owner).toBe("gateway");
+    expect(gatewayAfterLockedRefusal.pid).toBe(recoveredGateway.pid);
+
+    const restoreLockedDrift = await sandbox.execShell(
+      SANDBOX_NAME,
+      trustedSandboxShellScript(
+        [
+          "set -eu",
+          'for path in /sandbox/.hermes /sandbox/.hermes/config.yaml /sandbox/.hermes/.env /etc/nemoclaw/hermes.config-hash /sandbox/.hermes/.config-hash; do chattr -i "$path" 2>/dev/null || true; done',
+          "chmod u+w /sandbox/.hermes/.env /etc/nemoclaw/hermes.config-hash /sandbox/.hermes/.config-hash",
+          'python3 -c \'from pathlib import Path; p=Path("/sandbox/.hermes/.env"); lines=[line for line in p.read_text(encoding="utf-8").splitlines() if not line.startswith("NEMOCLAW_E2E_LOCKED_DRIFT_MARKER=")]; p.write_text("\\n".join(lines).rstrip()+"\\n", encoding="utf-8")\'',
+          "sha256sum /sandbox/.hermes/config.yaml /sandbox/.hermes/.env > /etc/nemoclaw/hermes.config-hash",
+          "sha256sum /sandbox/.hermes/config.yaml /sandbox/.hermes/.env > /sandbox/.hermes/.config-hash",
+          "chown root:root /sandbox/.hermes /sandbox/.hermes/config.yaml /sandbox/.hermes/.env /etc/nemoclaw/hermes.config-hash /sandbox/.hermes/.config-hash",
+          "chmod 755 /sandbox/.hermes",
+          "chmod 444 /sandbox/.hermes/config.yaml /sandbox/.hermes/.env /etc/nemoclaw/hermes.config-hash /sandbox/.hermes/.config-hash",
+          "echo OK",
+        ].join("; "),
+      ),
+      {
+        artifactName: "phase-8-restore-locked-hermes-drift",
+        env: commandEnv(),
+        timeoutMs: 30_000,
+      },
+    );
+    expect(restoreLockedDrift.exitCode, resultText(restoreLockedDrift)).toBe(0);
+    expect(restoreLockedDrift.stdout).toContain("OK");
+
+    // Phase 9: explicit cleanup and post-destroy registry proof.
     if (process.env.NEMOCLAW_E2E_KEEP_SANDBOX !== "1") {
       const destroy = await host.command("nemoclaw", [SANDBOX_NAME, "destroy", "--yes"], {
-        artifactName: "phase-8-nemoclaw-destroy",
+        artifactName: "phase-9-nemoclaw-destroy",
         env: commandEnv(),
         timeoutMs: 120_000,
       });
       expect(destroy.exitCode, resultText(destroy)).toBe(0);
       await bestEffort(() =>
         sandbox.openshell(["gateway", "destroy", "-g", "nemoclaw"], {
-          artifactName: "phase-8-openshell-gateway-destroy",
+          artifactName: "phase-9-openshell-gateway-destroy",
           env: commandEnv(),
           timeoutMs: 60_000,
         }),
