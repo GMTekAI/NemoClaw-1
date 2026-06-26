@@ -40,19 +40,31 @@ require_safe_image_ref() {
   if [[ "$ref" == nemoclaw-hermes-base-local ]]; then
     return 0
   fi
-  if [[ "$ref" =~ ^ghcr\.io/nvidia/nemoclaw/hermes-sandbox-base(@sha256:[a-f0-9]{64}|:[A-Za-z0-9._-]+)$ ]]; then
+  if [[ "$ref" =~ ^ghcr\.io/nvidia/nemoclaw/hermes-sandbox-base@sha256:[a-f0-9]{64}$ ]]; then
     return 0
   fi
   if [[ "$ref" == ghcr.io/nvidia/nemoclaw/hermes-sandbox-base@sha256:* ]]; then
     fail "Hermes base image ref has an invalid sha256 digest: $ref"
   fi
   if [[ "$ref" == ghcr.io/nvidia/nemoclaw/hermes-sandbox-base:* ]]; then
-    fail "Hermes base image ref has an invalid tag: $ref"
+    fail "Hermes base image ref must be an immutable digest while stale .openclaw cleanup is present: $ref"
   fi
   if [[ "$ref" == ghcr.io/nvidia/nemoclaw/hermes-sandbox-base* ]]; then
     fail "Hermes base image ref is not an allowed Hermes base form: $ref"
   fi
   fail "Hermes base image ref is outside the allowed Hermes base images: $ref"
+}
+
+verify_dockerfile_base_digest_contract() {
+  local dockerfile="${REPO_ROOT}/agents/hermes/Dockerfile"
+  # shellcheck disable=SC2016 # literal Dockerfile ARG reference, not shell expansion
+  grep -Fx 'ARG BASE_IMAGE=ghcr.io/nvidia/nemoclaw/hermes-sandbox-base@${NEMOCLAW_STALE_OPENCLAW_BASE_DIGEST}' "$dockerfile" >/dev/null \
+    || fail "Hermes Dockerfile must single-source BASE_IMAGE from NEMOCLAW_STALE_OPENCLAW_BASE_DIGEST"
+  grep -Eq '^ARG NEMOCLAW_STALE_OPENCLAW_BASE_DIGEST=sha256:[a-f0-9]{64}$' "$dockerfile" \
+    || fail "Hermes Dockerfile must define a pinned stale OpenClaw base digest"
+  if grep -Eq '^ARG BASE_IMAGE=ghcr[.]io/nvidia/nemoclaw/hermes-sandbox-base@sha256:' "$dockerfile"; then
+    fail "Hermes Dockerfile must not hard-code the stale digest in BASE_IMAGE"
+  fi
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
@@ -153,6 +165,7 @@ main() {
 
   BASE_IMAGE="${NEMOCLAW_HERMES_BASE_IMAGE:-${HERMES_BASE_IMAGE:-}}"
   require_safe_image_ref "$BASE_IMAGE"
+  verify_dockerfile_base_digest_contract
   require_docker
   SYMLINK_BUILD_LOG="$(mktemp -t nemoclaw-hermes-stale-openclaw-build.XXXXXX.log)"
   CLEANUP_DOCKER_IMAGES=1

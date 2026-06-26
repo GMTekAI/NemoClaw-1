@@ -38,7 +38,7 @@ runs:
           fi
           digest_ref="$(docker image inspect "$ref" --format '{{range .RepoDigests}}{{println .}}{{end}}' | grep -F -m 1 "${image}@sha256:" || true)"
           if [[ -z "$digest_ref" ]]; then
-            echo "::warning::Hermes sandbox base image ${ref} did not expose an immutable GHCR repo digest"
+            echo "::warning::Hermes sandbox base image ${ref} did not expose an immutable GHCR repo digest (may be a fresh tag); building locally"
             return 1
           fi
           echo "HERMES_BASE_IMAGE=${digest_ref}" >> "$GITHUB_ENV"

@@ -74,6 +74,7 @@ describe("Hermes stale OpenClaw guardrails", () => {
       "malicious:tag",
       "ghcr.io/evil/image@sha256:deadbeef",
       "ghcr.io/nvidia/nemoclaw/hermes-sandbox-base@sha256:invalid",
+      "ghcr.io/nvidia/nemoclaw/hermes-sandbox-base:latest",
     ];
     fs.mkdirSync(fakeBin);
     fs.writeFileSync(
@@ -85,6 +86,7 @@ describe("Hermes stale OpenClaw guardrails", () => {
     try {
       for (const [index, ref] of unsafeRefs.entries()) {
         fs.rmSync(dockerLog, { force: true });
+        // Prepend a fake docker binary so this validation-only test fails if docker is reached.
         const result = spawnSync("bash", [VERIFY_SCRIPT], {
           encoding: "utf-8",
           env: {

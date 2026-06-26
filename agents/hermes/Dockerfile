@@ -6,12 +6,13 @@
 # Layers PR-specific code (plugin, config, startup script) on top of the
 # pre-built Hermes base image. Mirrors the OpenClaw Dockerfile structure.
 
-ARG BASE_IMAGE=ghcr.io/nvidia/nemoclaw/hermes-sandbox-base@sha256:60333c1982ad855d55887b4488e867eb343f3930a30aa8e0268e5397fc6f2926
+ARG NEMOCLAW_STALE_OPENCLAW_BASE_DIGEST=sha256:60333c1982ad855d55887b4488e867eb343f3930a30aa8e0268e5397fc6f2926
+ARG BASE_IMAGE=ghcr.io/nvidia/nemoclaw/hermes-sandbox-base@${NEMOCLAW_STALE_OPENCLAW_BASE_DIGEST}
 
 # hadolint ignore=DL3006
 FROM ${BASE_IMAGE}
 ARG BASE_IMAGE
-ARG NEMOCLAW_STALE_OPENCLAW_BASE_DIGEST=sha256:60333c1982ad855d55887b4488e867eb343f3930a30aa8e0268e5397fc6f2926
+ARG NEMOCLAW_STALE_OPENCLAW_BASE_DIGEST
 
 # Keep the final image contract explicit even when the published base image
 # changes independently of this Dockerfile.
@@ -261,6 +262,11 @@ USER root
 # starts the sandbox as the sandbox user, so runtime migration cannot rely on
 # root privileges inside the pod. Regression coverage lives in
 # scripts/verify-hermes-stale-openclaw-image.sh.
+# REMOVAL_CHECKLIST:
+# 1. BASE_IMAGE defaults to a digest newer than NEMOCLAW_STALE_OPENCLAW_BASE_DIGEST.
+# 2. Supported GHCR Hermes base tags resolve to post-stale-layout digests.
+# 3. Hermes stale-layout verifier coverage is kept or intentionally retired.
+# 4. Remove this ARG and cleanup block in the same PR that advances the default.
 # Refuse symlinked stale state before rm -rf so a compromised base cannot point
 # cleanup outside the Hermes sandbox root.
 # Docker image layers cannot persist bind mounts at /sandbox/.openclaw, so the
