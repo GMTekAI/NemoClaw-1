@@ -73,6 +73,7 @@ export function ensureDockerDriverGatewayLocalTlsBundle({
   const bundle = getDockerDriverGatewayLocalTlsBundle(stateDir);
   fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   fs.chmodSync(stateDir, 0o700);
+  if (dockerDriverGatewayLocalTlsBundleIsComplete(stateDir)) return bundle;
 
   const result = spawnSyncImpl(
     gatewayBin,
