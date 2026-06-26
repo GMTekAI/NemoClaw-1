@@ -1305,18 +1305,17 @@ describe("Hermes sandbox provisioning", () => {
       fs.writeFileSync(path.join(hermesDir, "config.yaml"), "model: test\n");
       fs.writeFileSync(path.join(hermesDir, ".env"), "TOKEN=test\n");
     }
-    if (precreateStaleOpenclaw) {
-      const openclawDir = path.join(sandboxRoot, ".openclaw");
-      if (precreateStaleOpenclaw === "symlink") {
-        const staleOpenclawTarget = path.join(tmp, "stale-openclaw-target");
+    const openclawDir = path.join(sandboxRoot, ".openclaw");
+    const staleOpenclawTarget = path.join(tmp, "stale-openclaw-target");
+    ({
+      false: () => {},
+      true: () => { fs.mkdirSync(openclawDir, { recursive: true }); fs.writeFileSync(path.join(openclawDir, "openclaw.json"), "{}\n"); },
+      symlink: () => {
         fs.mkdirSync(staleOpenclawTarget, { recursive: true });
         fs.writeFileSync(path.join(staleOpenclawTarget, "sentinel"), "keep\n");
         fs.symlinkSync(staleOpenclawTarget, openclawDir, "dir");
-      } else {
-        fs.mkdirSync(openclawDir, { recursive: true });
-        fs.writeFileSync(path.join(openclawDir, "openclaw.json"), "{}\n");
-      }
-    }
+      },
+    }[String(precreateStaleOpenclaw)])();
     const command = dockerRunCommandBetween(dockerfile, startMarker, endMarker).replaceAll(
       "/root/.cache/pip",
       path.join(tmp, "root-cache", "pip"),
