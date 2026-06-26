@@ -295,20 +295,32 @@ describe("restartSandboxGateway — host-mediated gateway restart", () => {
     }
   });
 
-  it("refuses terminal agents with an unsupported-agent layer", () => {
+  it("refuses terminal agents with the unsupported-agent support matrix", () => {
     const restore = silenceConsole();
     try {
       const deps = baseDeps({
         getSessionAgent: () => ({
-          name: "terminal-agent",
-          displayName: "Terminal Agent",
+          name: "langchain-deepagents-code",
+          displayName: "LangChain Deep Agents Code",
           runtime: { kind: "terminal" },
         }),
-        getSandbox: () => ({ name: "alpha", agent: "terminal-agent" }),
+        getSandbox: () => ({ name: "alpha", agent: "langchain-deepagents-code" }),
       });
       const result = restartSandboxGateway("alpha", { deps });
 
       expect(result).toMatchObject({ ok: false, failureLayer: "unsupported agent" });
+      expect(result.ok).toBe(false);
+      const failure = result as Extract<typeof result, { ok: false }>;
+      expect(failure.detail).toContain(
+        "Agent 'langchain-deepagents-code' does not support gateway restart.",
+      );
+      expect(failure.detail).toContain("Gateway restart-supported agents: openclaw, hermes.");
+      expect(failure.detail).toContain("LangChain Deep Agents Code has no gateway runtime.");
+      const errorOutput = vi.mocked(console.error).mock.calls.join("\n");
+      expect(errorOutput).toContain(
+        "Agent 'langchain-deepagents-code' does not support gateway restart.",
+      );
+      expect(errorOutput).toContain("Gateway restart-supported agents: openclaw, hermes.");
       expect(deps.executeSandboxExecCommand).not.toHaveBeenCalled();
     } finally {
       restore();
@@ -327,7 +339,42 @@ describe("restartSandboxGateway — host-mediated gateway restart", () => {
       expect(result).toMatchObject({ ok: false, failureLayer: "unsupported agent" });
       expect(result.ok).toBe(false);
       const failure = result as Extract<typeof result, { ok: false }>;
+      expect(failure.detail).toContain("Agent 'custom-agent' does not support gateway restart.");
+      expect(failure.detail).toContain("Gateway restart-supported agents: openclaw, hermes.");
       expect(failure.detail).toContain("custom-agent agent definition could not be loaded");
+      const errorOutput = vi.mocked(console.error).mock.calls.join("\n");
+      expect(errorOutput).toContain("Agent 'custom-agent' does not support gateway restart.");
+      expect(errorOutput).toContain("Gateway restart-supported agents: openclaw, hermes.");
+      expect(deps.buildOpenClawGatewayRestartScript).not.toHaveBeenCalled();
+      expect(deps.executeSandboxExecCommand).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
+
+  it("refuses custom gateway agents without a supported restart runtime", () => {
+    const restore = silenceConsole();
+    try {
+      const deps = baseDeps({
+        getSessionAgent: () => ({
+          name: "custom-gateway",
+          displayName: "Custom Gateway Agent",
+        }),
+        getSandbox: () => ({ name: "alpha", agent: "custom-gateway" }),
+      });
+      const result = restartSandboxGateway("alpha", { deps });
+
+      expect(result).toMatchObject({ ok: false, failureLayer: "unsupported agent" });
+      expect(result.ok).toBe(false);
+      const failure = result as Extract<typeof result, { ok: false }>;
+      expect(failure.detail).toContain("Agent 'custom-gateway' does not support gateway restart.");
+      expect(failure.detail).toContain("Gateway restart-supported agents: openclaw, hermes.");
+      expect(failure.detail).toContain(
+        "Custom Gateway Agent does not declare a supported root-mediated gateway restart runtime.",
+      );
+      const errorOutput = vi.mocked(console.error).mock.calls.join("\n");
+      expect(errorOutput).toContain("Agent 'custom-gateway' does not support gateway restart.");
+      expect(errorOutput).toContain("Gateway restart-supported agents: openclaw, hermes.");
       expect(deps.buildOpenClawGatewayRestartScript).not.toHaveBeenCalled();
       expect(deps.executeSandboxExecCommand).not.toHaveBeenCalled();
     } finally {

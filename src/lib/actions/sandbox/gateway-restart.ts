@@ -42,6 +42,8 @@ type SandboxExec = (
   timeout?: number,
 ) => GatewayRestartCommandResult | null;
 
+const GATEWAY_RESTART_SUPPORTED_AGENTS = ["openclaw", "hermes"] as const;
+
 export type GatewayRestartDeps = {
   getSessionAgent: typeof agentRuntime.getSessionAgent;
   getSandbox: SandboxAgentLookup;
@@ -172,6 +174,14 @@ function restartPortForAgent(
   return isValidPort(port) ? port : fallback;
 }
 
+function unsupportedGatewayRestartAgentDetail(agentName: string, reason: string): string {
+  return [
+    `Agent '${agentName}' does not support gateway restart.`,
+    `Gateway restart-supported agents: ${GATEWAY_RESTART_SUPPORTED_AGENTS.join(", ")}.`,
+    reason,
+  ].join("\n");
+}
+
 export function restartSandboxGatewayWithDeps(
   sandboxName: string,
   {
@@ -189,12 +199,18 @@ export function restartSandboxGatewayWithDeps(
 
   let script: string | null = null;
   if (!agent && persistedAgent && persistedAgent !== "openclaw") {
-    const detail = `${persistedAgent} agent definition could not be loaded.`;
+    const detail = unsupportedGatewayRestartAgentDetail(
+      persistedAgent,
+      `${persistedAgent} agent definition could not be loaded.`,
+    );
     printGatewayRestartFailure(sandboxName, "unsupported agent", detail);
     return { ok: false, failureLayer: "unsupported agent", detail };
   }
   if (agent && !agentRuntime.hasGatewayRuntime(agent)) {
-    const detail = `${agentRuntime.getAgentDisplayName(agent)} has no gateway runtime.`;
+    const detail = unsupportedGatewayRestartAgentDetail(
+      agent.name,
+      `${agentRuntime.getAgentDisplayName(agent)} has no gateway runtime.`,
+    );
     printGatewayRestartFailure(sandboxName, "unsupported agent", detail);
     return { ok: false, failureLayer: "unsupported agent", detail };
   }
@@ -208,9 +224,10 @@ export function restartSandboxGatewayWithDeps(
   } else if (!agent || agentName === "openclaw") {
     script = deps.buildOpenClawGatewayRestartScript(dashboardPort);
   } else {
-    const detail =
+    const reason =
       `${agentRuntime.getAgentDisplayName(agent)} does not declare a supported root-mediated ` +
       "gateway restart runtime.";
+    const detail = unsupportedGatewayRestartAgentDetail(agent.name, reason);
     printGatewayRestartFailure(sandboxName, "unsupported agent", detail);
     return { ok: false, failureLayer: "unsupported agent", detail };
   }
