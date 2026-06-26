@@ -67,9 +67,8 @@ export async function setupMessagingChannels(
 
   const invalidConfigEnvValues = detectInvalidMessagingChannelConfigEnvValues();
   for (const { key, rawValue, validValues } of invalidConfigEnvValues) {
-    console.error(
-      `  Invalid ${key} value '${rawValue}' (expected one of: ${validValues.join(", ")})`,
-    );
+    const expectedValues = Array.from(validValues).join(", ");
+    console.error(`  Invalid ${key} value '${rawValue}' (expected one of: ${expectedValues})`);
   }
   if (invalidConfigEnvValues.length > 0) process.exit(1);
 
