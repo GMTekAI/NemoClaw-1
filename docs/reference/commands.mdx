@@ -1273,7 +1273,9 @@ $$nemoclaw my-assistant mcp list [--json]
 ### `$$nemoclaw <name> mcp add`
 
 Bridge a host-side stdio MCP server into an OpenClaw sandbox.
-Credentials stay in the host process environment: pass `--env KEY` to reference an existing host environment variable, or `--env KEY=VALUE` to use an inline value only for the initial proxy launch.
+This command accepts stdio MCP server commands only; it does not register already-hosted HTTP MCP URLs.
+Credentials stay in the host process environment: pass `--env KEY` to reference an existing host environment variable, or `--env KEY=VALUE` to assert the exported host value for launch without persisting it.
+Inline values must match the current host environment so restart can relaunch from the persisted environment variable name.
 NemoClaw persists only the environment variable names, allocates a loopback bridge port, applies a generated sandbox network policy for `host.docker.internal:<port>`, and registers the endpoint with OpenClaw through `mcporter`.
 Agents without bridge support fail before proxy, policy, or registry state is created.
 

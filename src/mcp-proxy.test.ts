@@ -171,4 +171,54 @@ process.stdin.on("data", (chunk) => {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
+
+  it("does not expose child error details in JSON-RPC failures", async () => {
+    const server = createMcpProxyServer(
+      {
+        command: process.execPath,
+        args: ["-e", "process.exit(1)"],
+        env: [],
+        port: 0,
+        tokenEnv: null,
+      },
+      "bridge-token",
+    );
+    await new Promise<void>((resolve) => server.listen(0, MCP_PROXY_BIND_HOST, resolve));
+    const address = server.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    try {
+      const response = await new Promise<{ status: number | undefined; body: string }>(
+        (resolve, reject) => {
+          const req = http.request(
+            {
+              host: MCP_PROXY_BIND_HOST,
+              port,
+              method: "POST",
+              path: "/",
+              headers: {
+                Authorization: "Bearer bridge-token",
+                "Content-Type": "application/json",
+              },
+            },
+            (res) => {
+              let body = "";
+              res.on("data", (chunk) => {
+                body += chunk.toString("utf8");
+              });
+              res.on("end", () => resolve({ status: res.statusCode, body }));
+            },
+          );
+          req.on("error", reject);
+          req.end(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }));
+        },
+      );
+      const payload = JSON.parse(response.body);
+
+      expect(response.status).toBe(500);
+      expect(payload.error.message).toBe("Internal MCP proxy error");
+      expect(response.body).not.toContain("child exited");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
 });

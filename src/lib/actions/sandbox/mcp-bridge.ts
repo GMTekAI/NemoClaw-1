@@ -254,7 +254,22 @@ export function resolveLaunchEnv(env: readonly ParsedEnvReference[]): Record<str
   const resolved: Record<string, string> = {};
   for (const entry of env) {
     validateEnvName(entry.name);
-    const value = entry.value ?? process.env[entry.name];
+    const hostValue = process.env[entry.name];
+    if (entry.value !== undefined) {
+      if (hostValue === undefined || hostValue === "") {
+        throw new McpBridgeError(
+          `Inline --env ${entry.name}=VALUE is launch-only. Export '${entry.name}' in the host environment before adding the bridge so restart can relaunch it without persisting the raw value.`,
+          1,
+        );
+      }
+      if (hostValue !== entry.value) {
+        throw new McpBridgeError(
+          `Inline --env ${entry.name}=VALUE does not match the exported host value. Update '${entry.name}' in the host environment, or pass --env ${entry.name} to use the exported value.`,
+          1,
+        );
+      }
+    }
+    const value = entry.value ?? hostValue;
     if (value === undefined || value === "") {
       throw new McpBridgeError(
         `Host environment variable '${entry.name}' is required to launch this MCP bridge.`,
@@ -340,7 +355,7 @@ export function buildMcpBridgePolicyYaml(server: string, port: number): string {
             port,
             protocol: "rest",
             enforcement: "enforce",
-            rules: [{ allow: { method: "POST", path: "/**" } }],
+            rules: [{ allow: { method: "POST", path: "/" } }],
           },
         ],
         binaries: [
@@ -502,6 +517,16 @@ export function buildOpenClawMcporterRegisterCommand(entry: McpBridgeEntry): str
     .join(" ");
 }
 
+export function redactBridgeSecretsForDisplay(
+  text: string,
+  entry: Pick<McpBridgeEntry, "token">,
+): string {
+  if (!text) return text;
+  return text
+    .replaceAll(entry.token, "***REDACTED***")
+    .replace(/Authorization=Bearer\s+\S+/g, "Authorization=Bearer ***REDACTED***");
+}
+
 function buildOpenClawMcporterRemoveCommand(server: string): string {
   return ["mcporter", "config", "remove", server].map(shellQuote).join(" ");
 }
@@ -509,17 +534,32 @@ function buildOpenClawMcporterRemoveCommand(server: string): string {
 function registerOpenClawAdapter(sandboxName: string, entry: McpBridgeEntry): void {
   ensureMcporter(sandboxName);
   const result = executeSandboxCommand(sandboxName, buildOpenClawMcporterRegisterCommand(entry));
-  const output = [result?.stdout, result?.stderr].filter(Boolean).join("\n").trim();
+  const output = redactBridgeSecretsForDisplay(
+    [result?.stdout, result?.stderr].filter(Boolean).join("\n").trim(),
+    entry,
+  );
   if (!result || result.status !== 0) {
     throw new McpBridgeError(output || `mcporter config add failed for '${entry.server}'.`);
   }
 }
 
-function unregisterOpenClawAdapter(sandboxName: string, server: string): void {
-  executeSandboxCommand(
+function unregisterOpenClawAdapter(
+  sandboxName: string,
+  entry: Pick<McpBridgeEntry, "server" | "token">,
+  options: { force?: boolean } = {},
+): void {
+  const result = executeSandboxCommand(
     sandboxName,
-    `${buildOpenClawMcporterRemoveCommand(server)} >/dev/null 2>&1 || true`,
+    buildOpenClawMcporterRemoveCommand(entry.server),
   );
+  const output = redactBridgeSecretsForDisplay(
+    [result?.stdout, result?.stderr].filter(Boolean).join("\n").trim(),
+    entry,
+  );
+  if (!result || result.status !== 0) {
+    if (options.force) return;
+    throw new McpBridgeError(output || `mcporter config remove failed for '${entry.server}'.`);
+  }
 }
 
 function getLogOffset(logPath: string): number {
@@ -615,7 +655,7 @@ export async function addMcpBridge(
     adapterRegistered = true;
     writeBridgeEntry(sandboxName, entry);
   } catch (error) {
-    if (adapterRegistered) unregisterOpenClawAdapter(sandboxName, entry.server);
+    if (adapterRegistered) unregisterOpenClawAdapter(sandboxName, entry, { force: true });
     if (policyApplied) removeGeneratedPolicy(sandboxName, entry.policyName, true);
     if (proxyStarted) stopProxy(sandboxName, entry.server);
     removeBridgeEntryIfPresent(sandboxName, entry.server);
@@ -651,19 +691,35 @@ export async function restartMcpBridge(sandboxName: string, server?: string): Pr
     const envValues = resolveLaunchEnv(entryEnvRefsFromHost(entry));
     stopProxy(sandboxName, name);
     const logOffset = getLogOffset(bridgeLogFile(sandboxName, name));
-    const proxy = startProxy(sandboxName, name, entry, envValues);
-    const readiness = await waitForProxyReady(sandboxName, name, entry.port, logOffset);
-    if (readiness !== "ready") {
-      stopProxy(sandboxName, name);
-      throw new McpBridgeError(`MCP proxy for '${name}' failed to restart.`);
+    let proxyStarted = false;
+    let committed = false;
+    try {
+      const proxy = startProxy(sandboxName, name, entry, envValues);
+      proxyStarted = true;
+      const readiness = await waitForProxyReady(sandboxName, name, entry.port, logOffset);
+      if (readiness !== "ready") {
+        throw new McpBridgeError(`MCP proxy for '${name}' failed to restart.`);
+      }
+      applyGeneratedPolicy(sandboxName, entry);
+      registerOpenClawAdapter(sandboxName, entry);
+      writeBridgeEntry(sandboxName, {
+        ...entry,
+        updatedAt: nowIso(),
+        lifecycle: { pid: proxy.pid, startedAt: nowIso(), lastError: null },
+      });
+      committed = true;
+    } catch (error) {
+      if (proxyStarted && !committed) stopProxy(sandboxName, name);
+      writeBridgeEntry(sandboxName, {
+        ...entry,
+        updatedAt: nowIso(),
+        lifecycle: {
+          ...entry.lifecycle,
+          lastError: error instanceof Error ? error.message : String(error),
+        },
+      });
+      throw error;
     }
-    applyGeneratedPolicy(sandboxName, entry);
-    registerOpenClawAdapter(sandboxName, entry);
-    writeBridgeEntry(sandboxName, {
-      ...entry,
-      updatedAt: nowIso(),
-      lifecycle: { pid: proxy.pid, startedAt: nowIso(), lastError: null },
-    });
     console.log(`  Restarted MCP bridge '${name}' on port ${String(entry.port)}.`);
   }
 }
@@ -689,7 +745,7 @@ export function removeMcpBridge(
 
   const failures: string[] = [];
   try {
-    unregisterOpenClawAdapter(sandboxName, server);
+    unregisterOpenClawAdapter(sandboxName, entry, { force: options.force === true });
   } catch (error) {
     failures.push(error instanceof Error ? error.message : String(error));
   }
@@ -724,7 +780,10 @@ function getAdapterRegistration(
   );
   if (!result) return { registered: null, detail: "sandbox unreachable" };
   if (result.status === 0) return { registered: true };
-  return { registered: false, detail: result.stderr || result.stdout || "not found" };
+  return {
+    registered: false,
+    detail: redactBridgeSecretsForDisplay(result.stderr || result.stdout || "not found", entry),
+  };
 }
 
 export function statusMcpBridge(sandboxName: string, server?: string): McpBridgeStatus[] {
@@ -899,8 +958,8 @@ function renderMcpHelp(subcommand: string): void {
       console.log(`USAGE
   nemoclaw <name> mcp add <server> [--env KEY|KEY=VALUE ...] -- <command> [args...]
 
-FLAGS
-  --env KEY|KEY=VALUE  Host environment variable reference for the bridge process`);
+  FLAGS
+    --env KEY|KEY=VALUE  Host env reference. Inline values must match exported host env and are not persisted.`);
       return;
     case "list":
       console.log(`USAGE

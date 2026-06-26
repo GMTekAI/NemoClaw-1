@@ -27,6 +27,10 @@ export interface JsonRpcMessage {
   error?: unknown;
 }
 
+export interface McpProxyServerOptions {
+  exitOnChildFailure?: boolean;
+}
+
 export function parseProxyArgs(argv: string[]): ProxyConfig {
   const parsed: ProxyConfig = {
     command: null,
@@ -101,6 +105,7 @@ class StdioJsonRpcClient {
   constructor(
     private readonly config: ProxyConfig,
     private readonly secrets: readonly string[],
+    private readonly options: McpProxyServerOptions = {},
   ) {}
 
   start(): void {
@@ -136,13 +141,13 @@ class StdioJsonRpcClient {
       const message = `MCP child exited with code ${String(code)}`;
       console.error(`[mcp-proxy] child exited with code ${String(code)}`);
       this.rejectPending(new Error(message));
-      process.exit(code || 1);
+      if (this.options.exitOnChildFailure) process.exit(code || 1);
     });
     this.child.on("error", (error: Error) => {
       if (this.stopping) return;
       console.error(`[mcp-proxy] child spawn error: ${error.message}`);
       this.rejectPending(error);
-      process.exit(1);
+      if (this.options.exitOnChildFailure) process.exit(1);
     });
   }
 
@@ -247,12 +252,16 @@ function jsonResponse(res: http.ServerResponse, statusCode: number, body: unknow
   res.end(JSON.stringify(body));
 }
 
-export function createMcpProxyServer(config: ProxyConfig, bearerToken: string): http.Server {
+export function createMcpProxyServer(
+  config: ProxyConfig,
+  bearerToken: string,
+  options: McpProxyServerOptions = {},
+): http.Server {
   const secrets = [
     ...config.env.map((name) => process.env[name]).filter((value): value is string => !!value),
     bearerToken,
   ];
-  const client = new StdioJsonRpcClient(config, secrets);
+  const client = new StdioJsonRpcClient(config, secrets, options);
 
   const server = http.createServer(async (req, res) => {
     if (req.method !== "POST") {
@@ -298,12 +307,14 @@ export function createMcpProxyServer(config: ProxyConfig, bearerToken: string): 
       const response = await client.call(request.method, request.params, request.id);
       jsonResponse(res, 200, response);
     } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      console.error(`[mcp-proxy:error] ${redactSecretsFromText(detail, secrets)}`);
       jsonResponse(res, 500, {
         jsonrpc: "2.0",
         id: request.id ?? null,
         error: {
           code: -32603,
-          message: error instanceof Error ? error.message : String(error),
+          message: "Internal MCP proxy error",
         },
       });
     }
@@ -344,7 +355,7 @@ function main(): void {
   }
   if (config.tokenEnv) delete process.env[config.tokenEnv];
 
-  const server = createMcpProxyServer(config, bearerToken);
+  const server = createMcpProxyServer(config, bearerToken, { exitOnChildFailure: true });
   server.on("error", (error: Error) => {
     console.error(
       `[mcp-proxy] failed to listen on ${MCP_PROXY_BIND_HOST}:${String(config.port)}: ${error.message}`,

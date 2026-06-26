@@ -19,6 +19,7 @@ import {
   MCPORTER_VERSION,
   parseMcpAddArgs,
   readLivePid,
+  redactBridgeSecretsForDisplay,
   resolveLaunchEnv,
   waitForProxyReady,
 } from "../../../../dist/lib/actions/sandbox/mcp-bridge";
@@ -98,6 +99,32 @@ describe("MCP bridge CLI parsing", () => {
         : (process.env.MCP_BRIDGE_TEST_TOKEN = prior);
     }
   });
+
+  it("requires inline env values to match exported host env for restart-safe bridges", () => {
+    const prior = process.env.MCP_BRIDGE_INLINE_TOKEN;
+    try {
+      delete process.env.MCP_BRIDGE_INLINE_TOKEN;
+      expect(() =>
+        resolveLaunchEnv([{ name: "MCP_BRIDGE_INLINE_TOKEN", value: "secret-value" }]),
+      ).toThrow(/launch-only/);
+
+      process.env.MCP_BRIDGE_INLINE_TOKEN = "different";
+      expect(() =>
+        resolveLaunchEnv([{ name: "MCP_BRIDGE_INLINE_TOKEN", value: "secret-value" }]),
+      ).toThrow(/does not match/);
+
+      process.env.MCP_BRIDGE_INLINE_TOKEN = "secret-value";
+      expect(
+        resolveLaunchEnv([{ name: "MCP_BRIDGE_INLINE_TOKEN", value: "secret-value" }]),
+      ).toEqual({
+        MCP_BRIDGE_INLINE_TOKEN: "secret-value",
+      });
+    } finally {
+      prior === undefined
+        ? delete process.env.MCP_BRIDGE_INLINE_TOKEN
+        : (process.env.MCP_BRIDGE_INLINE_TOKEN = prior);
+    }
+  });
 });
 
 describe("MCP bridge policy", () => {
@@ -128,7 +155,7 @@ describe("MCP bridge policy", () => {
         port: 3104,
         protocol: "rest",
         enforcement: "enforce",
-        rules: [{ allow: { method: "POST", path: "/**" } }],
+        rules: [{ allow: { method: "POST", path: "/" } }],
       },
     ]);
     expect(entry.binaries.map((binary) => binary.path)).toEqual([
@@ -199,6 +226,15 @@ describe("OpenClaw MCP adapter", () => {
     expect(command).toContain("'--header' 'Authorization=Bearer bridge-token'");
     expect(command).toContain("'--scope' 'home'");
     expect(command).not.toContain("GITHUB_TOKEN");
+  });
+
+  it("redacts bridge bearer tokens from adapter display output", () => {
+    const redacted = redactBridgeSecretsForDisplay(
+      "failed header Authorization=Bearer bridge-token raw bridge-token",
+      { token: "bridge-token" },
+    );
+
+    expect(redacted).toBe("failed header Authorization=Bearer ***REDACTED*** raw ***REDACTED***");
   });
 });
 
