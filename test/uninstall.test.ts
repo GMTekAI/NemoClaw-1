@@ -33,12 +33,9 @@ describe("uninstall CLI flags", () => {
   }
 
   function sanitizedParentEnv(): NodeJS.ProcessEnv {
-    const cleaned: NodeJS.ProcessEnv = {};
-    for (const [key, value] of Object.entries(process.env)) {
-      if (key.startsWith("NEMOCLAW_")) continue;
-      cleaned[key] = value;
-    }
-    return cleaned;
+    return Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => !key.startsWith("NEMOCLAW_")),
+    ) as NodeJS.ProcessEnv;
   }
 
   function runUninstall(
