@@ -44,6 +44,7 @@ export default defineConfig({
             // the cli project (and pre-commit `Test (cli)`) green locally.
             "test/e2e-scenario/live/**",
             "test/install-express-prompt.test.ts",
+            "test/install-build-dependency-preflight.test.ts",
             "test/install-preflight.test.ts",
             "test/install-preflight-docker-bootstrap.test.ts",
             "test/install-openshell-version-check.test.ts",
@@ -56,6 +57,7 @@ export default defineConfig({
           include: runInstallerIntegration
             ? [
                 "test/install-express-prompt.test.ts",
+                "test/install-build-dependency-preflight.test.ts",
                 "test/install-preflight.test.ts",
                 "test/install-preflight-docker-bootstrap.test.ts",
                 "test/install-openshell-version-check.test.ts",

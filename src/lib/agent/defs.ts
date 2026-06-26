@@ -61,9 +61,11 @@ export interface AgentInference {
 }
 
 export type AgentMcpSupport = "bridge" | "disabled";
+export type AgentMcpAdapter = "mcporter" | "hermes-config" | "deepagents-config";
 
 export interface AgentMcpCapability {
   support: AgentMcpSupport;
+  adapter?: AgentMcpAdapter;
   reason?: string;
 }
 
@@ -392,9 +394,28 @@ function readMcpCapability(record: ManifestRecord): AgentMcpCapability {
     throw new Error("Agent manifest field 'mcp.support' must be bridge or disabled");
   }
 
+  const adapter = readString(mcp, "adapter");
+  if (
+    adapter !== undefined &&
+    adapter !== "mcporter" &&
+    adapter !== "hermes-config" &&
+    adapter !== "deepagents-config"
+  ) {
+    throw new Error(
+      "Agent manifest field 'mcp.adapter' must be mcporter, hermes-config, or deepagents-config",
+    );
+  }
+  if (support === "bridge" && !adapter) {
+    throw new Error("Agent manifest field 'mcp.adapter' is required when mcp.support is bridge");
+  }
+  if (support === "disabled" && adapter) {
+    throw new Error("Agent manifest field 'mcp.adapter' is only valid when mcp.support is bridge");
+  }
+
   const reason = readString(mcp, "reason")?.trim();
   return {
     support,
+    ...(adapter ? { adapter } : {}),
     ...(reason ? { reason } : {}),
   };
 }

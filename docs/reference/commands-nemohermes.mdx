@@ -1003,12 +1003,13 @@ nemohermes my-assistant mcp list [--json]
 
 ### `nemohermes <name> mcp add`
 
-Bridge a host-side stdio MCP server into an OpenClaw sandbox.
+Bridge a host-side stdio MCP server into a sandbox.
 This command accepts stdio MCP server commands only; it does not register already-hosted HTTP MCP URLs.
 Credentials stay in the host process environment: pass `--env KEY` to reference an existing host environment variable.
-Inline `--env KEY=VALUE` values are rejected so restart can relaunch from persisted environment variable names without storing raw API keys.
-NemoClaw persists only the environment variable names, allocates a loopback bridge port, applies a generated OpenShell `protocol: mcp` network policy for `host.docker.internal:<port>`, and registers the endpoint with OpenClaw through `mcporter`.
-Agents without bridge support fail before proxy, policy, or registry state is created.
+Inline `--env KEY=VALUE` values are used only for the initial launch; NemoClaw persists only `KEY` so restart can relaunch from host environment variable names without storing raw API keys.
+NemoClaw allocates a loopback bridge port, applies a generated OpenShell `protocol: mcp` network policy for `host.docker.internal:<port>`, and registers the endpoint through the sandbox agent's MCP adapter.
+The command after `--` runs on the host as your current user. Use MCP servers you trust.
+For full setup details, see [Set Up MCP Bridges](../deployment/set-up-mcp-bridge).
 
 ```bash
 nemohermes my-assistant mcp add github --env GITHUB_TOKEN -- npx -y @modelcontextprotocol/server-github
@@ -1030,7 +1031,7 @@ nemohermes my-assistant mcp status [server] [--json]
 ### `nemohermes <name> mcp restart`
 
 Restart one MCP bridge proxy, or every bridge on the sandbox when no server is supplied.
-Restart requires all referenced host environment variables to be present, reapplies the generated policy if needed, and refreshes the OpenClaw `mcporter` registration.
+Restart requires all referenced host environment variables to be present, reapplies the generated policy if needed, and refreshes the sandbox agent adapter registration.
 
 ```bash
 nemohermes my-assistant mcp restart [server]
@@ -1039,7 +1040,7 @@ nemohermes my-assistant mcp restart [server]
 ### `nemohermes <name> mcp remove`
 
 Remove an MCP bridge from a sandbox.
-NemoClaw unregisters the OpenClaw adapter, removes the generated policy, stops the host proxy, deletes runtime files, and clears the sandbox registry entry.
+NemoClaw unregisters the sandbox agent adapter, removes the generated policy, stops the host proxy, deletes runtime files, and clears the sandbox registry entry.
 
 ```bash
 nemohermes my-assistant mcp remove github [--force]

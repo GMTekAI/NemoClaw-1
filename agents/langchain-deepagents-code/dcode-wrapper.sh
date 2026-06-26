@@ -324,7 +324,7 @@ for arg in "$@"; do
     --sandbox-setup | --sandbox-setup=*)
       reject_managed_override "sandbox isolation" "$arg"
       ;;
-    --mcp-config | --mcp-config=* | --trust-project-mcp | --no-mcp=*)
+    --mcp-config | --mcp-config=* | --trust-project-mcp | --no-mcp | --no-mcp=*)
       reject_managed_override "MCP posture" "$arg"
       ;;
     --shell-allow-list | --shell-allow-list=* | -S | -S?*)
@@ -382,6 +382,11 @@ while [ "$arg_index" -lt "${#dcode_args[@]}" ]; do
   arg_index=$((arg_index + 1))
 done
 
-extra_args=(--sandbox none --no-mcp)
+extra_args=(--sandbox none)
+if [ -s /sandbox/.mcp.json ]; then
+  extra_args+=(--mcp-config /sandbox/.mcp.json)
+else
+  extra_args+=(--no-mcp)
+fi
 
 run_dcode "${extra_args[@]}" "$@"

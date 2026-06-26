@@ -49,7 +49,7 @@ describe("agent definitions", () => {
       format: "json",
     });
     expect(openclaw.inferenceProviderOptions).toEqual([]);
-    expect(openclaw.mcpCapability).toEqual({ support: "bridge" });
+    expect(openclaw.mcpCapability).toEqual({ support: "bridge", adapter: "mcporter" });
     // OpenClaw uses device_pairing web auth — no fetchable bearer token.
     expect(openclaw.webAuth).toEqual({ method: "none", env: null });
     // #5027: openclaw.json must be declared as a durable state file so
@@ -73,10 +73,7 @@ describe("agent definitions", () => {
       format: "yaml",
     });
     expect(hermes.inferenceProviderOptions).toEqual(["hermesProvider"]);
-    expect(hermes.mcpCapability).toEqual({
-      support: "disabled",
-      reason: "Hermes MCP bridge design is tracked by NVIDIA/NemoClaw#566.",
-    });
+    expect(hermes.mcpCapability).toEqual({ support: "bridge", adapter: "hermes-config" });
     expect(hermes.healthProbe?.url).toBe("http://localhost:8642/health");
     expect(hermes.forwardPort).toBe(18789);
     expect(hermes.forward_ports).toEqual([18789, 8642]);
@@ -120,9 +117,8 @@ describe("agent definitions", () => {
     });
     expect(deepAgentsCode.inference?.provider_type).toBe("openai_compatible");
     expect(deepAgentsCode.mcpCapability).toEqual({
-      support: "disabled",
-      reason:
-        "The managed Deep Agents Code wrapper intentionally forces MCP off; NVIDIA/NemoClaw#566 tracks future design.",
+      support: "bridge",
+      adapter: "deepagents-config",
     });
     expect(deepAgentsCode.stateDirs).toEqual([".state", "skills", "agent/skills"]);
     expect(deepAgentsCode.stateFiles).toEqual([
@@ -270,6 +266,34 @@ describe("agent definitions", () => {
     );
 
     expect(() => loadAgent(agentName)).toThrow(/inference\.provider_type/);
+  });
+
+  it("rejects invalid MCP bridge adapter declarations in manifests", () => {
+    const agentName = `invalid-mcp-adapter-${String(Date.now())}`;
+    writeTempAgentManifest(
+      agentName,
+      [
+        `name: ${agentName}`,
+        "display_name: Broken MCP",
+        "mcp:",
+        "  support: bridge",
+        "  adapter: unsupported-adapter",
+      ].join("\n"),
+    );
+
+    expect(() => loadAgent(agentName)).toThrow(/mcp\.adapter/);
+  });
+
+  it("requires an MCP adapter when bridge support is declared", () => {
+    const agentName = `missing-mcp-adapter-${String(Date.now())}`;
+    writeTempAgentManifest(
+      agentName,
+      [`name: ${agentName}`, "display_name: Missing MCP Adapter", "mcp:", "  support: bridge"].join(
+        "\n",
+      ),
+    );
+
+    expect(() => loadAgent(agentName)).toThrow(/mcp\.adapter/);
   });
 
   it("loads terminal runtime manifests without OpenClaw gateway defaults", () => {

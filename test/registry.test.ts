@@ -129,6 +129,36 @@ describe("registry", () => {
     expect(data.sandboxes.alpha.livePhase).toBeUndefined();
   });
 
+  it("encrypts MCP bridge bearer tokens at rest while hydrating runtime state", () => {
+    registry.registerSandbox({
+      name: "alpha",
+      agent: "openclaw",
+      mcp: {
+        bridges: {
+          github: {
+            server: "github",
+            agent: "openclaw",
+            adapter: "mcporter",
+            command: "node",
+            args: ["server.js"],
+            env: ["GITHUB_TOKEN"],
+            port: 3100,
+            token: "bridge-token-secret",
+            policyName: "mcp-bridge-github",
+            addedAt: new Date(0).toISOString(),
+          },
+        },
+      },
+    });
+
+    const raw = JSON.parse(fs.readFileSync(regFile, "utf-8"));
+    const diskToken = raw.sandboxes.alpha.mcp.bridges.github.token;
+
+    expect(diskToken).toMatch(/^enc:v1:/);
+    expect(diskToken).not.toBe("bridge-token-secret");
+    expect(registry.getSandbox("alpha").mcp.bridges.github.token).toBe("bridge-token-secret");
+  });
+
   it("normalizes configured inference fields into a discriminated view", () => {
     const configured = { name: "alpha", provider: "nvidia-prod", model: "nvidia/test" };
     const missingProvider = { name: "beta", provider: null, model: "nvidia/test" };
@@ -250,6 +280,7 @@ describe("registry", () => {
           github: {
             server: "github",
             agent: "openclaw",
+            adapter: "mcporter",
             command: "npx",
             args: ["-y", "@modelcontextprotocol/server-github"],
             env: ["GITHUB_TOKEN"],
@@ -265,7 +296,8 @@ describe("registry", () => {
     const raw = fs.readFileSync(regFile, "utf-8");
     const data = JSON.parse(raw);
     expect(data.sandboxes["mcp-sb"].mcp.bridges.github.env).toEqual(["GITHUB_TOKEN"]);
-    expect(data.sandboxes["mcp-sb"].mcp.bridges.github.token).toBe("local-bridge-token");
+    expect(data.sandboxes["mcp-sb"].mcp.bridges.github.token).toMatch(/^enc:v1:/);
+    expect(registry.getSandbox("mcp-sb").mcp.bridges.github.token).toBe("local-bridge-token");
     expect(raw).not.toContain("ghp_");
     expect(raw).not.toContain("secret-value");
   });

@@ -83,6 +83,7 @@ inference:
 # ── MCP bridge support ───────────────────────────────────────────
 mcp:
   support: bridge
+  adapter: mcporter
 
 # ── Phone-home hosts ───────────────────────────────────────────
 phone_home_hosts:

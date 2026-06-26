@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import http from "node:http";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -10,11 +13,13 @@ import {
   MCP_PROXY_BIND_HOST,
   MCP_PROXY_MAX_BODY_BYTES,
   parseProxyArgs,
+  readBearerToken,
   redactSecretsFromText,
+  resolveExecutable,
 } from "./mcp-proxy";
 
 describe("mcp-proxy", () => {
-  it("parses command, args, env names, port, and token env", () => {
+  it("parses command, args, env names, port, and token file", () => {
     expect(
       parseProxyArgs([
         "--command",
@@ -25,16 +30,33 @@ describe("mcp-proxy", () => {
         "GITHUB_TOKEN",
         "--port",
         "3102",
-        "--token-env",
-        "TOKEN",
+        "--token-file",
+        "/tmp/token",
       ]),
     ).toEqual({
       command: "node",
       args: ["server.js"],
       env: ["GITHUB_TOKEN"],
       port: 3102,
-      tokenEnv: "TOKEN",
+      tokenEnv: null,
+      tokenFile: "/tmp/token",
     });
+  });
+
+  it("reads bearer tokens from a one-shot mode-600 token file", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-proxy-token-"));
+    const tokenFile = path.join(dir, "proxy.token");
+    fs.writeFileSync(tokenFile, "bridge-token\n", { mode: 0o600 });
+
+    expect(readBearerToken({ tokenEnv: null, tokenFile })).toBe("bridge-token");
+    expect(fs.existsSync(tokenFile)).toBe(false);
+  });
+
+  it("validates the child command before launch", () => {
+    expect(resolveExecutable(process.execPath)).toBe(path.resolve(process.execPath));
+    expect(() => resolveExecutable("definitely-not-a-real-mcp-command", "")).toThrow(
+      /not found on PATH/,
+    );
   });
 
   it("binds loopback only and caps request bodies", () => {
@@ -84,6 +106,7 @@ process.stdin.on("data", (chunk) => {
         env: ["MCP_PROXY_TEST_SECRET"],
         port: 0,
         tokenEnv: null,
+        tokenFile: null,
       },
       "bridge-token",
     );
@@ -143,6 +166,7 @@ process.stdin.on("data", (chunk) => {
         env: [],
         port: 0,
         tokenEnv: null,
+        tokenFile: null,
       },
       "bridge-token",
     );
@@ -180,6 +204,7 @@ process.stdin.on("data", (chunk) => {
         env: [],
         port: 0,
         tokenEnv: null,
+        tokenFile: null,
       },
       "bridge-token",
     );

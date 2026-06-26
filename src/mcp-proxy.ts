@@ -3,7 +3,9 @@
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import crypto from "node:crypto";
+import fs from "node:fs";
 import http from "node:http";
+import path from "node:path";
 
 export const MCP_PROXY_BIND_HOST = "127.0.0.1";
 export const MCP_PROXY_REQUEST_TIMEOUT_MS = 120_000;
@@ -16,6 +18,7 @@ export interface ProxyConfig {
   env: string[];
   port: number;
   tokenEnv: string | null;
+  tokenFile: string | null;
 }
 
 export interface JsonRpcMessage {
@@ -38,6 +41,7 @@ export function parseProxyArgs(argv: string[]): ProxyConfig {
     env: [],
     port: 3100,
     tokenEnv: null,
+    tokenFile: null,
   };
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
@@ -58,11 +62,48 @@ export function parseProxyArgs(argv: string[]): ProxyConfig {
       case "--token-env":
         parsed.tokenEnv = argv[++i] ?? null;
         break;
+      case "--token-file":
+        parsed.tokenFile = argv[++i] ?? null;
+        break;
       default:
         throw new Error(`Unknown proxy argument: ${flag}`);
     }
   }
   return parsed;
+}
+
+function isExecutable(filePath: string): boolean {
+  try {
+    fs.accessSync(filePath, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function resolveExecutable(command: string, envPath = process.env.PATH || ""): string {
+  if (!command) throw new Error("MCP proxy command is required");
+  if (command.includes("/") || command.includes("\\")) {
+    const resolved = path.resolve(command);
+    if (isExecutable(resolved)) return resolved;
+    throw new Error(`MCP proxy command is not executable: ${command}`);
+  }
+  for (const dir of envPath.split(path.delimiter).filter(Boolean)) {
+    const candidate = path.join(dir, command);
+    if (isExecutable(candidate)) return candidate;
+  }
+  throw new Error(`MCP proxy command not found on PATH: ${command}`);
+}
+
+export function readBearerToken(
+  config: Pick<ProxyConfig, "tokenEnv" | "tokenFile">,
+): string | null {
+  if (config.tokenFile) {
+    const token = fs.readFileSync(config.tokenFile, "utf8").trim();
+    fs.rmSync(config.tokenFile, { force: true });
+    return token || null;
+  }
+  return config.tokenEnv ? process.env[config.tokenEnv] || null : null;
 }
 
 export function redactSecretsFromText(text: string, secrets: readonly string[]): string {
@@ -111,6 +152,7 @@ class StdioJsonRpcClient {
   start(): void {
     const command = this.config.command;
     if (!command) throw new Error("MCP proxy command is required");
+    const resolvedCommand = resolveExecutable(command);
     this.stopping = false;
 
     const childEnv: NodeJS.ProcessEnv = {
@@ -124,7 +166,7 @@ class StdioJsonRpcClient {
       childEnv[name] = process.env[name];
     }
 
-    this.child = spawn(command, this.config.args, {
+    this.child = spawn(resolvedCommand, this.config.args, {
       stdio: ["pipe", "pipe", "pipe"],
       env: childEnv,
       shell: false,
@@ -348,7 +390,19 @@ function main(): void {
       process.exit(1);
     }
   }
-  const bearerToken = config.tokenEnv ? process.env[config.tokenEnv] : null;
+  try {
+    resolveExecutable(config.command);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+  let bearerToken: string | null;
+  try {
+    bearerToken = readBearerToken(config);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
   if (!bearerToken) {
     console.error("Bearer token is required.");
     process.exit(1);

@@ -85,6 +85,8 @@
 #   credential-migration-e2e Validates legacy ~/.nemoclaw/credentials.json migration to the
 #                            OpenShell gateway, secure zero-fill on unlink, allowlist filter
 #                            on non-credential env keys, and symlink-safe deletion.
+#   mcp-bridge-e2e           Live host MCP bridge add/status/policy/remove proof, including
+#                            OpenShell MCP/JSON-RPC L7 policy enforcement.
 #   launchable-smoke-e2e     Community install path (brev-launchable-ci-cpu.sh) on ubuntu-latest.
 #   gpu-e2e                  Local Ollama inference on an NVKS ephemeral GPU runner.
 #   gpu-double-onboard-e2e   Ollama proxy token consistency after re-onboard (#2553).
@@ -140,7 +142,7 @@ on:
           inference-routing-e2e, openclaw-inference-switch-e2e,
           openclaw-anthropic-inference-switch-e2e,
           network-policy-e2e, state-backup-restore-e2e, tunnel-lifecycle-e2e,
-          diagnostics-e2e, credential-migration-e2e, snapshot-commands-e2e,
+          diagnostics-e2e, credential-migration-e2e, mcp-bridge-e2e, snapshot-commands-e2e,
           shields-config-e2e, rebuild-openclaw-e2e,
           upgrade-stale-sandbox-e2e, openshell-gateway-upgrade-e2e, rebuild-hermes-e2e,
           rebuild-hermes-stale-base-e2e, double-onboard-e2e, onboard-repair-e2e,
@@ -1639,6 +1641,68 @@ jobs:
           include-hidden-files: false
           if-no-files-found: ignore
           retention-days: 14
+  mcp-bridge-e2e:
+    if: >-
+      github.repository == 'NVIDIA/NemoClaw' && (github.event_name != 'workflow_dispatch' ||
+       inputs.jobs == '' ||
+       contains(format(',{0},', inputs.jobs), ',mcp-bridge-e2e,'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 50
+    steps:
+      - *target-ref-checkout
+
+      - *dockerhub-auth-step
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install root dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build CLI
+        run: npm run build:cli
+
+      - name: Install OpenShell CLI
+        run: bash scripts/install-openshell.sh
+
+      - name: Run MCP bridge Vitest E2E
+        env:
+          NVIDIA_INFERENCE_API_KEY: ${{ secrets.NVIDIA_INFERENCE_API_KEY }}
+          E2E_ARTIFACT_DIR: ${{ github.workspace }}/e2e-artifacts/vitest/mcp-bridge
+          NEMOCLAW_CLI_BIN: ${{ github.workspace }}/bin/nemoclaw.js
+          NEMOCLAW_RUN_E2E_SCENARIOS: "1"
+          NEMOCLAW_E2E_USE_HOSTED_INFERENCE: "1"
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"
+          if command -v openshell >/dev/null 2>&1; then
+            OPENSHELL_BIN="$(command -v openshell)"
+          elif [ -x "$HOME/.local/bin/openshell" ]; then
+            OPENSHELL_BIN="$HOME/.local/bin/openshell"
+          else
+            echo "::error::OpenShell CLI not found after install"
+            exit 1
+          fi
+          export OPENSHELL_BIN
+          "$OPENSHELL_BIN" --version
+          npx vitest run --project e2e-scenarios-live \
+            test/e2e-scenario/live/mcp-bridge.test.ts \
+            --silent=false --reporter=default
+
+      - name: Upload MCP bridge artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mcp-bridge-artifacts
+          path: e2e-artifacts/vitest/mcp-bridge/
+          include-hidden-files: false
+          if-no-files-found: ignore
+          retention-days: 14
   snapshot-commands-e2e:
     if: >-
       github.repository == 'NVIDIA/NemoClaw' && (github.event_name != 'workflow_dispatch' ||
@@ -2518,6 +2582,7 @@ jobs:
         tunnel-lifecycle-e2e,
         diagnostics-e2e,
         credential-migration-e2e,
+        mcp-bridge-e2e,
         snapshot-commands-e2e,
         shields-config-e2e,
         rebuild-openclaw-e2e,
@@ -2636,6 +2701,7 @@ jobs:
         tunnel-lifecycle-e2e,
         diagnostics-e2e,
         credential-migration-e2e,
+        mcp-bridge-e2e,
         snapshot-commands-e2e,
         shields-config-e2e,
         rebuild-openclaw-e2e,
@@ -2823,6 +2889,7 @@ jobs:
         tunnel-lifecycle-e2e,
         diagnostics-e2e,
         credential-migration-e2e,
+        mcp-bridge-e2e,
         snapshot-commands-e2e,
         shields-config-e2e,
         rebuild-openclaw-e2e,

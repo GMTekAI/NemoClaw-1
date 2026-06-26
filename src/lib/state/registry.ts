@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { isErrnoException } from "../core/errno";
@@ -54,6 +55,7 @@ export interface McpBridgeLifecycle {
 export interface McpBridgeEntry {
   server: string;
   agent: string;
+  adapter?: string;
   command: string;
   args: string[];
   env: string[];
@@ -145,6 +147,8 @@ export const LOCK_OWNER = path.join(LOCK_DIR, "owner");
 export const LOCK_STALE_MS = 10_000;
 export const LOCK_RETRY_MS = 100;
 export const LOCK_MAX_RETRIES = 120;
+const MCP_TOKEN_KEY_FILE = path.join(path.dirname(REGISTRY_FILE), "mcp-token.key");
+const MCP_TOKEN_PREFIX = "enc:v1:";
 
 /** kill(pid, 0) liveness probe. EPERM means the pid exists but is owned by
  * another user, which still counts as alive. */
@@ -422,12 +426,94 @@ function serializeSandboxEntryForDisk(entry: SandboxEntry): SandboxEntry {
     livePhase?: string | null;
   };
   const messaging = serializeSandboxMessagingStateForDisk(durable.messaging);
-  const mcp = normalizeSandboxMcpState(durable.mcp);
+  const mcp = serializeSandboxMcpStateForDisk(durable.mcp);
   const { messaging: _messaging, mcp: _mcp, ...rest } = durable;
   return {
     ...rest,
     ...(messaging ? { messaging } : {}),
     ...(mcp ? { mcp } : {}),
+  };
+}
+
+function readMcpTokenKey(): Buffer {
+  ensureConfigDir(path.dirname(MCP_TOKEN_KEY_FILE));
+  try {
+    const key = Buffer.from(fs.readFileSync(MCP_TOKEN_KEY_FILE, "utf8").trim(), "base64");
+    if (key.length === 32) {
+      try {
+        fs.chmodSync(MCP_TOKEN_KEY_FILE, 0o600);
+      } catch {
+        /* best effort */
+      }
+      return key;
+    }
+  } catch {
+    /* create below */
+  }
+  const key = crypto.randomBytes(32);
+  try {
+    fs.writeFileSync(MCP_TOKEN_KEY_FILE, `${key.toString("base64")}\n`, {
+      mode: 0o600,
+      flag: "wx",
+    });
+    fs.chmodSync(MCP_TOKEN_KEY_FILE, 0o600);
+    return key;
+  } catch {
+    const existing = Buffer.from(fs.readFileSync(MCP_TOKEN_KEY_FILE, "utf8").trim(), "base64");
+    if (existing.length !== 32) {
+      throw new Error(`Invalid MCP bridge token key at ${MCP_TOKEN_KEY_FILE}`);
+    }
+    try {
+      fs.chmodSync(MCP_TOKEN_KEY_FILE, 0o600);
+    } catch {
+      /* best effort */
+    }
+    return existing;
+  }
+}
+
+function encryptMcpToken(token: string): string {
+  if (!token || token.startsWith(MCP_TOKEN_PREFIX)) return token;
+  const key = readMcpTokenKey();
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+  const ciphertext = Buffer.concat([cipher.update(token, "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return [
+    MCP_TOKEN_PREFIX.slice(0, -1),
+    iv.toString("base64url"),
+    tag.toString("base64url"),
+    ciphertext.toString("base64url"),
+  ].join(":");
+}
+
+function decryptMcpToken(token: string): string {
+  if (!token.startsWith(MCP_TOKEN_PREFIX)) return token;
+  const parts = token.split(":");
+  if (parts.length !== 5) return "";
+  try {
+    const key = readMcpTokenKey();
+    const iv = Buffer.from(parts[2] ?? "", "base64url");
+    const tag = Buffer.from(parts[3] ?? "", "base64url");
+    const ciphertext = Buffer.from(parts[4] ?? "", "base64url");
+    const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
+  } catch {
+    return "";
+  }
+}
+
+function serializeSandboxMcpStateForDisk(value: unknown): SandboxMcpState | undefined {
+  const state = normalizeSandboxMcpState(value);
+  if (!state) return undefined;
+  return {
+    bridges: Object.fromEntries(
+      Object.entries(state.bridges).map(([name, entry]) => [
+        name,
+        { ...entry, token: encryptMcpToken(entry.token) },
+      ]),
+    ),
   };
 }
 
@@ -447,7 +533,7 @@ function normalizeMcpBridgeEntry(server: string, value: unknown): McpBridgeEntry
   if (!isRecord(value)) return null;
   const command = typeof value.command === "string" ? value.command : "";
   const port = typeof value.port === "number" && Number.isInteger(value.port) ? value.port : 0;
-  const token = typeof value.token === "string" ? value.token : "";
+  const token = typeof value.token === "string" ? decryptMcpToken(value.token) : "";
   const policyName = typeof value.policyName === "string" ? value.policyName : "";
   if (!command || !port || !token || !policyName) return null;
   const env = Array.isArray(value.env)
@@ -460,6 +546,7 @@ function normalizeMcpBridgeEntry(server: string, value: unknown): McpBridgeEntry
   return {
     server: typeof value.server === "string" && value.server ? value.server : server,
     agent: typeof value.agent === "string" && value.agent ? value.agent : "openclaw",
+    ...(typeof value.adapter === "string" && value.adapter ? { adapter: value.adapter } : {}),
     command,
     args,
     env,

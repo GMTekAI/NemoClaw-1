@@ -18,10 +18,12 @@ PATCH = '''    # NemoClaw-managed sandbox image hardening.
         args.sandbox_snapshot_name = None
     if hasattr(args, "sandbox_setup"):
         args.sandbox_setup = None
+    managed_mcp_config = "/sandbox/.mcp.json"
+    has_managed_mcp = os.path.isfile(managed_mcp_config) and os.path.getsize(managed_mcp_config) > 0
     if hasattr(args, "mcp_config"):
-        args.mcp_config = None
+        args.mcp_config = managed_mcp_config if has_managed_mcp else None
     if hasattr(args, "no_mcp"):
-        args.no_mcp = True
+        args.no_mcp = not has_managed_mcp
     if hasattr(args, "trust_project_mcp"):
         args.trust_project_mcp = False
     if hasattr(args, "shell_allow_list"):

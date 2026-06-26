@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import YAML from "yaml";
 
-import { type AgentDefinition, loadAgent } from "../../agent/defs";
+import { type AgentDefinition, type AgentMcpAdapter, loadAgent } from "../../agent/defs";
 import { shellQuote } from "../../runner";
 import { ensureConfigDir } from "../../state/config-io";
 import * as registry from "../../state/registry";
@@ -23,11 +23,13 @@ export const MCP_HOST = "host.docker.internal";
 export const MCPORTER_VERSION = "0.7.3";
 export const MCP_BRIDGE_POLICY_SOURCE = "generated:nemoclaw-mcp-bridge";
 export const MCP_BRIDGE_POLICY_MAX_BODY_BYTES = 131_072;
+export const MCP_PROXY_READY_TIMEOUT_MS = 30_000;
 
 const VALID_SERVER_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const VALID_ENV_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 const VALID_SANDBOX_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
 const BRIDGE_TOKEN_ENV = "NEMOCLAW_MCP_BRIDGE_TOKEN";
+const MCP_PORT_RESERVATION_STALE_MS = 10 * 60_000;
 
 export class McpBridgeError extends Error {
   constructor(
@@ -59,6 +61,7 @@ export interface McpBridgeStatus {
   support: {
     supported: boolean;
     mode: "bridge" | "disabled";
+    adapter?: AgentMcpAdapter;
     reason?: string;
   };
   command?: string;
@@ -169,6 +172,32 @@ function assertBridgeSupported(agent: AgentDefinition): void {
   throw new McpBridgeError(unsupportedMessage(agent), 1);
 }
 
+function getBridgeAdapter(agent: AgentDefinition): AgentMcpAdapter {
+  assertBridgeSupported(agent);
+  const adapter = agent.mcpCapability.adapter;
+  if (!adapter) {
+    throw new McpBridgeError(
+      `${agent.displayName} declares MCP bridge support but does not declare an adapter.`,
+      1,
+    );
+  }
+  return adapter;
+}
+
+function isAgentMcpAdapter(value: unknown): value is AgentMcpAdapter {
+  return value === "mcporter" || value === "hermes-config" || value === "deepagents-config";
+}
+
+function getEntryAdapter(
+  entry: Pick<McpBridgeEntry, "adapter"> | undefined,
+  agent: AgentDefinition,
+): AgentMcpAdapter | null {
+  if (entry && isAgentMcpAdapter(entry.adapter)) return entry.adapter;
+  return agent.mcpCapability.support === "bridge" && agent.mcpCapability.adapter
+    ? agent.mcpCapability.adapter
+    : null;
+}
+
 function bridgeState(sandbox: SandboxEntry): Record<string, McpBridgeEntry> {
   return sandbox.mcp?.bridges ?? {};
 }
@@ -197,28 +226,16 @@ export function parseMcpAddArgs(argv: string[]): ParsedMcpAddArgs {
       const raw = argv[++i] ?? "";
       const eq = raw.indexOf("=");
       const name = eq >= 0 ? raw.slice(0, eq) : raw;
-      if (eq >= 0) {
-        throw new McpBridgeError(
-          "Inline --env KEY=VALUE is not supported for restart-safe MCP bridges. Export KEY in the host environment and pass --env KEY.",
-          2,
-        );
-      }
       validateEnvName(name);
-      env.push({ name });
+      env.push(eq >= 0 ? { name, value: raw.slice(eq + 1) } : { name });
       continue;
     }
     if (token?.startsWith("--env=")) {
       const raw = token.slice("--env=".length);
       const eq = raw.indexOf("=");
       const name = eq >= 0 ? raw.slice(0, eq) : raw;
-      if (eq >= 0) {
-        throw new McpBridgeError(
-          "Inline --env KEY=VALUE is not supported for restart-safe MCP bridges. Export KEY in the host environment and pass --env KEY.",
-          2,
-        );
-      }
       validateEnvName(name);
-      env.push({ name });
+      env.push(eq >= 0 ? { name, value: raw.slice(eq + 1) } : { name });
       continue;
     }
     if (token?.startsWith("-")) {
@@ -265,14 +282,7 @@ export function resolveLaunchEnv(env: readonly ParsedEnvReference[]): Record<str
   const resolved: Record<string, string> = {};
   for (const entry of env) {
     validateEnvName(entry.name);
-    const hostValue = process.env[entry.name];
-    if (entry.value !== undefined) {
-      throw new McpBridgeError(
-        `Inline --env ${entry.name}=VALUE is not supported for restart-safe MCP bridges. Export '${entry.name}' in the host environment and pass --env ${entry.name}.`,
-        1,
-      );
-    }
-    const value = hostValue;
+    const value = entry.value ?? process.env[entry.name];
     if (value === undefined || value === "") {
       throw new McpBridgeError(
         `Host environment variable '${entry.name}' is required to launch this MCP bridge.`,
@@ -310,6 +320,10 @@ function bridgeLogFile(sandboxName: string, server: string): string {
   return path.join(bridgeRuntimeDir(sandboxName, server), "proxy.log");
 }
 
+function bridgeTokenFile(sandboxName: string, server: string): string {
+  return path.join(bridgeRuntimeDir(sandboxName, server), "proxy.token");
+}
+
 export function readLivePid(pidFile: string): number | null {
   try {
     const raw = fs.readFileSync(pidFile, "utf8").trim().split(/\s+/)[0] ?? "";
@@ -331,6 +345,67 @@ export function cleanupStalePidFile(pidFile: string): boolean {
 
 function writePidFile(pidFile: string, pid: number): void {
   fs.writeFileSync(pidFile, `${String(pid)}\n${nowIso()}\n`, { mode: 0o600 });
+}
+
+function portReservationRoot(): string {
+  return path.join(runtimeRoot(), "ports");
+}
+
+function portReservationDir(port: number): string {
+  return path.join(portReservationRoot(), String(port));
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function cleanupStalePortReservation(port: number, used: ReadonlySet<number>): void {
+  if (used.has(port)) return;
+  const dir = portReservationDir(port);
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(dir);
+  } catch {
+    return;
+  }
+  let ownerPid: number | null = null;
+  try {
+    const owner = JSON.parse(fs.readFileSync(path.join(dir, "owner.json"), "utf8")) as {
+      pid?: unknown;
+    };
+    ownerPid = typeof owner.pid === "number" && owner.pid > 0 ? owner.pid : null;
+  } catch {
+    ownerPid = null;
+  }
+  if (ownerPid !== null && isProcessAlive(ownerPid)) return;
+  if (Date.now() - stat.mtimeMs < MCP_PORT_RESERVATION_STALE_MS && ownerPid === null) return;
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+function tryReserveMcpPort(port: number): boolean {
+  ensureConfigDir(portReservationRoot());
+  const dir = portReservationDir(port);
+  try {
+    fs.mkdirSync(dir, { mode: 0o700 });
+    fs.writeFileSync(
+      path.join(dir, "owner.json"),
+      JSON.stringify({ pid: process.pid, reservedAt: nowIso() }, null, 2),
+      { mode: 0o600 },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function releaseMcpPortReservation(port: number): void {
+  if (port < MCP_PORT_START || port > MCP_PORT_END) return;
+  fs.rmSync(portReservationDir(port), { recursive: true, force: true });
 }
 
 export function buildMcpBridgePolicyName(server: string): string {
@@ -361,6 +436,10 @@ export function buildMcpBridgePolicyYaml(server: string, port: number): string {
             enforcement: "enforce",
             mcp: {
               max_body_bytes: MCP_BRIDGE_POLICY_MAX_BODY_BYTES,
+              // The host proxy is the per-server trust boundary. It only
+              // exposes the user-selected MCP server on this generated port;
+              // tool filtering, when an agent supports it, is configured in
+              // the agent adapter rather than in the network allowlist.
               allow_all_known_mcp_methods: true,
             },
             rules: [{ allow: {} }],
@@ -370,6 +449,10 @@ export function buildMcpBridgePolicyYaml(server: string, port: number): string {
           { path: "/usr/local/bin/mcporter" },
           { path: "/usr/bin/mcporter" },
           { path: "/usr/local/bin/openclaw" },
+          { path: "/usr/local/bin/hermes" },
+          { path: "/opt/hermes/.venv/bin/python" },
+          { path: "/usr/local/bin/dcode" },
+          { path: "/opt/venv/bin/python3*" },
           { path: "/usr/bin/node" },
           { path: "/usr/local/bin/node" },
         ],
@@ -400,7 +483,10 @@ export async function allocateMcpPort(): Promise<number> {
   }
   for (let port = MCP_PORT_START; port <= MCP_PORT_END; port++) {
     if (used.has(port)) continue;
+    cleanupStalePortReservation(port, used);
+    if (!tryReserveMcpPort(port)) continue;
     if (await isTcpPortAvailable(port)) return port;
+    releaseMcpPortReservation(port);
   }
   throw new McpBridgeError(`No available MCP bridge ports in ${MCP_PORT_START}-${MCP_PORT_END}.`);
 }
@@ -414,6 +500,8 @@ function startProxy(
   const dir = ensureBridgeRuntimeDir(sandboxName, server);
   const logPath = path.join(dir, "proxy.log");
   const pidPath = path.join(dir, "proxy.pid");
+  const tokenPath = bridgeTokenFile(sandboxName, server);
+  fs.writeFileSync(tokenPath, `${entry.token}\n`, { mode: 0o600 });
   const logFd = fs.openSync(logPath, "a", 0o600);
   const proxyArgs = [
     mcpProxyScriptPath(),
@@ -421,8 +509,8 @@ function startProxy(
     entry.command,
     "--port",
     String(entry.port),
-    "--token-env",
-    BRIDGE_TOKEN_ENV,
+    "--token-file",
+    tokenPath,
   ];
   for (const arg of entry.args) proxyArgs.push("--arg", arg);
   for (const name of entry.env) proxyArgs.push("--env", name);
@@ -431,7 +519,6 @@ function startProxy(
     PATH: process.env.PATH,
     HOME: process.env.HOME,
     ...envValues,
-    [BRIDGE_TOKEN_ENV]: entry.token,
   };
   const child = spawn(process.execPath, proxyArgs, {
     detached: true,
@@ -442,6 +529,7 @@ function startProxy(
   child.unref();
   fs.closeSync(logFd);
   if (!child.pid) {
+    fs.rmSync(tokenPath, { force: true });
     throw new McpBridgeError("Failed to start MCP proxy.");
   }
   writePidFile(pidPath, child.pid);
@@ -471,7 +559,8 @@ export async function waitForProxyReady(
   server: string,
   port: number,
   sinceOffset: number,
-  timeoutMs = 5000,
+  timeoutMs = Number.parseInt(process.env.NEMOCLAW_MCP_PROXY_READY_TIMEOUT_MS || "", 10) ||
+    MCP_PROXY_READY_TIMEOUT_MS,
 ): Promise<"ready" | "failed" | "timeout"> {
   const logPath = bridgeLogFile(sandboxName, server);
   const pidPath = bridgePidFile(sandboxName, server);
@@ -506,9 +595,17 @@ function ensureMcporter(sandboxName: string): void {
   );
 }
 
+function bridgeUrl(entry: Pick<McpBridgeEntry, "port">): string {
+  return `http://${MCP_HOST}:${String(entry.port)}`;
+}
+
+function bridgeAuthorizationHeader(entry: Pick<McpBridgeEntry, "token">): string {
+  return `Bearer ${entry.token}`;
+}
+
 export function buildOpenClawMcporterRegisterCommand(entry: McpBridgeEntry): string {
-  const url = `http://${MCP_HOST}:${String(entry.port)}`;
-  const header = `Authorization=Bearer ${entry.token}`;
+  const url = bridgeUrl(entry);
+  const header = `Authorization=${bridgeAuthorizationHeader(entry)}`;
   return [
     "mcporter",
     "config",
@@ -523,6 +620,162 @@ export function buildOpenClawMcporterRegisterCommand(entry: McpBridgeEntry): str
   ]
     .map(shellQuote)
     .join(" ");
+}
+
+function pythonJsonLiteral(value: unknown): string {
+  return JSON.stringify(JSON.stringify(value));
+}
+
+export function buildHermesMcpRegisterCommand(entry: McpBridgeEntry): string {
+  const payload = {
+    server: entry.server,
+    url: bridgeUrl(entry),
+    authorization: bridgeAuthorizationHeader(entry),
+  };
+  return [
+    "/opt/hermes/.venv/bin/python - <<'PY'",
+    "import json, os, pathlib, yaml",
+    `payload = json.loads(${pythonJsonLiteral(payload)})`,
+    'config_path = pathlib.Path("/sandbox/.hermes/config.yaml")',
+    "data = {}",
+    "if config_path.exists():",
+    "    data = yaml.safe_load(config_path.read_text(encoding='utf-8')) or {}",
+    "servers = data.setdefault('mcp_servers', {})",
+    "servers[payload['server']] = {",
+    "    'url': payload['url'],",
+    "    'headers': {'Authorization': payload['authorization']},",
+    "    'enabled': True,",
+    "    'timeout': 120,",
+    "    'connect_timeout': 60,",
+    "    'tools': {'resources': True, 'prompts': True},",
+    "}",
+    "tmp = config_path.with_name(config_path.name + '.nemoclaw-mcp.tmp')",
+    "tmp.write_text(yaml.safe_dump(data, sort_keys=False), encoding='utf-8')",
+    "os.chmod(tmp, 0o660)",
+    "os.replace(tmp, config_path)",
+    "os.chmod(config_path, 0o660)",
+    "PY",
+  ].join("\n");
+}
+
+function buildHermesMcpRemoveCommand(server: string): string {
+  const payload = { server };
+  return [
+    "/opt/hermes/.venv/bin/python - <<'PY'",
+    "import json, os, pathlib, yaml",
+    `payload = json.loads(${pythonJsonLiteral(payload)})`,
+    'config_path = pathlib.Path("/sandbox/.hermes/config.yaml")',
+    "if not config_path.exists():",
+    "    raise SystemExit(0)",
+    "data = yaml.safe_load(config_path.read_text(encoding='utf-8')) or {}",
+    "servers = data.get('mcp_servers')",
+    "if isinstance(servers, dict):",
+    "    servers.pop(payload['server'], None)",
+    "    if not servers:",
+    "        data.pop('mcp_servers', None)",
+    "tmp = config_path.with_name(config_path.name + '.nemoclaw-mcp.tmp')",
+    "tmp.write_text(yaml.safe_dump(data, sort_keys=False), encoding='utf-8')",
+    "os.chmod(tmp, 0o660)",
+    "os.replace(tmp, config_path)",
+    "os.chmod(config_path, 0o660)",
+    "PY",
+  ].join("\n");
+}
+
+function buildHermesMcpStatusCommand(entry: McpBridgeEntry): string {
+  const payload = { server: entry.server, url: bridgeUrl(entry) };
+  return [
+    "/opt/hermes/.venv/bin/python - <<'PY'",
+    "import json, pathlib, yaml",
+    `payload = json.loads(${pythonJsonLiteral(payload)})`,
+    'config_path = pathlib.Path("/sandbox/.hermes/config.yaml")',
+    "data = yaml.safe_load(config_path.read_text(encoding='utf-8')) if config_path.exists() else {}",
+    "servers = data.get('mcp_servers') if isinstance(data, dict) else None",
+    "server = servers.get(payload['server']) if isinstance(servers, dict) else None",
+    "if isinstance(server, dict) and server.get('url') == payload['url'] and server.get('headers', {}).get('Authorization'):",
+    "    print('registered')",
+    "else:",
+    "    print('missing')",
+    "PY",
+  ].join("\n");
+}
+
+export function buildDeepAgentsMcpRegisterCommand(entry: McpBridgeEntry): string {
+  const payload = {
+    server: entry.server,
+    url: bridgeUrl(entry),
+    authorization: bridgeAuthorizationHeader(entry),
+  };
+  return [
+    "python3 - <<'PY'",
+    "import json, os, pathlib",
+    `payload = json.loads(${pythonJsonLiteral(payload)})`,
+    'config_path = pathlib.Path("/sandbox/.mcp.json")',
+    "data = {}",
+    "if config_path.exists():",
+    "    try:",
+    "        data = json.loads(config_path.read_text(encoding='utf-8') or '{}')",
+    "    except json.JSONDecodeError:",
+    "        data = {}",
+    "servers = data.setdefault('mcpServers', {})",
+    "servers[payload['server']] = {",
+    "    'type': 'http',",
+    "    'url': payload['url'],",
+    "    'headers': {'Authorization': payload['authorization']},",
+    "}",
+    "tmp = config_path.with_name(config_path.name + '.nemoclaw-mcp.tmp')",
+    "tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + '\\n', encoding='utf-8')",
+    "os.chmod(tmp, 0o600)",
+    "os.replace(tmp, config_path)",
+    "os.chmod(config_path, 0o600)",
+    "PY",
+  ].join("\n");
+}
+
+function buildDeepAgentsMcpRemoveCommand(server: string): string {
+  const payload = { server };
+  return [
+    "python3 - <<'PY'",
+    "import json, os, pathlib",
+    `payload = json.loads(${pythonJsonLiteral(payload)})`,
+    'config_path = pathlib.Path("/sandbox/.mcp.json")',
+    "if not config_path.exists():",
+    "    raise SystemExit(0)",
+    "try:",
+    "    data = json.loads(config_path.read_text(encoding='utf-8') or '{}')",
+    "except json.JSONDecodeError:",
+    "    raise SystemExit(0)",
+    "servers = data.get('mcpServers')",
+    "if isinstance(servers, dict):",
+    "    servers.pop(payload['server'], None)",
+    "tmp = config_path.with_name(config_path.name + '.nemoclaw-mcp.tmp')",
+    "tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + '\\n', encoding='utf-8')",
+    "os.chmod(tmp, 0o600)",
+    "os.replace(tmp, config_path)",
+    "os.chmod(config_path, 0o600)",
+    "PY",
+  ].join("\n");
+}
+
+function buildDeepAgentsMcpStatusCommand(entry: McpBridgeEntry): string {
+  const payload = { server: entry.server, url: bridgeUrl(entry) };
+  return [
+    "python3 - <<'PY'",
+    "import json, pathlib",
+    `payload = json.loads(${pythonJsonLiteral(payload)})`,
+    'config_path = pathlib.Path("/sandbox/.mcp.json")',
+    "try:",
+    "    data = json.loads(config_path.read_text(encoding='utf-8') or '{}')",
+    "except Exception:",
+    "    data = {}",
+    "servers = data.get('mcpServers') if isinstance(data, dict) else None",
+    "server = servers.get(payload['server']) if isinstance(servers, dict) else None",
+    "if isinstance(server, dict) and server.get('url') == payload['url'] and server.get('headers', {}).get('Authorization'):",
+    "    print('registered')",
+    "else:",
+    "    print('missing')",
+    "PY",
+  ].join("\n");
 }
 
 export function redactBridgeSecretsForDisplay(
@@ -551,6 +804,52 @@ function registerOpenClawAdapter(sandboxName: string, entry: McpBridgeEntry): vo
   }
 }
 
+function runAdapterCommand(
+  sandboxName: string,
+  entry: Pick<McpBridgeEntry, "token">,
+  command: string,
+  failureMessage: string,
+  options: { force?: boolean } = {},
+): void {
+  const result = executeSandboxCommand(sandboxName, command);
+  const output = redactBridgeSecretsForDisplay(
+    [result?.stdout, result?.stderr].filter(Boolean).join("\n").trim(),
+    entry,
+  );
+  if (!result || result.status !== 0) {
+    if (options.force) return;
+    throw new McpBridgeError(output || failureMessage);
+  }
+}
+
+function registerAgentAdapter(
+  sandboxName: string,
+  adapter: AgentMcpAdapter,
+  entry: McpBridgeEntry,
+): void {
+  switch (adapter) {
+    case "mcporter":
+      registerOpenClawAdapter(sandboxName, entry);
+      return;
+    case "hermes-config":
+      runAdapterCommand(
+        sandboxName,
+        entry,
+        buildHermesMcpRegisterCommand(entry),
+        `Hermes MCP config registration failed for '${entry.server}'.`,
+      );
+      return;
+    case "deepagents-config":
+      runAdapterCommand(
+        sandboxName,
+        entry,
+        buildDeepAgentsMcpRegisterCommand(entry),
+        `Deep Agents Code MCP config registration failed for '${entry.server}'.`,
+      );
+      return;
+  }
+}
+
 function unregisterOpenClawAdapter(
   sandboxName: string,
   entry: Pick<McpBridgeEntry, "server" | "token">,
@@ -567,6 +866,37 @@ function unregisterOpenClawAdapter(
   if (!result || result.status !== 0) {
     if (options.force) return;
     throw new McpBridgeError(output || `mcporter config remove failed for '${entry.server}'.`);
+  }
+}
+
+function unregisterAgentAdapter(
+  sandboxName: string,
+  adapter: AgentMcpAdapter,
+  entry: Pick<McpBridgeEntry, "server" | "token">,
+  options: { force?: boolean } = {},
+): void {
+  switch (adapter) {
+    case "mcporter":
+      unregisterOpenClawAdapter(sandboxName, entry, options);
+      return;
+    case "hermes-config":
+      runAdapterCommand(
+        sandboxName,
+        entry,
+        buildHermesMcpRemoveCommand(entry.server),
+        `Hermes MCP config removal failed for '${entry.server}'.`,
+        options,
+      );
+      return;
+    case "deepagents-config":
+      runAdapterCommand(
+        sandboxName,
+        entry,
+        buildDeepAgentsMcpRemoveCommand(entry.server),
+        `Deep Agents Code MCP config removal failed for '${entry.server}'.`,
+        options,
+      );
+      return;
   }
 }
 
@@ -617,7 +947,7 @@ export async function addMcpBridge(
   validateMcpServerName(options.server);
   const sandbox = getSandboxOrThrow(sandboxName);
   const agent = getSandboxAgent(sandbox);
-  assertBridgeSupported(agent);
+  const adapter = getBridgeAdapter(agent);
   if (bridgeState(sandbox)[options.server]) {
     throw new McpBridgeError(
       `MCP server '${options.server}' already exists on sandbox '${sandboxName}'.`,
@@ -629,6 +959,7 @@ export async function addMcpBridge(
   const entry: McpBridgeEntry = {
     server: options.server,
     agent: agent.name,
+    adapter,
     command: options.command,
     args: options.args,
     env: uniqueEnvNames(options.env),
@@ -659,13 +990,15 @@ export async function addMcpBridge(
 
     applyGeneratedPolicy(sandboxName, entry);
     policyApplied = true;
-    registerOpenClawAdapter(sandboxName, entry);
+    registerAgentAdapter(sandboxName, adapter, entry);
     adapterRegistered = true;
     writeBridgeEntry(sandboxName, entry);
   } catch (error) {
-    if (adapterRegistered) unregisterOpenClawAdapter(sandboxName, entry, { force: true });
+    if (adapterRegistered) unregisterAgentAdapter(sandboxName, adapter, entry, { force: true });
     if (policyApplied) removeGeneratedPolicy(sandboxName, entry.policyName, true);
     if (proxyStarted) stopProxy(sandboxName, entry.server);
+    fs.rmSync(bridgeRuntimeDir(sandboxName, entry.server), { recursive: true, force: true });
+    releaseMcpPortReservation(entry.port);
     removeBridgeEntryIfPresent(sandboxName, entry.server);
     throw error;
   }
@@ -685,7 +1018,7 @@ export async function restartMcpBridge(sandboxName: string, server?: string): Pr
   validateSandboxName(sandboxName);
   const sandbox = getSandboxOrThrow(sandboxName);
   const agent = getSandboxAgent(sandbox);
-  assertBridgeSupported(agent);
+  const adapter = getBridgeAdapter(agent);
   const bridges = bridgeState(sandbox);
   const targets = server ? [[server, bridges[server]] as const] : Object.entries(bridges);
   if (targets.length === 0) {
@@ -708,9 +1041,14 @@ export async function restartMcpBridge(sandboxName: string, server?: string): Pr
         throw new McpBridgeError(`MCP proxy for '${name}' failed to restart.`);
       }
       applyGeneratedPolicy(sandboxName, entry);
-      registerOpenClawAdapter(sandboxName, entry);
+      registerAgentAdapter(
+        sandboxName,
+        (entry.adapter as AgentMcpAdapter | undefined) ?? adapter,
+        entry,
+      );
       writeBridgeEntry(sandboxName, {
         ...entry,
+        adapter: (entry.adapter as AgentMcpAdapter | undefined) ?? adapter,
         updatedAt: nowIso(),
         lifecycle: { pid: proxy.pid, startedAt: nowIso(), lastError: null },
       });
@@ -738,6 +1076,8 @@ export function removeMcpBridge(
   validateSandboxName(sandboxName);
   validateMcpServerName(server);
   const sandbox = getSandboxOrThrow(sandboxName);
+  const agent = getSandboxAgent(sandbox);
+  const adapter = getBridgeAdapter(agent);
   const entry = bridgeState(sandbox)[server];
   if (!entry) {
     if (options.force) {
@@ -751,7 +1091,12 @@ export function removeMcpBridge(
 
   const failures: string[] = [];
   try {
-    unregisterOpenClawAdapter(sandboxName, entry, { force: options.force === true });
+    unregisterAgentAdapter(
+      sandboxName,
+      (entry.adapter as AgentMcpAdapter | undefined) ?? adapter,
+      entry,
+      { force: options.force === true },
+    );
   } catch (error) {
     failures.push(error instanceof Error ? error.message : String(error));
   }
@@ -765,6 +1110,7 @@ export function removeMcpBridge(
     throw new McpBridgeError(failures.join("\n"));
   }
   removeBridgeEntry(sandboxName, server);
+  releaseMcpPortReservation(entry.port);
   fs.rmSync(bridgeRuntimeDir(sandboxName, server), { recursive: true, force: true });
   console.log(`  Removed MCP bridge '${server}' from sandbox '${sandboxName}'.`);
 }
@@ -777,15 +1123,25 @@ function getPolicyPresence(sandboxName: string, policyName: string | undefined):
 
 function getAdapterRegistration(
   sandboxName: string,
+  agent: AgentDefinition,
   entry: McpBridgeEntry | undefined,
 ): McpBridgeStatus["adapter"] {
   if (!entry) return { registered: null };
-  const result = executeSandboxCommand(
-    sandboxName,
-    ["mcporter", "config", "get", entry.server, "--json"].map(shellQuote).join(" "),
-  );
+  const adapter = getEntryAdapter(entry, agent);
+  if (!adapter) return { registered: null, detail: "MCP bridge adapter is not declared" };
+  const command =
+    adapter === "mcporter"
+      ? ["mcporter", "config", "get", entry.server, "--json"].map(shellQuote).join(" ")
+      : adapter === "hermes-config"
+        ? buildHermesMcpStatusCommand(entry)
+        : buildDeepAgentsMcpStatusCommand(entry);
+  const result = executeSandboxCommand(sandboxName, command);
   if (!result) return { registered: null, detail: "sandbox unreachable" };
-  if (result.status === 0) return { registered: true };
+  if (result.status === 0) {
+    const output = result.stdout.trim();
+    if (adapter === "mcporter" || output === "registered") return { registered: true };
+    return { registered: false, detail: output || "not found" };
+  }
   return {
     registered: false,
     detail: redactBridgeSecretsForDisplay(result.stderr || result.stdout || "not found", entry),
@@ -808,6 +1164,7 @@ export function statusMcpBridge(sandboxName: string, server?: string): McpBridge
         support: {
           supported: agent.mcpCapability.support === "bridge",
           mode: agent.mcpCapability.support,
+          ...(agent.mcpCapability.adapter ? { adapter: agent.mcpCapability.adapter } : {}),
           ...(agent.mcpCapability.reason ? { reason: agent.mcpCapability.reason } : {}),
         },
         env: { names: [], missing: [], ready: true },
@@ -834,6 +1191,9 @@ export function statusMcpBridge(sandboxName: string, server?: string): McpBridge
       support: {
         supported: agent.mcpCapability.support === "bridge",
         mode: agent.mcpCapability.support,
+        ...(getEntryAdapter(entry, agent)
+          ? { adapter: getEntryAdapter(entry, agent) ?? undefined }
+          : {}),
         ...(agent.mcpCapability.reason ? { reason: agent.mcpCapability.reason } : {}),
       },
       ...(entry ? { command: entry.command, args: entry.args } : {}),
@@ -854,7 +1214,7 @@ export function statusMcpBridge(sandboxName: string, server?: string): McpBridge
         registryPresent: !!entry?.policyName,
         gatewayPresent: getPolicyPresence(sandboxName, entry?.policyName),
       },
-      adapter: getAdapterRegistration(sandboxName, entry),
+      adapter: getAdapterRegistration(sandboxName, agent, entry),
       token: entry ? "[REDACTED]" : null,
       ...(entry?.addedAt ? { addedAt: entry.addedAt } : {}),
       ...(entry?.updatedAt ? { updatedAt: entry.updatedAt } : {}),
@@ -866,6 +1226,7 @@ function getSupportSummary(agent: AgentDefinition): McpBridgeStatus["support"] {
   return {
     supported: agent.mcpCapability.support === "bridge",
     mode: agent.mcpCapability.support,
+    ...(agent.mcpCapability.adapter ? { adapter: agent.mcpCapability.adapter } : {}),
     ...(agent.mcpCapability.reason ? { reason: agent.mcpCapability.reason } : {}),
   };
 }
@@ -962,10 +1323,16 @@ function renderMcpHelp(subcommand: string): void {
   switch (subcommand) {
     case "add":
       console.log(`USAGE
-  nemoclaw <name> mcp add <server> [--env KEY ...] -- <command> [args...]
+  nemoclaw <name> mcp add <server> [--env KEY|KEY=VALUE ...] -- <command> [args...]
 
   FLAGS
-    --env KEY  Host environment variable reference for the bridge process`);
+    --env KEY        Host environment variable reference for the bridge process
+    --env KEY=VALUE  Use VALUE for the initial launch; only KEY is persisted
+
+  SECURITY
+    The command after '--' runs on the host as your current user. Use MCP
+    servers you trust, and prefer --env KEY so external API keys stay in the
+    host environment.`);
       return;
     case "list":
       console.log(`USAGE

@@ -9,6 +9,9 @@ import YAML from "yaml";
 import { describe, expect, it } from "vitest";
 
 import {
+  allocateMcpPort,
+  buildDeepAgentsMcpRegisterCommand,
+  buildHermesMcpRegisterCommand,
   buildMcpBridgePolicyName,
   buildMcpBridgePolicyYaml,
   buildOpenClawMcporterRegisterCommand,
@@ -21,6 +24,7 @@ import {
   parseMcpAddArgs,
   readLivePid,
   redactBridgeSecretsForDisplay,
+  releaseMcpPortReservation,
   resolveLaunchEnv,
   waitForProxyReady,
 } from "../../../../dist/lib/actions/sandbox/mcp-bridge";
@@ -69,13 +73,12 @@ describe("MCP bridge CLI parsing", () => {
     });
   });
 
-  it("rejects inline env values so bridges stay restart-safe", () => {
-    expect(() => parseMcpAddArgs(["srv", "--env=TOKEN=a=b=c", "--", "node", "server.js"])).toThrow(
-      /KEY=VALUE is not supported/,
-    );
-    expect(() =>
-      parseMcpAddArgs(["srv", "--env", "TOKEN=secret", "--", "node", "server.js"]),
-    ).toThrow(/KEY=VALUE is not supported/);
+  it("allows inline env values for initial launch but persists only names", () => {
+    const parsed = parseMcpAddArgs(["srv", "--env=TOKEN=a=b=c", "--", "node", "server.js"]);
+
+    expect(parsed.env).toEqual([{ name: "TOKEN", value: "a=b=c" }]);
+    expect(resolveLaunchEnv(parsed.env)).toEqual({ TOKEN: "a=b=c" });
+    expect(parsed.env.map((entry) => entry.name)).toEqual(["TOKEN"]);
   });
 
   it("rejects missing command separators", () => {
@@ -102,13 +105,13 @@ describe("MCP bridge CLI parsing", () => {
     }
   });
 
-  it("rejects programmatic inline env values before launch", () => {
+  it("prefers inline env values over host env only for the launch invocation", () => {
     const prior = process.env.MCP_BRIDGE_INLINE_TOKEN;
+    process.env.MCP_BRIDGE_INLINE_TOKEN = "host-value";
     try {
-      process.env.MCP_BRIDGE_INLINE_TOKEN = "secret-value";
-      expect(() =>
-        resolveLaunchEnv([{ name: "MCP_BRIDGE_INLINE_TOKEN", value: "secret-value" }]),
-      ).toThrow(/VALUE is not supported/);
+      expect(
+        resolveLaunchEnv([{ name: "MCP_BRIDGE_INLINE_TOKEN", value: "inline-value" }]),
+      ).toEqual({ MCP_BRIDGE_INLINE_TOKEN: "inline-value" });
     } finally {
       prior === undefined
         ? delete process.env.MCP_BRIDGE_INLINE_TOKEN
@@ -159,6 +162,10 @@ describe("MCP bridge policy", () => {
       "/usr/local/bin/mcporter",
       "/usr/bin/mcporter",
       "/usr/local/bin/openclaw",
+      "/usr/local/bin/hermes",
+      "/opt/hermes/.venv/bin/python",
+      "/usr/local/bin/dcode",
+      "/opt/venv/bin/python3*",
       "/usr/bin/node",
       "/usr/local/bin/node",
     ]);
@@ -200,13 +207,28 @@ describe("MCP bridge runtime helpers", () => {
       priorHome === undefined ? delete process.env.HOME : (process.env.HOME = priorHome);
     }
   });
+
+  it("allocates unique ports under concurrent callers", async () => {
+    const priorHome = process.env.HOME;
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-mcp-ports-"));
+    process.env.HOME = home;
+    try {
+      const ports = await Promise.all(Array.from({ length: 8 }, async () => allocateMcpPort()));
+      expect(new Set(ports).size).toBe(ports.length);
+      for (const port of ports) releaseMcpPortReservation(port);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+      priorHome === undefined ? delete process.env.HOME : (process.env.HOME = priorHome);
+    }
+  });
 });
 
-describe("OpenClaw MCP adapter", () => {
+describe("MCP bridge adapters", () => {
   it("constructs a mcporter HTTP registration without external env values", () => {
     const entry: McpBridgeEntry = {
       server: "github",
       agent: "openclaw",
+      adapter: "mcporter",
       command: "npx",
       args: ["-y", "@modelcontextprotocol/server-github"],
       env: ["GITHUB_TOKEN"],
@@ -225,6 +247,52 @@ describe("OpenClaw MCP adapter", () => {
     expect(command).not.toContain("GITHUB_TOKEN");
   });
 
+  it("constructs a Hermes config registration for the host bridge endpoint", () => {
+    const entry: McpBridgeEntry = {
+      server: "github",
+      agent: "hermes",
+      adapter: "hermes-config",
+      command: "node",
+      args: ["server.js"],
+      env: ["GITHUB_TOKEN"],
+      port: 3107,
+      token: "bridge-token",
+      policyName: "mcp-bridge-github",
+      addedAt: new Date(0).toISOString(),
+    };
+
+    const command = buildHermesMcpRegisterCommand(entry);
+
+    expect(command).toContain("/sandbox/.hermes/config.yaml");
+    expect(command).toContain("mcp_servers");
+    expect(command).toContain("http://host.docker.internal:3107");
+    expect(command).toContain("Bearer bridge-token");
+    expect(command).not.toContain("GITHUB_TOKEN");
+  });
+
+  it("constructs a Deep Agents .mcp.json registration for the host bridge endpoint", () => {
+    const entry: McpBridgeEntry = {
+      server: "github",
+      agent: "langchain-deepagents-code",
+      adapter: "deepagents-config",
+      command: "node",
+      args: ["server.js"],
+      env: ["GITHUB_TOKEN"],
+      port: 3108,
+      token: "bridge-token",
+      policyName: "mcp-bridge-github",
+      addedAt: new Date(0).toISOString(),
+    };
+
+    const command = buildDeepAgentsMcpRegisterCommand(entry);
+
+    expect(command).toContain("/sandbox/.mcp.json");
+    expect(command).toContain("mcpServers");
+    expect(command).toContain("'type': 'http'");
+    expect(command).toContain("http://host.docker.internal:3108");
+    expect(command).not.toContain("GITHUB_TOKEN");
+  });
+
   it("redacts bridge bearer tokens from adapter display output", () => {
     const redacted = redactBridgeSecretsForDisplay(
       "failed header Authorization=Bearer bridge-token raw bridge-token",
@@ -235,8 +303,8 @@ describe("OpenClaw MCP adapter", () => {
   });
 });
 
-describe("unsupported agents", () => {
-  it("reports disabled support in status JSON without requiring bridges", () => {
+describe("cross-agent MCP status", () => {
+  it("reports Hermes bridge support in status JSON without requiring bridges", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-mcp-status-"));
     const script = `
 process.env.HOME = ${JSON.stringify(home)};
@@ -266,43 +334,28 @@ bridge.dispatchMcpBridgeCommand("hermes-sandbox", ["status", "--json"]).then(
     };
     expect(payload.sandbox).toBe("hermes-sandbox");
     expect(payload.agent).toBe("hermes");
-    expect(payload.support).toMatchObject({ supported: false, mode: "disabled" });
-    expect(payload.support.reason).toContain("NVIDIA/NemoClaw#566");
+    expect(payload.support).toMatchObject({
+      supported: true,
+      mode: "bridge",
+      adapter: "hermes-config",
+    });
     expect(payload.bridges).toEqual([]);
   });
 
-  it("rejects before proxy, policy, or bridge registry side effects", () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-mcp-unsupported-"));
+  it("force-removes stale runtime without requiring a registry entry", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-mcp-force-remove-"));
     const script = `
 const fs = require("node:fs");
 const path = require("node:path");
 process.env.HOME = ${JSON.stringify(home)};
-process.env.MCP_BRIDGE_TEST_TOKEN = "secret";
 const registry = require("./dist/lib/state/registry.js");
 const bridge = require("./dist/lib/actions/sandbox/mcp-bridge.js");
 registry.registerSandbox({ name: "hermes-sandbox", agent: "hermes" });
-bridge.addMcpBridge("hermes-sandbox", {
-  server: "github",
-  env: [{ name: "MCP_BRIDGE_TEST_TOKEN" }],
-  command: "node",
-  args: ["-e", "process.exit(0)"],
-}).then(
-  () => {
-    console.log(JSON.stringify({ ok: true }));
-  },
-  (error) => {
-    const sandbox = registry.getSandbox("hermes-sandbox");
-    const runtimeRoot = path.join(process.env.HOME, ".nemoclaw", "runtime", "mcp");
-    console.log(JSON.stringify({
-      ok: false,
-      message: error.message,
-      mcp: sandbox.mcp || null,
-      runtimeExists: fs.existsSync(runtimeRoot),
-      policies: sandbox.policies || [],
-      customPolicies: sandbox.customPolicies || [],
-    }));
-  },
-);
+const runtimeDir = path.join(process.env.HOME, ".nemoclaw", "runtime", "mcp", "hermes-sandbox", "github");
+fs.mkdirSync(runtimeDir, { recursive: true, mode: 0o700 });
+fs.writeFileSync(path.join(runtimeDir, "proxy.pid"), "2147483646\\n");
+bridge.removeMcpBridge("hermes-sandbox", "github", { force: true });
+console.log(JSON.stringify({ runtimeExists: fs.existsSync(runtimeDir), mcp: registry.getSandbox("hermes-sandbox").mcp || null }));
 `;
     const result = spawnSync(process.execPath, ["-e", script], {
       cwd: process.cwd(),
@@ -311,19 +364,11 @@ bridge.addMcpBridge("hermes-sandbox", {
     });
 
     expect(result.status).toBe(0);
-    const payload = JSON.parse(result.stdout.trim()) as {
-      ok: boolean;
-      message: string;
+    const payload = JSON.parse(result.stdout.trim().split("\n").at(-1) ?? "{}") as {
       mcp: unknown;
       runtimeExists: boolean;
-      policies: string[];
-      customPolicies: unknown[];
     };
-    expect(payload.ok).toBe(false);
-    expect(payload.message).toContain("Hermes Agent does not support MCP bridges yet");
     expect(payload.mcp).toBeNull();
     expect(payload.runtimeExists).toBe(false);
-    expect(payload.policies).toEqual([]);
-    expect(payload.customPolicies).toEqual([]);
   });
 });

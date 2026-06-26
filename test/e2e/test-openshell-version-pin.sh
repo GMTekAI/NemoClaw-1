@@ -24,6 +24,7 @@ FAKE_BIN="/tmp/nemoclaw-e2e-openshell-version-pin-bin"
 REQUIRED_OPENSHELL_VERSION="0.0.72"
 STICKY_OPENSHELL_VERSION="0.0.73"
 OPENSHELL_FEATURE_MARKERS="request-body-credential-rewrite websocket-credential-rewrite allow_all_known_mcp_methods"
+export OPENSHELL_FEATURE_MARKERS
 
 exec > >(tee "$LOG_FILE") 2>&1
 
@@ -241,7 +242,7 @@ esac
 cat > "$outdir/$name" <<'EOS'
 #!/usr/bin/env bash
 if [ "${1:-}" = "--version" ]; then echo "openshell ${REQUIRED_OPENSHELL_VERSION:-0.0.72}"; exit 0; fi
-# request-body-credential-rewrite websocket-credential-rewrite allow_all_known_mcp_methods
+printf '%s\n' "${OPENSHELL_FEATURE_MARKERS:-request-body-credential-rewrite websocket-credential-rewrite allow_all_known_mcp_methods}"
 exit 0
 EOS
 chmod 755 "$outdir/$name"

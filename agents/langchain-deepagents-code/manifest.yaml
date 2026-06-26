@@ -48,7 +48,8 @@ state_dirs:
 # ── Top-level durable state files ───────────────────────────────
 # config.toml is non-secret NemoClaw-generated provider/model configuration.
 # .env and .mcp.json are intentionally omitted because they may contain
-# user-added service credentials; this managed harness disables MCP at runtime.
+# user-added service credentials; NemoClaw writes only bridge endpoint config
+# for managed MCP bridges.
 state_files:
   - path: config.toml
   - path: hooks.json
@@ -69,8 +70,8 @@ inference:
 
 # ── MCP bridge support ───────────────────────────────────────────
 mcp:
-  support: disabled
-  reason: "The managed Deep Agents Code wrapper intentionally forces MCP off; NVIDIA/NemoClaw#566 tracks future design."
+  support: bridge
+  adapter: deepagents-config
 
 package_registry:
   hosts:

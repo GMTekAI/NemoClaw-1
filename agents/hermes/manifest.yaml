@@ -117,8 +117,8 @@ inference:
 
 # ── MCP bridge support ───────────────────────────────────────────
 mcp:
-  support: disabled
-  reason: "Hermes MCP bridge design is tracked by NVIDIA/NemoClaw#566."
+  support: bridge
+  adapter: hermes-config
 
 # ── Phone-home hosts ───────────────────────────────────────────
 # Agent-specific egress endpoints needed for updates, auth, etc.

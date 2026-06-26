@@ -267,7 +267,9 @@ describe("LangChain Deep Agents Code image contracts", () => {
     expect(wrapper).toContain('reject_managed_override "sandbox isolation"');
     expect(wrapper).toContain('reject_managed_override "MCP posture"');
     expect(wrapper).toContain('reject_managed_override "shell allow-list posture"');
-    expect(wrapper).toContain("extra_args=(--sandbox none --no-mcp)");
+    expect(wrapper).toContain("extra_args=(--sandbox none)");
+    expect(wrapper).toContain("extra_args+=(--mcp-config /sandbox/.mcp.json)");
+    expect(wrapper).toContain("extra_args+=(--no-mcp)");
     expect(policy).not.toContain("/usr/local/bin/dcode.real");
     expect(policy).not.toContain("dcode.upstream");
   });
@@ -1215,8 +1217,9 @@ describe("LangChain Deep Agents Code image contracts", () => {
 
     const patched = fs.readFileSync(path.join(packageDir, "main.py"), "utf8");
     expect(patched).toContain('args.sandbox = "none"');
-    expect(patched).toContain("args.no_mcp = True");
-    expect(patched).toContain("args.mcp_config = None");
+    expect(patched).toContain('managed_mcp_config = "/sandbox/.mcp.json"');
+    expect(patched).toContain("args.no_mcp = not has_managed_mcp");
+    expect(patched).toContain("args.mcp_config = managed_mcp_config if has_managed_mcp else None");
     expect(patched).toContain("args.shell_allow_list = None");
     expect(patched).toContain('os.environ.pop("DEEPAGENTS_CODE_SHELL_ALLOW_LIST", None)');
     expect(patched).not.toContain("NEMOCLAW_DEEPAGENTS_CODE_SHELL_ALLOW_LIST");

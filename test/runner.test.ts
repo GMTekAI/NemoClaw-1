@@ -704,7 +704,7 @@ describe("regression guards", () => {
         export -f curl
         sha256sum() { cat >/dev/null; echo "checksum OK"; return 0; }
         export -f sha256sum
-        strings() { echo "request-body-credential-rewrite websocket-credential-rewrite"; }
+        strings() { echo "request-body-credential-rewrite websocket-credential-rewrite allow_all_known_mcp_methods"; }
         export -f strings
         tar() { return 0; }; export -f tar
         install() { return 0; }; export -f install
@@ -741,7 +741,7 @@ describe("regression guards", () => {
         export -f curl
         sha256sum() { echo "SHA256SUM $*" >> ${JSON.stringify(checksumLog)}; echo "checksum OK"; return 0; }
         export -f sha256sum
-        strings() { echo "request-body-credential-rewrite websocket-credential-rewrite"; }
+        strings() { echo "request-body-credential-rewrite websocket-credential-rewrite allow_all_known_mcp_methods"; }
         export -f strings
         tar() { return 0; }; export -f tar
         install() { return 0; }; export -f install
