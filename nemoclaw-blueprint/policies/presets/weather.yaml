@@ -12,6 +12,11 @@ network_policies:
       # Hosts the bundled OpenClaw weather skill actually calls (web_fetch + curl).
       # wttr.in is primary; wttr.is is the documented fallback host (OpenClaw >= 2026.6.2).
       # Paths are /<location> (city, region, airport code, or coordinates) and /:help.
+      #
+      # Why path "/**": wttr.in's location namespace IS the path — /<city>, /<airport>,
+      # /<lat,lon>, /~<place>, /:help — so there is no narrower stable prefix to pin to.
+      # Scope stays bounded: GET/HEAD only (every other method is denied by deny-by-default),
+      # a single read-only public host family, and no credentials are sent.
       - host: wttr.in
         port: 443
         protocol: rest
