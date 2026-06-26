@@ -132,6 +132,10 @@ function readDockerfileOpenClawVersion(): string {
   );
 }
 
+function readDockerfileMcporterVersion(): string {
+  return readRequiredMatch(DOCKERFILE, /^ARG MCPORTER_VERSION=([^\s]+)/m, "mcporter runtime version");
+}
+
 function readDockerfileBaseOpenClawIntegrity(): string {
   return readRequiredMatch(
     DOCKERFILE_BASE,
@@ -171,13 +175,14 @@ function dockerRunCommandBetween(startMarker: string, endMarker: string): string
   return command;
 }
 
-function runOpenClawUpgradeBlock(currentVersion: string) {
+function runOpenClawUpgradeBlock(currentVersion: string, mcporterVersion?: string) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-openclaw-upgrade-"));
   const blueprint = path.join(tmp, "blueprint.yaml");
   const log = path.join(tmp, "calls.log");
   const openclawInstall = path.join(tmp, "openclaw-global");
   const openclawShim = path.join(tmp, "openclaw-bin");
   const openclawVersion = readDockerfileOpenClawVersion();
+  const expectedMcporterVersion = readDockerfileMcporterVersion();
   const openclawIntegrity = readDockerfileOpenClawIntegrity();
   fs.writeFileSync(blueprint, `min_openclaw_version: "${readBlueprintMinOpenClawVersion()}"\n`);
   fs.mkdirSync(openclawInstall, { recursive: true });
@@ -194,8 +199,10 @@ function runOpenClawUpgradeBlock(currentVersion: string) {
     "set -euo pipefail",
     `call_log=${JSON.stringify(log)}`,
     `OPENCLAW_VERSION=${JSON.stringify(openclawVersion)}`,
+    `MCPORTER_VERSION=${JSON.stringify(expectedMcporterVersion)}`,
     `OPENCLAW_2026_5_27_INTEGRITY=${JSON.stringify(openclawIntegrity)}`,
     `openclaw() { if [ "\${1:-}" = "--version" ]; then printf 'openclaw ${currentVersion}\\n'; else return 127; fi; }`,
+    `mcporter() { if [ "\${1:-}" = "--version" ]; then printf 'mcporter ${mcporterVersion ?? expectedMcporterVersion}\\n'; else return 127; fi; }`,
     "npm() {",
     '  printf "npm %s\\n" "$*" >> "$call_log";',
     '  if [ "${1:-}" = "view" ] && [ "${2:-}" = "openclaw@${OPENCLAW_VERSION}" ] && [ "${3:-}" = "dist.integrity" ]; then',
@@ -394,6 +401,20 @@ describe("fetch-guard patch regression guard", () => {
     );
     expect(current.calls).not.toContain(
       `npm install -g --no-audit --no-fund --no-progress openclaw@${CURRENT_REVIEWED_OPENCLAW_PATCH_CLASSIFIER_VERSION}`,
+    );
+  });
+
+  it("repairs stale mcporter installs for the MCP bridge runtime", () => {
+    const stale = runOpenClawUpgradeBlock(
+      CURRENT_REVIEWED_OPENCLAW_PATCH_CLASSIFIER_VERSION,
+      "0.1.0",
+    );
+    const expectedMcporterVersion = readDockerfileMcporterVersion();
+
+    expect(stale.result.status).toBe(0);
+    expect(stale.result.stdout).toContain(`Installing mcporter ${expectedMcporterVersion}`);
+    expect(stale.calls).toContain(
+      `npm install -g --no-audit --no-fund --no-progress mcporter@${expectedMcporterVersion}`,
     );
   });
 

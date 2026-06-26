@@ -938,16 +938,6 @@ describe("sandbox provisioning: unified .openclaw layout (#2227)", () => {
     }
   });
 
-  it("preinstalls pinned mcporter for OpenClaw MCP bridge runtime", () => {
-    const baseDockerfile = fs.readFileSync(DOCKERFILE_BASE, "utf-8");
-    const dockerfile = fs.readFileSync(DOCKERFILE, "utf-8");
-
-    expect(baseDockerfile).toContain("ARG MCPORTER_VERSION=0.7.3");
-    expect(baseDockerfile).toContain('"mcporter@${MCPORTER_VERSION}"');
-    expect(dockerfile).toContain("ARG MCPORTER_VERSION=0.7.3");
-    expect(dockerfile).toContain('"mcporter@${MCPORTER_VERSION}"');
-  });
-
   it("repairs stale OpenClaw base images with system-wide rlimit hooks", () => {
     const dockerfile = fs.readFileSync(DOCKERFILE, "utf-8");
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-thin-rlimits-"));
