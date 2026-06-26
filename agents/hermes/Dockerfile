@@ -247,9 +247,13 @@ ENV HERMES_ENVIRONMENT_HINT="You are running inside an NVIDIA OpenShell sandbox,
 # hadolint ignore=DL3002
 USER root
 
-# Flatten stale published base images that still contain the old .hermes-data
-# symlink bridge. OpenShell starts the sandbox as the sandbox user, so runtime
-# migration cannot rely on root privileges inside the pod.
+# Flatten stale published base images that still contain Hermes-specific
+# OpenClaw-owned state or the old .hermes-data symlink bridge. Dockerfile.base is
+# the source of truth for new bases; this final-image repair only removes invalid
+# state baked into older published bases. Remove the OpenClaw-state cleanup after
+# the minimum supported Hermes base digest is newer than that stale
+# OpenClaw-state layout. OpenShell starts the sandbox as the sandbox user, so
+# runtime migration cannot rely on root privileges inside the pod.
 # hadolint ignore=DL4006
 RUN set -eu; \
     config_dir=/sandbox/.hermes; \
