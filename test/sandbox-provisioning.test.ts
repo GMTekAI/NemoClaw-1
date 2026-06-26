@@ -1435,9 +1435,9 @@ describe("Hermes sandbox provisioning", () => {
     try {
       expect(run.result.status).toBe(1);
       expect(run.result.stderr).toContain(".openclaw is a symlink");
-      expect(
-        fs.readFileSync(path.join(run.tmp, "stale-openclaw-target", "sentinel"), "utf-8"),
-      ).toBe("keep\n");
+      const sentinel = path.join(run.tmp, "stale-openclaw-target", "sentinel");
+      const sentinelContent = fs.readFileSync(sentinel, "utf-8");
+      expect(sentinelContent).toBe("keep\n");
     } finally {
       fs.rmSync(run.tmp, { recursive: true, force: true });
     }
