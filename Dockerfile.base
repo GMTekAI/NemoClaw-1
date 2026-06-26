@@ -214,6 +214,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # Install OpenClaw CLI + PyYAML.
 # .openclaw is now writable by default, so exec-approvals writes to
 # ~/.openclaw/exec-approvals.json natively — no sed patch needed.
+# hadolint ignore=DL3016
 RUN --mount=type=bind,source=nemoclaw-blueprint/blueprint.yaml,target=/tmp/blueprint.yaml \
     echo "$OPENCLAW_VERSION" | grep -qxE '[0-9]+(\.[0-9]+)*' \
     || { echo "Error: OPENCLAW_VERSION='$OPENCLAW_VERSION' is invalid (expected e.g. 2026.3.11)."; exit 1; }; \
