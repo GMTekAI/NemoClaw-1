@@ -21,6 +21,15 @@ on:
         required: false
         type: string
         default: ""
+      openshell_channel:
+        description: "OpenShell installer channel for MCP bridge proof before the pinned stable release is published."
+        required: false
+        default: "stable"
+        type: choice
+        options:
+          - stable
+          - dev
+          - auto
 
 permissions:
   contents: read
@@ -372,6 +381,7 @@ jobs:
       NEMOCLAW_CLI_BIN: ${{ github.workspace }}/bin/nemoclaw.js
       NEMOCLAW_RUN_E2E_SCENARIOS: "1"
       NEMOCLAW_E2E_USE_HOSTED_INFERENCE: "1"
+      NEMOCLAW_OPENSHELL_CHANNEL: ${{ inputs.openshell_channel }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:

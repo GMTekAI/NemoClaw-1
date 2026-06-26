@@ -178,6 +178,15 @@ on:
         required: false
         type: boolean
         default: false
+      openshell_channel:
+        description: "OpenShell installer channel for MCP bridge proof before the pinned stable release is published."
+        required: false
+        type: choice
+        default: "stable"
+        options:
+          - stable
+          - dev
+          - auto
 
 permissions:
   contents: read
@@ -1677,6 +1686,7 @@ jobs:
           NEMOCLAW_CLI_BIN: ${{ github.workspace }}/bin/nemoclaw.js
           NEMOCLAW_RUN_E2E_SCENARIOS: "1"
           NEMOCLAW_E2E_USE_HOSTED_INFERENCE: "1"
+          NEMOCLAW_OPENSHELL_CHANNEL: ${{ github.event_name == 'workflow_dispatch' && inputs.openshell_channel || 'stable' }}
         run: |
           set -euo pipefail
           export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"
