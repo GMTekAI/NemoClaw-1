@@ -14,30 +14,33 @@ interface FakeTier {
   presets: FakeTierPreset[];
 }
 
-const TIER_FIXTURES: Record<string, FakeTier> = {
-  balanced: {
-    name: "balanced",
-    label: "Balanced",
-    description: "balanced fixture",
-    presets: [
-      { name: "npm", access: "read-write" },
-      { name: "pypi", access: "read-write" },
-      { name: "huggingface", access: "read-write" },
-      { name: "brew", access: "read-write" },
-      { name: "brave", access: "read-write" },
-    ],
-  },
-  open: {
-    name: "open",
-    label: "Open",
-    description: "open fixture",
-    presets: [
-      { name: "npm", access: "read-write" },
-      { name: "slack", access: "read-write" },
-      { name: "weather", access: "read" },
-    ],
-  },
-};
+const { TIER_FIXTURES } = vi.hoisted(() => {
+  const fixtures: Record<string, FakeTier> = {
+    balanced: {
+      name: "balanced",
+      label: "Balanced",
+      description: "balanced fixture",
+      presets: [
+        { name: "npm", access: "read-write" },
+        { name: "pypi", access: "read-write" },
+        { name: "huggingface", access: "read-write" },
+        { name: "brew", access: "read-write" },
+        { name: "brave", access: "read-write" },
+      ],
+    },
+    open: {
+      name: "open",
+      label: "Open",
+      description: "open fixture",
+      presets: [
+        { name: "npm", access: "read-write" },
+        { name: "slack", access: "read-write" },
+        { name: "weather", access: "read" },
+      ],
+    },
+  };
+  return { TIER_FIXTURES: fixtures };
+});
 
 vi.mock("./tiers", () => ({
   getTier: (name: string): FakeTier | undefined => TIER_FIXTURES[name],
