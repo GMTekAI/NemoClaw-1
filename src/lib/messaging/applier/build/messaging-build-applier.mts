@@ -779,10 +779,8 @@ function applyBuildFileOutputToLocalAgentRoot(
   file: BuildFileOutput,
   options: { readonly homeDir?: string } = {},
 ): string {
-  const root =
-    agent === "hermes"
-      ? join(options.homeDir ?? homedir(), ".hermes")
-      : join(options.homeDir ?? homedir(), ".openclaw");
+  const home = options.homeDir ?? homedir();
+  const root = agent === "hermes" ? join(home, ".hermes") : join(home, ".openclaw");
   const relativePath = normalizeBuildFilePath(file.path);
   const target = resolve(root, relativePath);
   const normalizedRoot = resolve(root);
@@ -1530,7 +1528,9 @@ function parseMessagingBuildArgs(argv: readonly string[]): {
 }
 
 function readAgentArg(value: string | undefined): MessagingAgentId {
-  if (value === "openclaw" || value === "hermes") return value;
+  if (value === "openclaw" || value === "hermes") {
+    return value;
+  }
   throw new MessagingBuildApplierError("--agent must be 'openclaw' or 'hermes'");
 }
 

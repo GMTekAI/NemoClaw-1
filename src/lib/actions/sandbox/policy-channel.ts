@@ -15,7 +15,9 @@ import {
   createBuiltInMessagingHookRegistry,
   createBuiltInRenderTemplateResolver,
   createMessagingPreEnableHookInputs,
+  formatSupportedMessagingAgentIds,
   getMessagingManifestAvailabilityContext,
+  isMessagingChannelSupportedByAgent,
   isMessagingHookConflictError,
   MessagingHostStateApplier,
   MessagingSetupApplier,
@@ -24,6 +26,7 @@ import {
   type SandboxMessagingChannelPlan,
   type SandboxMessagingPlan,
   toMessagingAgentId,
+  tryGetMessagingAgentId,
 } from "../../messaging";
 import { hydrateMessagingChannelConfig } from "../../messaging-channel-config";
 import { hashCredential } from "../../security/credential-hash";
@@ -327,21 +330,35 @@ function resolveChannelManifest(name: string): ChannelManifest | undefined {
 }
 
 function availableManifestChannelsForAgent(agent: AgentDefinition): ChannelManifest[] {
-  return messagingManifestRegistry.listAvailable(getMessagingManifestAvailabilityContext(agent));
+  return messagingManifestRegistry.listAvailable(
+    getMessagingManifestAvailabilityContext(agent, messagingManifestRegistry.list()),
+  );
 }
 
-function channelSupportedByAgent(channelName: string, agent: AgentDefinition): boolean {
-  return availableManifestChannelsForAgent(agent).some((manifest) => manifest.id === channelName);
+function channelSupportedByAgent(manifest: ChannelManifest, agent: AgentDefinition): boolean {
+  return isMessagingChannelSupportedByAgent(manifest, agent);
 }
 
 export function listSandboxChannels(sandboxName: string) {
   const agent = resolveAgentForSandbox(sandboxName);
+  const availableChannels = availableManifestChannelsForAgent(agent);
   console.log("");
   console.log(`  Known messaging channels for sandbox '${sandboxName}':`);
-  for (const manifest of availableManifestChannelsForAgent(agent)) {
+  if (availableChannels.length === 0) {
+    console.log(`    (none supported by agent '${agent.name}')`);
+  }
+  for (const manifest of availableChannels) {
     console.log(`    ${manifest.id} — ${manifest.description ?? manifest.displayName}`);
   }
   console.log("");
+}
+
+function formatAvailableChannelsForAgent(agent: AgentDefinition): string {
+  return (
+    availableManifestChannelsForAgent(agent)
+      .map((manifest) => manifest.id)
+      .join(", ") || "(none)"
+  );
 }
 
 // Map a channel + token-env-key to the OpenShell provider name onboarding
@@ -740,7 +757,7 @@ async function planSandboxChannelAdd(
   try {
     const plan = await planner.buildChannelAddPlanFromSandboxEntry({
       sandboxName,
-      agent: toMessagingAgentId(agent),
+      agent: toMessagingAgentId(agent, messagingManifestRegistry.list()),
       isInteractive: !isNonInteractive(),
       channelId,
       sandboxEntry: registry.getSandbox(sandboxName),
@@ -756,7 +773,7 @@ async function planSandboxChannelAdd(
   }
 }
 
-async function persistManifestChannelDisabledPlan(
+export async function persistManifestChannelDisabledPlan(
   sandboxName: string,
   channelId: string,
   disabled: boolean,
@@ -764,6 +781,8 @@ async function persistManifestChannelDisabledPlan(
   const entry = registry.getSandbox(sandboxName);
   if (!entry?.messaging?.plan) return null;
   const agent = resolveAgentForSandbox(sandboxName);
+  const agentId = tryGetMessagingAgentId(agent, messagingManifestRegistry.list());
+  if (agentId === null) return null;
   const planner = new MessagingWorkflowPlanner(
     messagingManifestRegistry,
     undefined,
@@ -771,7 +790,7 @@ async function persistManifestChannelDisabledPlan(
   );
   const context = {
     sandboxName,
-    agent: toMessagingAgentId(agent),
+    agent: agentId,
     channelId,
     sandboxEntry: entry,
     supportedChannelIds: availableManifestChannelsForAgent(agent).map((manifest) => manifest.id),
@@ -783,13 +802,20 @@ async function persistManifestChannelDisabledPlan(
   return MessagingHostStateApplier.applyPlanToRegistry(sandboxName, plan) ? plan : null;
 }
 
-async function persistManifestChannelRemovePlan(
+export async function persistManifestChannelRemovePlan(
   sandboxName: string,
   channelId: string,
 ): Promise<boolean> {
   const entry = registry.getSandbox(sandboxName);
   if (!entry) return false;
   const agent = resolveAgentForSandbox(sandboxName);
+  const agentId = tryGetMessagingAgentId(agent, messagingManifestRegistry.list());
+  if (agentId === null) {
+    if (entry.messaging?.plan) {
+      return registry.updateSandbox(sandboxName, { messaging: undefined });
+    }
+    return true;
+  }
   const planner = new MessagingWorkflowPlanner(
     messagingManifestRegistry,
     undefined,
@@ -797,7 +823,7 @@ async function persistManifestChannelRemovePlan(
   );
   const plan = await planner.buildChannelRemovePlanFromSandboxEntry({
     sandboxName,
-    agent: toMessagingAgentId(agent),
+    agent: agentId,
     channelId,
     sandboxEntry: entry,
     supportedChannelIds: availableManifestChannelsForAgent(agent).map((manifest) => manifest.id),
@@ -910,11 +936,16 @@ export async function addSandboxChannel(
   const canonical = manifest.id;
 
   const agent = resolveAgentForSandbox(sandboxName);
-  if (!channelSupportedByAgent(canonical, agent)) {
+  if (!channelSupportedByAgent(manifest, agent)) {
     console.error(
-      `  Channel '${canonical}' is not supported by agent '${agent.name}' for sandbox '${sandboxName}'.`,
+      `  Channel '${canonical}' does not support agent '${agent.name}' for sandbox '${sandboxName}'.`,
     );
-    console.error(`  Supported channels: ${agent.messagingPlatforms.join(", ") || "(none)"}`);
+    console.error(
+      `  Channel-supported agents: ${formatSupportedMessagingAgentIds(manifest.supportedAgents)}.`,
+    );
+    console.error(
+      `  Channels supported by agent '${agent.name}': ${formatAvailableChannelsForAgent(agent)}.`,
+    );
     process.exit(1);
   }
 

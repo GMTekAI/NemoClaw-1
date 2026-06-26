@@ -1,9 +1,15 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { SandboxMessagingPlan } from "../../../messaging/manifest";
+import {
+  createBuiltInChannelManifestRegistry,
+  listSupportedMessagingChannelIdsForAgent,
+  tryGetMessagingAgentId,
+} from "../../../messaging";
+import type { MessagingAgentId, SandboxMessagingPlan } from "../../../messaging/manifest";
 import { hashCredential } from "../../../security/credential-hash";
 import type { Session, SessionUpdates } from "../../../state/onboard-session";
+import { detectMessagingChannelsFromEnv } from "../../messaging-channel-setup";
 import { getActiveChannelsFromPlan, getChannelsFromPlan } from "../../messaging-plan-session";
 import { withSandboxPhaseTrace } from "../../tracing";
 import { branchTo, type OnboardStateTransitionResult } from "../result";
@@ -84,6 +90,7 @@ export interface SandboxStateOptions<
     ): Promise<string[]>;
     readMessagingPlanFromEnv(): SandboxMessagingPlan | null;
     writePlanToEnv(plan: SandboxMessagingPlan): void;
+    clearPlanEnv(): void;
     getRegistrySandboxMessagingPlan(sandboxName: string): SandboxMessagingPlan | null;
     promptValidatedSandboxName(agent: Agent): Promise<string>;
     selectResourceProfileForSandbox(): Promise<ResourceProfile | null>;
@@ -152,6 +159,85 @@ function refreshCredentialHashesFromEnv(plan: SandboxMessagingPlan): {
   });
 
   return changed ? { plan: { ...plan, credentialBindings }, changed } : { plan, changed };
+}
+
+type MessagingAgentLike = {
+  readonly name?: string;
+};
+
+const messagingManifestRegistry = createBuiltInChannelManifestRegistry();
+
+function resolveCurrentMessagingAgent(agent: unknown): {
+  readonly agentId: MessagingAgentId | null;
+  readonly supportedChannelIds: readonly string[] | null;
+} {
+  const descriptor = (agent ?? {}) as MessagingAgentLike;
+  const name = typeof descriptor.name === "string" ? descriptor.name.trim() : "";
+  if (!name) return { agentId: null, supportedChannelIds: null };
+  const manifests = messagingManifestRegistry.list();
+  const agentId = tryGetMessagingAgentId(descriptor, manifests);
+  if (agentId === null) {
+    return { agentId: null, supportedChannelIds: [] };
+  }
+  return {
+    agentId,
+    supportedChannelIds: listSupportedMessagingChannelIdsForAgent(manifests, agentId),
+  };
+}
+
+function filterChannelNamesForCurrentAgent(
+  channelIds: readonly string[],
+  agent: unknown,
+): string[] {
+  const availability = resolveCurrentMessagingAgent(agent);
+  if (availability.supportedChannelIds === null) return [...channelIds];
+  if (availability.agentId === null || availability.supportedChannelIds.length === 0) return [];
+  const supported = new Set(availability.supportedChannelIds);
+  return channelIds.filter((channelId) => supported.has(channelId));
+}
+
+function filterMessagingPlanForCurrentAgent(
+  plan: SandboxMessagingPlan,
+  agent: unknown,
+): SandboxMessagingPlan | null {
+  const availability = resolveCurrentMessagingAgent(agent);
+  if (availability.supportedChannelIds === null) return plan;
+  if (availability.agentId === null || plan.agent !== availability.agentId) return null;
+  const supported = new Set(availability.supportedChannelIds);
+  const channels = plan.channels.filter((channel) => supported.has(channel.channelId));
+  if (channels.length === 0) return null;
+  if (channels.length === plan.channels.length) return plan;
+
+  const remainingChannelIds = new Set(channels.map((channel) => channel.channelId));
+  const keepEntry = <T extends { readonly channelId: string }>(entry: T): boolean =>
+    remainingChannelIds.has(entry.channelId);
+  const networkEntries = plan.networkPolicy.entries.filter(keepEntry);
+  const filterRuntimeSetup = <T extends { readonly channelId: string }>(entries?: readonly T[]) =>
+    (entries ?? []).filter(keepEntry);
+
+  return {
+    ...plan,
+    channels,
+    disabledChannels: plan.disabledChannels.filter((channelId) =>
+      remainingChannelIds.has(channelId),
+    ),
+    credentialBindings: plan.credentialBindings.filter(keepEntry),
+    networkPolicy: {
+      presets: [...new Set(networkEntries.map((entry) => entry.presetName))].sort(),
+      entries: networkEntries,
+    },
+    agentRender: plan.agentRender.filter(keepEntry),
+    buildSteps: plan.buildSteps.filter(keepEntry),
+    runtimeSetup: plan.runtimeSetup
+      ? {
+          nodePreloads: filterRuntimeSetup(plan.runtimeSetup.nodePreloads),
+          envAliases: filterRuntimeSetup(plan.runtimeSetup.envAliases),
+          secretScans: filterRuntimeSetup(plan.runtimeSetup.secretScans),
+        }
+      : undefined,
+    stateUpdates: plan.stateUpdates.filter(keepEntry),
+    healthChecks: plan.healthChecks.filter(keepEntry),
+  };
 }
 
 export async function handleSandboxState<
@@ -239,7 +325,18 @@ export async function handleSandboxState<
   if (resumeSandbox) {
     if (webSearchConfig)
       deps.note("  [resume] Reusing Brave Search configuration already baked into the sandbox.");
-    selectedMessagingChannels = getActiveChannelsFromPlan(session?.messagingPlan) ?? [];
+    const currentMessagingPlan = session?.messagingPlan ?? null;
+    const filteredPlan = currentMessagingPlan
+      ? filterMessagingPlanForCurrentAgent(currentMessagingPlan, agent)
+      : null;
+    if (filteredPlan !== currentMessagingPlan) {
+      deps.clearPlanEnv();
+      session = deps.updateSession((current) => {
+        current.messagingPlan = filteredPlan;
+        return current;
+      });
+    }
+    selectedMessagingChannels = getActiveChannelsFromPlan(filteredPlan) ?? [];
     deps.skippedStepMessage("sandbox", sandboxName);
     await deps.recordStateSkipped("sandbox", { reason: "resume", sandboxName });
   } else {
@@ -313,18 +410,63 @@ export async function handleSandboxState<
     const registryMessagingPlan = sandboxName
       ? deps.getRegistrySandboxMessagingPlan(sandboxName)
       : null;
+    const reuseMessagingPlan = (plan: SandboxMessagingPlan, writeToEnv: boolean): void => {
+      const refreshed = refreshCredentialHashesFromEnv(plan);
+      const filtered = filterMessagingPlanForCurrentAgent(refreshed.plan, agent);
+      if (!filtered) {
+        deps.clearPlanEnv();
+        messagingPlan = null;
+        selectedMessagingChannels = [];
+        return;
+      }
+      messagingPlan = filtered;
+      selectedMessagingChannels = getActiveChannelsFromPlan(messagingPlan) ?? [];
+      if (writeToEnv || refreshed.changed || filtered !== refreshed.plan) {
+        deps.writePlanToEnv(filtered);
+      }
+    };
+    // Run messaging channel setup, then adopt the plan it stages in env:
+    // filter both the selected channels and the plan for the current agent,
+    // clearing env when no channel is supported and writing the filtered plan
+    // back when it changed. Shared by the registry-refresh branch (#5680) and
+    // the normal setup branch so plan adoption stays consistent across both.
+    const setupAndAdoptMessagingPlan = async (
+      existingChannels: string[] | null,
+      targetSandboxName: string,
+    ): Promise<void> => {
+      const existing = existingChannels
+        ? filterChannelNamesForCurrentAgent(existingChannels, agent)
+        : existingChannels;
+      let selected = filterChannelNamesForCurrentAgent(
+        await deps.setupMessagingChannels(agent, existing, targetSandboxName),
+        agent,
+      );
+      let plan = deps.readMessagingPlanFromEnv();
+      if (plan) {
+        const filtered = filterMessagingPlanForCurrentAgent(plan, agent);
+        if (!filtered) {
+          deps.clearPlanEnv();
+          plan = null;
+          selected = [];
+        } else if (filtered !== plan) {
+          plan = filtered;
+          selected = getActiveChannelsFromPlan(plan) ?? [];
+          deps.writePlanToEnv(filtered);
+        }
+      }
+      messagingPlan = plan;
+      selectedMessagingChannels = selected;
+    };
+
     if (recordedMessagingChannels) {
-      selectedMessagingChannels = recordedMessagingChannels;
+      selectedMessagingChannels = filterChannelNamesForCurrentAgent(
+        recordedMessagingChannels,
+        agent,
+      );
       if (envMessagingPlan) {
-        const refreshed = refreshCredentialHashesFromEnv(envMessagingPlan);
-        messagingPlan = refreshed.plan;
-        if (refreshed.changed) deps.writePlanToEnv(refreshed.plan);
-        selectedMessagingChannels = getActiveChannelsFromPlan(messagingPlan) ?? [];
+        reuseMessagingPlan(envMessagingPlan, false);
       } else if (registryMessagingPlan) {
-        const refreshed = refreshCredentialHashesFromEnv(registryMessagingPlan);
-        deps.writePlanToEnv(refreshed.plan);
-        messagingPlan = refreshed.plan;
-        selectedMessagingChannels = getActiveChannelsFromPlan(messagingPlan) ?? [];
+        reuseMessagingPlan(registryMessagingPlan, true);
       }
       if (selectedMessagingChannels.length > 0) {
         deps.note(
@@ -332,19 +474,44 @@ export async function handleSandboxState<
         );
       }
     } else if (envMessagingPlan) {
-      const refreshed = refreshCredentialHashesFromEnv(envMessagingPlan);
-      messagingPlan = refreshed.plan;
-      if (refreshed.changed) deps.writePlanToEnv(refreshed.plan);
-      selectedMessagingChannels = getActiveChannelsFromPlan(messagingPlan) ?? [];
+      reuseMessagingPlan(envMessagingPlan, false);
     } else if (registryMessagingPlan) {
-      const refreshed = refreshCredentialHashesFromEnv(registryMessagingPlan);
-      deps.writePlanToEnv(refreshed.plan);
-      messagingPlan = refreshed.plan;
-      selectedMessagingChannels = getActiveChannelsFromPlan(messagingPlan) ?? [];
+      // Honor newly supplied messaging env inputs when the reused registry plan
+      // has no active channels for the current agent (the reporter's empty/stale
+      // "Messaging: none" case). Rebuild via setupMessagingChannels so newly
+      // supplied channels (e.g. Telegram via TELEGRAM_BOT_TOKEN) are discovered
+      // and run their reachability checks instead of being silently bypassed
+      // (#5680). When the reused plan already has active channels, preserve it
+      // as-is so we never drop an existing channel whose token is absent from
+      // this run's env. The explicit env-staged branch above stays authoritative.
+      const registryActiveChannels = filterChannelNamesForCurrentAgent(
+        getActiveChannelsFromPlan(registryMessagingPlan) ?? [],
+        agent,
+      );
+      const envDetectedChannels = filterChannelNamesForCurrentAgent(
+        detectMessagingChannelsFromEnv(
+          agent as Parameters<typeof detectMessagingChannelsFromEnv>[0],
+        ),
+        agent,
+      );
+      if (registryActiveChannels.length === 0 && envDetectedChannels.length > 0) {
+        deps.note(
+          `  [non-interactive] Detected messaging channel inputs for ${envDetectedChannels.join(", ")}; refreshing reused sandbox messaging plan.`,
+        );
+        // Seed previously-configured channels from the authoritative reused
+        // registry plan, not session?.messagingPlan (which may be null or stale
+        // on a fresh non-interactive run). This preserves channels configured on
+        // the sandbox whose inputs aren't re-derivable from env this run — e.g.
+        // an in-sandbox-QR channel like WhatsApp that has no host-side token.
+        await setupAndAdoptMessagingPlan(
+          getChannelsFromPlan(registryMessagingPlan) ?? getChannelsFromPlan(session?.messagingPlan),
+          sandboxName,
+        );
+      } else {
+        reuseMessagingPlan(registryMessagingPlan, true);
+      }
     } else {
-      const existing = getChannelsFromPlan(session?.messagingPlan);
-      selectedMessagingChannels = await deps.setupMessagingChannels(agent, existing, sandboxName);
-      messagingPlan = deps.readMessagingPlanFromEnv();
+      await setupAndAdoptMessagingPlan(getChannelsFromPlan(session?.messagingPlan), sandboxName);
     }
     session = deps.updateSession((current) => {
       current.messagingPlan = messagingPlan;
