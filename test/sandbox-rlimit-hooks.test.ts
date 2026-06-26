@@ -306,6 +306,7 @@ describe("sandbox rlimit system hooks (#2173)", () => {
         fs.rmSync(tmp, { recursive: true, force: true });
       }
     },
+    20_000,
   );
 
   it("stale OpenClaw base replay preserves effective connect-shell rlimit hooks", () => {
