@@ -1008,11 +1008,11 @@ export async function rebuildSandbox(
       backupManifest?.policyPresets ?? registryPolicyPresets,
       rebuildDisabledChannels,
     );
+    const restoredPresets: string[] = [];
     if (savedPresets.length > 0) {
       console.log("");
       console.log("  Restoring policy presets...");
       log(`Policy presets to restore: [${savedPresets.join(",")}]`);
-      const restoredPresets: string[] = [];
       const failedPresets: string[] = [];
       for (const presetName of savedPresets) {
         try {
@@ -1136,8 +1136,11 @@ export async function rebuildSandbox(
     // Step 7: Update registry with new version
     registry.updateSandbox(sandboxName, {
       agentVersion: agentDef.expectedVersion || null,
+      policies: restoredPresets,
     });
-    log(`Registry updated: agentVersion=${agentDef.expectedVersion}`);
+    log(
+      `Registry updated: agentVersion=${agentDef.expectedVersion}, policies=[${restoredPresets.join(",")}]`,
+    );
 
     if (!relockShieldsIfNeeded(true)) return bail("Failed to re-apply shields lockdown.");
     if (!ensureMessagingHostForwardAfterRebuild(sandboxName, rebuildMessagingPlan)) {
