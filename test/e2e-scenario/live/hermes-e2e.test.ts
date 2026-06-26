@@ -10,8 +10,8 @@ import { buildAvailabilityProbeEnv } from "../fixtures/availability-env.ts";
 import { trustedProviderEndpoint } from "../fixtures/clients/provider.ts";
 import { trustedSandboxShellScript, validateSandboxName } from "../fixtures/clients/sandbox.ts";
 import { expect, test } from "../fixtures/e2e-test.ts";
-import { shouldRunLiveE2EScenarios } from "../fixtures/live-project-gate.ts";
 import { requireHostedInferenceConfig } from "../fixtures/hosted-inference.ts";
+import { shouldRunLiveE2EScenarios } from "../fixtures/live-project-gate.ts";
 import type { ShellProbeResult } from "../fixtures/shell-probe.ts";
 
 // Migrated from test/e2e/test-hermes-e2e.sh.
@@ -172,6 +172,10 @@ function stripAnsi(value: string): string {
   return value.replace(/\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1B\\)|[@-_])/g, "");
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
 function forwardListHasRunningPort(output: string, sandboxName: string, port: string): boolean {
   return output
     .split("\n")
@@ -185,6 +189,14 @@ function forwardListHasRunningPort(output: string, sandboxName: string, port: st
         ["running", "active"].includes(parts.at(-1)?.toLowerCase() ?? "")
       );
     });
+}
+
+function parseGatewayProcess(output: string): { owner: string; pid: string } {
+  const [owner = "", pid = ""] = output.trim().split(/\s+/);
+  if (!owner || !/^[0-9]+$/.test(pid)) {
+    throw new Error(`expected gateway process owner and pid, got ${JSON.stringify(output)}`);
+  }
+  return { owner, pid };
 }
 
 async function bestEffort(run: () => Promise<unknown>): Promise<void> {
@@ -479,7 +491,112 @@ test.skipIf(!shouldRunLiveE2EScenarios())(
       expect(httpStatusOk(dashboardInternal.stdout)).toBe(true);
     }
 
-    // Phase 5: live inference through both the external provider and the
+    // Phase 5: host-mediated Hermes gateway restart. This validates the
+    // runtime contract behind #2426 against a real OpenShell/Hermes sandbox:
+    // the host command controls the gateway-user process, mutable runtime
+    // config is re-hashed only after guards pass, the public API bridge is
+    // restored, and the sandbox user never owns the relaunched gateway.
+    const gatewayProcessScript = trustedSandboxShellScript(
+      String.raw`
+        ps -eo user=,pid=,args= |
+        awk '$1 == "gateway" && (index($0, "hermes gateway run") || index($0, "hermes.real gateway run")) { print $1 " " $2; found = 1; exit } END { exit found ? 0 : 1 }'
+      `.trim(),
+    );
+    const beforeRestartProcess = await sandbox.execShell(SANDBOX_NAME, gatewayProcessScript, {
+      artifactName: "phase-5-hermes-gateway-process-before-restart",
+      env: commandEnv(),
+      timeoutMs: 30_000,
+    });
+    expect(beforeRestartProcess.exitCode, resultText(beforeRestartProcess)).toBe(0);
+    const beforeGateway = parseGatewayProcess(beforeRestartProcess.stdout);
+    expect(beforeGateway.owner).toBe("gateway");
+
+    const envMarker = `issue_2426_${Date.now()}`;
+    const mutateEnv = await sandbox.execShell(
+      SANDBOX_NAME,
+      trustedSandboxShellScript(
+        [
+          "set -eu",
+          `marker=${shellQuote(envMarker)}`,
+          "command -v gosu >/dev/null 2>&1",
+          'gosu sandbox sh -lc \'printf "\\nNEMOCLAW_E2E_RESTART_MARKER=%s\\n" "$1" >> /sandbox/.hermes/.env\' sh "$marker"',
+        ].join("; "),
+      ),
+      {
+        artifactName: "phase-5-mutate-hermes-env-as-sandbox-user",
+        env: commandEnv(),
+        timeoutMs: 30_000,
+      },
+    );
+    expect(mutateEnv.exitCode, resultText(mutateEnv)).toBe(0);
+
+    const stopApiForward = await sandbox.openshell(["forward", "stop", "8642", SANDBOX_NAME], {
+      artifactName: "phase-5-stop-hermes-api-forward-before-restart",
+      env: commandEnv(),
+      timeoutMs: 30_000,
+    });
+    expect(stopApiForward.exitCode, resultText(stopApiForward)).toBe(0);
+
+    const restart = await host.command("nemohermes", [SANDBOX_NAME, "gateway", "restart"], {
+      artifactName: "phase-5-nemohermes-gateway-restart",
+      env: commandEnv(),
+      timeoutMs: 180_000,
+    });
+    expect(restart.exitCode, resultText(restart)).toBe(0);
+    expect(resultText(restart)).toContain("Gateway restarted");
+    expect(resultText(restart)).toContain("health passed");
+    expect(resultText(restart)).toContain("forwards checked/recovered");
+
+    const afterRestartProcess = await sandbox.execShell(SANDBOX_NAME, gatewayProcessScript, {
+      artifactName: "phase-5-hermes-gateway-process-after-restart",
+      env: commandEnv(),
+      timeoutMs: 30_000,
+    });
+    expect(afterRestartProcess.exitCode, resultText(afterRestartProcess)).toBe(0);
+    const afterGateway = parseGatewayProcess(afterRestartProcess.stdout);
+    expect(afterGateway.owner).toBe("gateway");
+    expect(afterGateway.pid).not.toBe(beforeGateway.pid);
+
+    const restartHashCheck = await sandbox.execShell(
+      SANDBOX_NAME,
+      trustedSandboxShellScript(
+        "sha256sum -c /etc/nemoclaw/hermes.config-hash --status && sha256sum -c /sandbox/.hermes/.config-hash --status && echo OK",
+      ),
+      {
+        artifactName: "phase-5-hermes-config-hashes-after-restart",
+        env: commandEnv(),
+        timeoutMs: 30_000,
+      },
+    );
+    expect(restartHashCheck.exitCode, resultText(restartHashCheck)).toBe(0);
+    expect(restartHashCheck.stdout).toContain("OK");
+
+    const restartHostHealth = await host.command(
+      "curl",
+      ["-sf", "--max-time", "10", HERMES_HOST_HEALTH_URL],
+      {
+        artifactName: "phase-5-hermes-host-health-after-restart",
+        env: commandEnv(),
+        timeoutMs: 30_000,
+      },
+    );
+    expect(restartHostHealth.exitCode, resultText(restartHostHealth)).toBe(0);
+    expect(resultText(restartHostHealth)).toMatch(/"ok"/i);
+
+    const restartForwardList = await sandbox.openshell(["forward", "list"], {
+      artifactName: "phase-5-forward-list-after-restart",
+      env: commandEnv(),
+      timeoutMs: 30_000,
+    });
+    expect(restartForwardList.exitCode, resultText(restartForwardList)).toBe(0);
+    expect(forwardListHasRunningPort(restartForwardList.stdout, SANDBOX_NAME, "8642")).toBe(true);
+    if (hermesDashboardE2eEnabled()) {
+      expect(
+        forwardListHasRunningPort(restartForwardList.stdout, SANDBOX_NAME, HERMES_DASHBOARD_PORT),
+      ).toBe(true);
+    }
+
+    // Phase 6: live inference through both the external provider and the
     // sandbox's inference.local route.
     const directChat = await retryHostedInference(
       "direct NVIDIA Endpoints chat",
@@ -489,7 +606,7 @@ test.skipIf(!shouldRunLiveE2EScenarios())(
             allowedHosts: ["inference-api.nvidia.com"],
           }),
           {
-            artifactName: `phase-5-direct-nvidia-chat-attempt-${attempt}`,
+            artifactName: `phase-6-direct-nvidia-chat-attempt-${attempt}`,
             body: chatPayload("Reply with exactly one word: PONG", attempt === 1 ? 256 : 1024),
             curlMaxTimeSeconds: 90,
             headers: ["Content-Type: application/json", `Authorization: Bearer ${apiKey}`],
@@ -523,7 +640,7 @@ test.skipIf(!shouldRunLiveE2EScenarios())(
             "https://inference.local/v1/chat/completions",
           ],
           {
-            artifactName: `phase-5-inference-local-chat-attempt-${attempt}`,
+            artifactName: `phase-6-inference-local-chat-attempt-${attempt}`,
             env: commandEnv(),
             timeoutMs: 120_000,
           },
@@ -547,9 +664,9 @@ test.skipIf(!shouldRunLiveE2EScenarios())(
     );
     expectPong("Hermes sandbox inference.local chat", sandboxChatJson);
 
-    // Phase 6: CLI operations and agent manifest regression.
+    // Phase 7: CLI operations and agent manifest regression.
     const logs = await host.command("nemoclaw", [SANDBOX_NAME, "logs"], {
-      artifactName: "phase-6-nemoclaw-logs",
+      artifactName: "phase-7-nemoclaw-logs",
       env: commandEnv(),
       timeoutMs: 60_000,
     });
@@ -567,7 +684,7 @@ test.skipIf(!shouldRunLiveE2EScenarios())(
           `console.log('hermes_display:', loadAgent('hermes').displayName);`,
       ],
       {
-        artifactName: "phase-6-agent-manifest-check",
+        artifactName: "phase-7-agent-manifest-check",
         env: commandEnv(),
         timeoutMs: 30_000,
       },
