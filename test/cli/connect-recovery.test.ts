@@ -537,7 +537,7 @@ describe("CLI dispatch", () => {
     },
   );
 
-  it("recovers non-OpenClaw agents over SSH instead of root sandbox exec", () => {
+  it("recovers stopped Hermes agents through root sandbox exec instead of SSH", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-cli-connect-probe-agent-"));
     const localBin = path.join(home, "bin");
     const openshellCalls = path.join(home, "openshell-calls");
@@ -569,17 +569,17 @@ describe("CLI dispatch", () => {
         '    if [ "$(cat "$state_file")" = recovered ]; then echo RUNNING; else echo STOPPED; fi',
         "    exit 0",
         "  fi",
-        '  if [[ "$cmd" == *"HERMES_HOME=/sandbox/.hermes"* || "$cmd" == *"AGENT_BIN="* ]]; then',
+        '  if [[ "$cmd" == *"base64 -d | sh"* ]]; then',
+        '    echo recovered > "$state_file"',
+        '    echo ROOT_EXEC_RECOVERY >> "$calls"',
         "    echo '__NEMOCLAW_SANDBOX_EXEC_STARTED__'",
-        "    echo UNEXPECTED_ROOT_EXEC_RECOVERY",
-        "    exit 1",
+        "    echo 'GATEWAY_PID=789'",
+        "    exit 0",
         "  fi",
         "fi",
         'if [ "$1" = "sandbox" ] && [ "$2" = "ssh-config" ] && [ "$3" = "alpha" ]; then',
-        "  echo 'Host openshell-alpha'",
-        "  echo '  HostName 127.0.0.1'",
-        "  echo '  User sandbox'",
-        "  exit 0",
+        '  echo UNEXPECTED_SSH_CONFIG >> "$calls"',
+        "  exit 1",
         "fi",
         'if [ "$1" = "forward" ]; then',
         "  exit 0",
@@ -588,6 +588,7 @@ describe("CLI dispatch", () => {
       ].join("\n"),
       { mode: 0o755 },
     );
+    fs.writeFileSync(sshCalls, "");
     fs.writeFileSync(
       path.join(localBin, "ssh"),
       [
@@ -617,13 +618,10 @@ describe("CLI dispatch", () => {
     const openshellLog = fs.readFileSync(openshellCalls, "utf8");
     const sshLog = fs.readFileSync(sshCalls, "utf8");
     expect(openshellLog).toContain("sandbox exec --name alpha -- sh -c");
-    expect(openshellLog).toContain("sandbox ssh-config alpha");
-    expect(openshellLog).not.toContain("HERMES_HOME=/sandbox/.hermes");
-    expect(openshellLog).not.toContain("AGENT_BIN=");
+    expect(openshellLog).toContain("ROOT_EXEC_RECOVERY");
+    expect(openshellLog).not.toContain("sandbox ssh-config alpha");
     expect(openshellLog).not.toContain("sandbox connect");
-    expect(sshLog).toContain("HERMES_HOME=/sandbox/.hermes");
-    expect(sshLog).toContain("AGENT_BIN='/usr/local/bin/hermes'");
-    expect(sshLog).not.toMatch(/(^|\s)-tt?(\s|$)/);
+    expect(sshLog).toBe("");
   });
 
   it("waits for sandbox readiness before connecting", testTimeoutOptions(15_000), () => {
