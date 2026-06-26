@@ -282,6 +282,7 @@ function buildGatewayStopLines(staleGatewayPattern: string): string[] {
 export function buildOpenClawGatewayRestartScript(port: number): string {
   const staleGatewayPattern = "[o]penclaw([ -]gateway| gateway run|$)";
   return [
+    '[ "$(id -u)" = "0" ] || { echo ROOT_EXEC_UNAVAILABLE; exit 1; };',
     ...buildGatewayLogSetup(true, "gateway"),
     buildGatewayLogSelection(),
     ...buildGatewayGuardRecoveryLines(),

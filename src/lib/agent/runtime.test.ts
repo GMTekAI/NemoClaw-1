@@ -438,6 +438,18 @@ describe("buildOpenClawGatewayRestartScript (#2426)", () => {
   it("force-restarts OpenClaw as the gateway user without a healthy fast path", () => {
     const script = buildOpenClawGatewayRestartScript(18789);
 
+    const rootCheckIndex = script.indexOf("ROOT_EXEC_UNAVAILABLE");
+    const logSetupIndex = script.indexOf("_GATEWAY_LOG=/tmp/gateway.log");
+    const lockRemovalIndex = script.indexOf("rm -rf /tmp/openclaw-*/gateway.*.lock");
+    const stopIndex = script.indexOf('pkill -TERM -f "$_GATEWAY_PROC_PATTERN"');
+
+    expect(rootCheckIndex).toBeGreaterThanOrEqual(0);
+    expect(logSetupIndex).toBeGreaterThanOrEqual(0);
+    expect(lockRemovalIndex).toBeGreaterThanOrEqual(0);
+    expect(stopIndex).toBeGreaterThanOrEqual(0);
+    expect(rootCheckIndex).toBeLessThan(logSetupIndex);
+    expect(rootCheckIndex).toBeLessThan(lockRemovalIndex);
+    expect(rootCheckIndex).toBeLessThan(stopIndex);
     expect(script).toContain("gosu 'gateway'");
     expect(script).toContain('"$OPENCLAW" gateway run --port 18789');
     expect(script).toContain('pkill -TERM -f "$_GATEWAY_PROC_PATTERN"');

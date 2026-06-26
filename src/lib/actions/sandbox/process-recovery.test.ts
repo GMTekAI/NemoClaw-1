@@ -192,6 +192,19 @@ describe("restartSandboxGateway — host-mediated gateway restart", () => {
     }
   });
 
+  it("suppresses restart success output in quiet mode", () => {
+    const restore = silenceConsole();
+    try {
+      const deps = baseDeps();
+      const result = restartSandboxGateway("alpha", { quiet: true, deps });
+
+      expect(result).toMatchObject({ ok: true, restarted: true, healthPassed: true });
+      expect(console.log).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
+
   it("reports root exec unavailability", () => {
     const restore = silenceConsole();
     try {
@@ -259,7 +272,10 @@ describe("restartSandboxGateway — host-mediated gateway restart", () => {
       const result = restartSandboxGateway("alpha", { deps });
 
       expect(result).toMatchObject({ ok: false, failureLayer: "health timeout" });
-      expect(deps.printGatewayWedgeDiagnostics).toHaveBeenCalled();
+      expect(deps.printGatewayWedgeDiagnostics).toHaveBeenCalledWith(
+        "alpha",
+        deps.executeSandboxExecCommand,
+      );
     } finally {
       restore();
     }

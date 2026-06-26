@@ -595,7 +595,7 @@ export function restartSandboxGateway(
     const detail = "gateway process restarted but health did not pass before timeout";
     printGatewayRestartFailure(sandboxName, "health timeout", detail);
     const printWedgeDiagnostics = deps.printGatewayWedgeDiagnostics ?? printGatewayWedgeDiagnostics;
-    printWedgeDiagnostics(sandboxName, executeSandboxExecCommand);
+    printWedgeDiagnostics(sandboxName, execRestart);
     return { ok: false, failureLayer: "health timeout", detail };
   }
 
@@ -619,9 +619,11 @@ export function restartSandboxGateway(
       console.error("  Dashboard port forward could not be re-established.");
     }
   }
-  console.log(
-    `  ${G}✓${R} Gateway restarted; health passed; forwards checked/recovered for '${sandboxName}'.`,
-  );
+  if (!quiet) {
+    console.log(
+      `  ${G}✓${R} Gateway restarted; health passed; forwards checked/recovered for '${sandboxName}'.`,
+    );
+  }
   return {
     ok: true,
     restarted: true,
