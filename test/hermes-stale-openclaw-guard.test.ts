@@ -6,28 +6,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { dockerRunCommandContaining } from "./helpers/hermes-dockerfile-run";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const HERMES_DOCKERFILE = path.join(ROOT, "agents", "hermes", "Dockerfile");
 const VERIFY_SCRIPT = path.join(ROOT, "scripts", "verify-hermes-stale-openclaw-image.sh");
 const STALE_DIGEST = "sha256:60333c1982ad855d55887b4488e867eb343f3930a30aa8e0268e5397fc6f2926";
 const DIFFERENT_DIGEST = `sha256:${"0".repeat(64)}`;
-
-function dockerRunCommandContaining(dockerfile: string, signature: string): string {
-  const signatureIndex = dockerfile.indexOf(signature);
-  expect(signatureIndex, `Expected Dockerfile RUN signature: ${signature}`).not.toBe(-1);
-  const runIndex = dockerfile.lastIndexOf("RUN set -eu;", signatureIndex);
-  expect(runIndex, `Expected RUN instruction before ${signature}`).not.toBe(-1);
-  const linesAfterRun = dockerfile.slice(runIndex).split("\n");
-  const endIndex = linesAfterRun.findIndex((line) => !line.trimEnd().endsWith("\\"));
-  expect(endIndex, `Expected complete RUN instruction containing ${signature}`).toBeGreaterThan(-1);
-  return linesAfterRun
-    .slice(0, endIndex + 1)
-    .join("\n")
-    .trim()
-    .replace(/^RUN\s+/, "")
-    .replace(/\\\n/g, " ");
-}
 
 describe("Hermes stale OpenClaw guardrails", () => {
   it("Hermes stale cleanup digest guard fails when the default pinned GHCR base digest changes", () => {

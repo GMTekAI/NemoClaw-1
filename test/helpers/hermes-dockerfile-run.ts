@@ -35,6 +35,28 @@ export function dockerRunCommandBetween(
     .replace(/\\\n/g, " ");
 }
 
+export function dockerRunCommandContaining(dockerfile: string, signature: string): string {
+  const signatureIndex = dockerfile.indexOf(signature);
+  if (signatureIndex === -1) {
+    throw new Error(`Expected Dockerfile RUN signature: ${signature}`);
+  }
+  const runIndex = dockerfile.lastIndexOf("RUN set -eu;", signatureIndex);
+  if (runIndex === -1) {
+    throw new Error(`Expected RUN instruction before ${signature}`);
+  }
+  const linesAfterRun = dockerfile.slice(runIndex).split("\n");
+  const endIndex = linesAfterRun.findIndex((line) => !line.trimEnd().endsWith("\\"));
+  if (endIndex === -1) {
+    throw new Error(`Expected complete RUN instruction containing ${signature}`);
+  }
+  return linesAfterRun
+    .slice(0, endIndex + 1)
+    .join("\n")
+    .trim()
+    .replace(/^RUN\s+/, "")
+    .replace(/\\\n/g, " ");
+}
+
 export function runDockerShell(command: string, sandboxRoot: string) {
   const logPath = path.join(sandboxRoot, "calls.log");
   fs.rmSync(logPath, { force: true });
