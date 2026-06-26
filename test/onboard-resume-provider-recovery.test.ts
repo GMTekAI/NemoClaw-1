@@ -439,10 +439,12 @@ const { setupNim, __setNonInteractive } = onboardModule.exports;
     "GEMINI_API_KEY",
     "COMPATIBLE_API_KEY",
     "COMPATIBLE_ANTHROPIC_API_KEY",
+    "NVIDIA_API_KEY",
+    "NVIDIA_INFERENCE_API_KEY",
   ]) {
     delete process.env[key];
   }
-  process.env.NVIDIA_INFERENCE_API_KEY = "nvapi-test";
+  process.env.NVIDIA_API_KEY = "nvapi-test";
   process.env.NEMOCLAW_MODEL = "nvidia/test-model";
   __setNonInteractive(true);
   const originalLog = console.log;

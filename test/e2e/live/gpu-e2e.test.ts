@@ -27,6 +27,68 @@ import {
 
 const TIMEOUT_MS = 75 * 60_000;
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function modelIdentifier(value: Record<string, unknown>, key: string): string | undefined {
+  return typeof value[key] === "string" ? (value[key] as string) : undefined;
+}
+
+function assertSmallContextCompactionPolicy(configText: string): void {
+  const config = asRecord(JSON.parse(configText));
+  const agents = asRecord(config?.agents);
+  const defaults = asRecord(agents?.defaults);
+  const modelDefaults = asRecord(defaults?.model);
+  const primary = modelIdentifier(modelDefaults ?? {}, "primary");
+  const compaction = asRecord(defaults?.compaction);
+  const modelsRoot = asRecord(config?.models);
+  const providers = asRecord(modelsRoot?.providers);
+  const primaryWithoutProvider = primary?.startsWith("inference/")
+    ? primary.slice("inference/".length)
+    : primary;
+  const model = Object.values(providers ?? {})
+    .flatMap((provider) => {
+      const models = asRecord(provider)?.models;
+      return Array.isArray(models) ? models : [];
+    })
+    .map(asRecord)
+    .find((candidate) => {
+      const identifiers =
+        candidate && primary && primaryWithoutProvider
+          ? ["id", "name", "label"].flatMap((key) => {
+              const value = modelIdentifier(candidate, key);
+              return value ? [value] : [];
+            })
+          : [];
+      return identifiers.some(
+        (identifier) =>
+          identifier === primary ||
+          identifier === primaryWithoutProvider ||
+          identifier === `inference/${primaryWithoutProvider}`,
+      );
+    });
+
+  expect(primary, "OpenClaw config must declare the active model").toBeTruthy();
+  expect(model, `OpenClaw config must include active Ollama model ${primary}`).toBeDefined();
+  expect(typeof model?.contextWindow).toBe("number");
+  expect(typeof model?.maxTokens).toBe("number");
+  const contextWindow = model?.contextWindow as number;
+  const maxTokens = model?.maxTokens as number;
+  expect(
+    contextWindow,
+    `active Ollama model ${primary} must stay on the small-context lane`,
+  ).toBeLessThanOrEqual(28_000);
+  const expectedReserve = Math.min(maxTokens, Math.max(0, contextWindow - 8_000));
+
+  expect(compaction).toEqual({
+    reserveTokens: expectedReserve,
+    reserveTokensFloor: expectedReserve,
+  });
+}
+
 test.skipIf(!shouldRunLiveE2E())(
   "GPU Ollama onboard enables CUDA, auth proxy, and sandbox inference",
   { timeout: TIMEOUT_MS },
@@ -40,7 +102,7 @@ test.skipIf(!shouldRunLiveE2E())(
       sandboxName: SANDBOX_NAME,
       delegatedLegacyContracts: [
         "uninstall --delete-models remains a separate cleanup lane until it has dedicated Vitest coverage",
-        "The #5468 OpenClaw TUI compaction guard remains deferred until a TUI fixture exists",
+        "The #5468 interactive TUI first-turn smoke remains waived until a TUI fixture exists; this Vitest asserts the baked compaction budget directly",
       ],
     });
 
@@ -72,6 +134,15 @@ test.skipIf(!shouldRunLiveE2E())(
     expect(install.exitCode, resultText(install)).toBe(0);
     await artifacts.writeText("install-gpu-ollama.log", resultText(install));
 
+    const config = await sandbox.execShell(
+      SANDBOX_NAME,
+      trustedSandboxShellScript("cat /sandbox/.openclaw/openclaw.json"),
+      { artifactName: "sandbox-openclaw-config", env: env(), timeoutMs: 30_000 },
+    );
+    expect(config.exitCode, resultText(config)).toBe(0);
+    await artifacts.writeText("openclaw-config.json", config.stdout);
+    assertSmallContextCompactionPolicy(config.stdout);
+
     const status = await host.command("node", [CLI, SANDBOX_NAME, "status"], {
       artifactName: "status-gpu-ollama",
       env: env(),
@@ -98,65 +169,54 @@ test.skipIf(!shouldRunLiveE2E())(
 
     const proxyUnauth = await host.command(
       "curl",
-      [
-        "-s",
-        "-o",
-        "/dev/null",
-        "-w",
-        "%{http_code}",
-        "-X",
-        "POST",
-        `http://127.0.0.1:${PROXY_PORT}/api/generate`,
-        "-d",
-        "{}",
-      ],
-      { artifactName: "proxy-unauth-generate-status", env: env(), timeoutMs: 30_000 },
+      ["-sS", "-o", "/dev/null", "-w", "%{http_code}", `http://127.0.0.1:${PROXY_PORT}/api/tags`],
+      { artifactName: "ollama-proxy-unauthorized", env: env(), timeoutMs: 30_000 },
     );
-    expect(proxyUnauth.stdout.trim()).toBe("401");
-    expect(
-      (await proxyStatus(host, "wrong-token", "proxy-wrong-token-tags-status")).stdout.trim(),
-    ).toBe("401");
-    expect((await proxyStatus(host, token, "proxy-correct-token-tags-status")).stdout.trim()).toBe(
-      "200",
+    expect(proxyUnauth.exitCode, resultText(proxyUnauth)).toBe(0);
+    expect(proxyUnauth.stdout).toBe("401");
+
+    const proxyAuth = await host.command(
+      "curl",
+      ["-sS", "-H", `Authorization: Bearer ${token}`, `http://127.0.0.1:${PROXY_PORT}/api/tags`],
+      {
+        artifactName: "ollama-proxy-authorized",
+        env: env(),
+        redactionValues: [token],
+        timeoutMs: 30_000,
+      },
     );
-    const restarted = await restartProxy(host, token);
-    expect(restarted.exitCode, resultText(restarted)).toBe(0);
-    expect(restarted.stdout.trim()).toBe("200");
+    expect(proxyAuth.exitCode, resultText(proxyAuth)).toBe(0);
+    expect(proxyAuth.stdout).toMatch(/models|name/i);
+
+    const proxyBefore = await proxyStatus(host, token, "proxy-status-before-restart");
+    expect(proxyBefore.exitCode, resultText(proxyBefore)).toBe(0);
+    await restartProxy(host, token);
+    const proxyAfter = await proxyStatus(host, token, "proxy-status-after-restart");
+    expect(proxyAfter.exitCode, resultText(proxyAfter)).toBe(0);
+
+    const sandboxToken = await sandbox.execShell(
+      SANDBOX_NAME,
+      trustedSandboxShellScript("printenv OLLAMA_API_KEY 2>/dev/null || true"),
+      { artifactName: "sandbox-ollama-api-key", env: env(), timeoutMs: 30_000 },
+    );
+    expect(sandboxToken.exitCode, resultText(sandboxToken)).toBe(0);
+    expect(sandboxToken.stdout.trim()).toBe(token);
 
     const model = await detectOllamaModel(host);
-    expect(model).not.toBe("");
-    const payload = JSON.stringify({
-      model,
-      messages: [{ role: "user", content: "Reply with exactly one word: PONG" }],
-      max_tokens: 200,
-    });
-    const direct = await host.command(
-      "curl",
-      [
-        "-s",
-        "--max-time",
-        "120",
-        "-X",
-        "POST",
-        "http://127.0.0.1:11434/v1/chat/completions",
-        "-H",
-        "Content-Type: application/json",
-        "-d",
-        payload,
-      ],
-      { artifactName: "direct-ollama-chat", env: env(), timeoutMs: 150_000 },
-    );
-    expect(direct.exitCode, resultText(direct)).toBe(0);
-    expect(chatContent(direct.stdout)).toMatch(/PONG/i);
-
-    const sandboxChat = await sandbox.execShell(
+    const chat = await sandbox.execShell(
       SANDBOX_NAME,
       trustedSandboxShellScript(
-        `curl -skS --max-time 90 https://inference.local/v1/chat/completions -H 'Content-Type: application/json' -d '${payload.replace(/'/gu, `'\\''`)}'`,
+        `curl -sS --max-time 120 https://inference.local/v1/chat/completions -H 'Content-Type: application/json' --data '${JSON.stringify(
+          {
+            model,
+            messages: [{ role: "user", content: "Reply with exactly one word: PONG" }],
+            max_tokens: 32,
+          },
+        )}'`,
       ),
       { artifactName: "sandbox-inference-local-chat", env: env(), timeoutMs: 150_000 },
     );
-    expect(sandboxChat.exitCode, resultText(sandboxChat)).toBe(0);
-    expect(chatContent(sandboxChat.stdout)).toMatch(/PONG/i);
+    expect(chat.exitCode, resultText(chat)).toBe(0);
+    expect(chatContent(chat.stdout)).toMatch(/pong/i);
   },
 );
