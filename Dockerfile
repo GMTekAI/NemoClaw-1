@@ -134,8 +134,8 @@ RUN set -eu; \
     pack_reviewed_npm_tarball() { \
         pack_spec="$1"; expected_integrity="$2"; pack_dir="$3"; label="$4"; \
         pack_json="$(npm pack "$pack_spec" --pack-destination "$pack_dir" --json)"; \
-        pack_integrity="$(PACK_JSON="$pack_json" node -e 'const p = JSON.parse(process.env.PACK_JSON); process.stdout.write(String(p[0]?.integrity ?? ""));')"; \
-        pack_filename="$(PACK_JSON="$pack_json" node -e 'const p = JSON.parse(process.env.PACK_JSON); process.stdout.write(String(p[0]?.filename ?? ""));')"; \
+        pack_integrity="$(printf '%s' "$pack_json" | node -e 'const p = JSON.parse(require("node:fs").readFileSync(0, "utf8")); process.stdout.write(String(p[0]?.integrity ?? ""));')"; \
+        pack_filename="$(printf '%s' "$pack_json" | node -e 'const p = JSON.parse(require("node:fs").readFileSync(0, "utf8")); process.stdout.write(String(p[0]?.filename ?? ""));')"; \
         if [ -z "$pack_integrity" ] || [ -z "$pack_filename" ]; then \
             echo "ERROR: ${label} npm pack did not report filename and integrity" >&2; exit 1; \
         fi; \
@@ -200,8 +200,8 @@ RUN set -eu; \
     pack_reviewed_npm_tarball() { \
         pack_spec="$1"; expected_integrity="$2"; pack_dir="$3"; label="$4"; \
         pack_json="$(npm pack "$pack_spec" --pack-destination "$pack_dir" --json)"; \
-        pack_integrity="$(PACK_JSON="$pack_json" node -e 'const p = JSON.parse(process.env.PACK_JSON); process.stdout.write(String(p[0]?.integrity ?? ""));')"; \
-        pack_filename="$(PACK_JSON="$pack_json" node -e 'const p = JSON.parse(process.env.PACK_JSON); process.stdout.write(String(p[0]?.filename ?? ""));')"; \
+        pack_integrity="$(printf '%s' "$pack_json" | node -e 'const p = JSON.parse(require("node:fs").readFileSync(0, "utf8")); process.stdout.write(String(p[0]?.integrity ?? ""));')"; \
+        pack_filename="$(printf '%s' "$pack_json" | node -e 'const p = JSON.parse(require("node:fs").readFileSync(0, "utf8")); process.stdout.write(String(p[0]?.filename ?? ""));')"; \
         if [ -z "$pack_integrity" ] || [ -z "$pack_filename" ]; then \
             echo "ERROR: ${label} npm pack did not report filename and integrity" >&2; exit 1; \
         fi; \
@@ -821,8 +821,8 @@ RUN set -eu; \
             exit 1; \
         fi; \
         plugin_pack_json="$(npm pack "$expected_tarball" --pack-destination "$NEMOCLAW_OPENCLAW_PLUGIN_PACK_DIR" --json)"; \
-        plugin_pack_integrity="$(PACK_JSON="$plugin_pack_json" node -e 'const p = JSON.parse(process.env.PACK_JSON); process.stdout.write(String(p[0]?.integrity ?? ""));')"; \
-        plugin_pack_filename="$(PACK_JSON="$plugin_pack_json" node -e 'const p = JSON.parse(process.env.PACK_JSON); process.stdout.write(String(p[0]?.filename ?? ""));')"; \
+        plugin_pack_integrity="$(printf '%s' "$plugin_pack_json" | node -e 'const p = JSON.parse(require("node:fs").readFileSync(0, "utf8")); process.stdout.write(String(p[0]?.integrity ?? ""));')"; \
+        plugin_pack_filename="$(printf '%s' "$plugin_pack_json" | node -e 'const p = JSON.parse(require("node:fs").readFileSync(0, "utf8")); process.stdout.write(String(p[0]?.filename ?? ""));')"; \
         if [ "$plugin_pack_integrity" != "$expected_integrity" ]; then \
             echo "ERROR: OpenClaw plugin ${plugin_spec} downloaded tarball integrity mismatch" >&2; \
             echo "Expected: $expected_integrity" >&2; \
