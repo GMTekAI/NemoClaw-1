@@ -254,7 +254,17 @@ USER root
 RUN set -eu; \
     config_dir=/sandbox/.hermes; \
     data_dir=/sandbox/.hermes-data; \
+    openclaw_dir=/sandbox/.openclaw; \
     mkdir -p "$config_dir"; \
+    if [ -L "$openclaw_dir" ]; then \
+        echo "ERROR: refusing Hermes layout cleanup because $openclaw_dir is a symlink" >&2; \
+        exit 1; \
+    fi; \
+    rm -rf "$openclaw_dir"; \
+    if [ -e "$openclaw_dir" ] || [ -L "$openclaw_dir" ]; then \
+        echo "ERROR: stale OpenClaw state dir still exists after Hermes cleanup: $openclaw_dir" >&2; \
+        exit 1; \
+    fi; \
     if [ -L "$data_dir" ]; then \
         echo "ERROR: refusing legacy layout cleanup because $data_dir is a symlink" >&2; \
         exit 1; \

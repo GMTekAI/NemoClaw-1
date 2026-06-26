@@ -1291,7 +1291,10 @@ describe("Hermes sandbox provisioning", () => {
     dockerfilePath: string,
     startMarker: string,
     endMarker: string,
-    { precreateConfig = false }: { precreateConfig?: boolean } = {},
+    {
+      precreateConfig = false,
+      precreateStaleOpenclaw = false,
+    }: { precreateConfig?: boolean; precreateStaleOpenclaw?: boolean } = {},
   ) {
     const dockerfile = fs.readFileSync(dockerfilePath, "utf-8");
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-hermes-layout-"));
@@ -1301,6 +1304,11 @@ describe("Hermes sandbox provisioning", () => {
     if (precreateConfig) {
       fs.writeFileSync(path.join(hermesDir, "config.yaml"), "model: test\n");
       fs.writeFileSync(path.join(hermesDir, ".env"), "TOKEN=test\n");
+    }
+    if (precreateStaleOpenclaw) {
+      const openclawDir = path.join(sandboxRoot, ".openclaw");
+      fs.mkdirSync(openclawDir, { recursive: true });
+      fs.writeFileSync(path.join(openclawDir, "openclaw.json"), "{}\n");
     }
     const command = dockerRunCommandBetween(dockerfile, startMarker, endMarker).replaceAll(
       "/root/.cache/pip",
@@ -1431,7 +1439,7 @@ describe("Hermes sandbox provisioning", () => {
         HERMES_DOCKERFILE,
         "# Flatten stale published base images",
         "# Pin config hash at build time",
-        { precreateConfig: true },
+        { precreateConfig: true, precreateStaleOpenclaw: true },
       ),
     ];
 
@@ -1463,6 +1471,7 @@ describe("Hermes sandbox provisioning", () => {
         expect((fs.statSync(path.join(hermesDir, "runtime")).mode & 0o7777).toString(8)).toBe(
           "2770",
         );
+        expect(fs.existsSync(path.join(run.sandboxRoot, ".openclaw"))).toBe(false);
         expect(fs.readlinkSync(path.join(hermesDir, "gateway_state.json"))).toBe(
           "runtime/gateway_state.json",
         );
