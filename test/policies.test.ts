@@ -28,7 +28,6 @@ const SELECT_FROM_LIST_ITEMS = [
   { name: "npm", description: "npm and Yarn registry access" },
   { name: "pypi", description: "Python Package Index (PyPI) access" },
 ];
-
 type PolicyCall = {
   type: string;
   message?: string;
@@ -144,6 +143,8 @@ describe("policies", () => {
         "public-reference",
         "pypi",
         "slack",
+        "tavily",
+        "teams",
         "telegram",
         "weather",
         "wechat",
@@ -169,13 +170,12 @@ describe("policies", () => {
     });
 
     it("includes /usr/bin/node in communication presets", () => {
-      for (const preset of ["discord", "slack", "telegram", "whatsapp"]) {
+      for (const preset of ["discord", "slack", "teams", "telegram", "whatsapp"]) {
         const content = requirePresetContent(policies.loadPreset(preset));
         expect(content).toContain("/usr/local/bin/node");
         expect(content).toContain("/usr/bin/node");
       }
     });
-
     it("whatsapp preset routes web.whatsapp.com as a raw L4 tunnel with TLS pass-through", () => {
       // The /ws/chat upgrade is HTTP/1.1-only; if the proxy terminates TLS it
       // negotiates h2 ALPN with Meta's edge and the WS upgrade fails (Meta
