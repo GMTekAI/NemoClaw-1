@@ -15,6 +15,7 @@ import { type AgentDefinition, isTerminalAgent, loadAgent } from "./defs";
 import {
   buildHermesEnvFileBoundaryGuard,
   buildHermesRuntimeEnvBoundaryGuard,
+  HERMES_SECRET_BOUNDARY_VALIDATOR_PATH,
 } from "./hermes-recovery-boundary";
 import { buildGatewayGuardRecoveryLines } from "./runtime-recovery-preload";
 
@@ -177,6 +178,17 @@ function gatewayLaunchCommand(command: string, runAsUser?: string): string {
   return `${logSelection} if [ "$(id -u)" = "0" ] && command -v gosu >/dev/null 2>&1 && id ${shellQuote(runAsUser)} >/dev/null 2>&1; then nohup gosu ${shellQuote(runAsUser)} ${command} >> "$_GATEWAY_LOG" 2>&1 & else ${userLaunch} fi;`;
 }
 
+function gatewayRootGosuLaunchCommand(command: string, runAsUser: string): string {
+  const logSelection = buildGatewayLogSelection();
+  return [
+    logSelection,
+    '[ "$(id -u)" = "0" ] || { echo ROOT_EXEC_UNAVAILABLE; exit 1; };',
+    `command -v gosu >/dev/null 2>&1 || { echo GOSU_MISSING; exit 1; };`,
+    `id ${shellQuote(runAsUser)} >/dev/null 2>&1 || { echo GATEWAY_USER_MISSING; exit 1; };`,
+    `nohup gosu ${shellQuote(runAsUser)} ${command} >> "$_GATEWAY_LOG" 2>&1 &`,
+  ].join(" ");
+}
+
 function hermesGatewayEnvPrefix(): string {
   return "HERMES_HOME=/sandbox/.hermes";
 }
@@ -252,6 +264,144 @@ export function buildOpenClawRecoveryScript(port: number): string {
     gatewayLaunchCommand('"$OPENCLAW" gateway run --port ' + port, "gateway"),
     "GPID=$!; sleep 2;",
     'if kill -0 "$GPID" 2>/dev/null; then echo "GATEWAY_PID=$GPID"; else echo GATEWAY_FAILED; tail -5 "$_GATEWAY_LOG" 2>/dev/null; fi',
+  ].join(" ");
+}
+
+function buildGatewayStopLines(staleGatewayPattern: string): string[] {
+  return [
+    `_GATEWAY_PROC_PATTERN=${shellQuote(staleGatewayPattern)};`,
+    'if [ -n "$_GATEWAY_PROC_PATTERN" ]; then pkill -TERM -f "$_GATEWAY_PROC_PATTERN" 2>/dev/null || true; for _i in 1 2 3 4 5; do pgrep -f "$_GATEWAY_PROC_PATTERN" >/dev/null 2>&1 || break; sleep 1; done; pkill -KILL -f "$_GATEWAY_PROC_PATTERN" 2>/dev/null || true; for _i in 1 2 3 4 5; do pgrep -f "$_GATEWAY_PROC_PATTERN" >/dev/null 2>&1 || break; sleep 1; done; if pgrep -f "$_GATEWAY_PROC_PATTERN" >/dev/null 2>&1; then echo GATEWAY_STALE_PROCESSES; exit 1; fi; fi;',
+  ];
+}
+
+/**
+ * Build the OpenClaw forced-restart shell script used by
+ * `sandbox gateway restart`. Unlike recovery, this intentionally skips the
+ * ALREADY_RUNNING fast path.
+ */
+export function buildOpenClawGatewayRestartScript(port: number): string {
+  const staleGatewayPattern = "[o]penclaw([ -]gateway| gateway run|$)";
+  return [
+    ...buildGatewayLogSetup(true, "gateway"),
+    buildGatewayLogSelection(),
+    ...buildGatewayGuardRecoveryLines(),
+    gatewayGuardRefusalCommand(),
+    "[ -f ~/.bashrc ] && . ~/.bashrc;",
+    "rm -rf /tmp/openclaw-*/gateway.*.lock 2>/dev/null;",
+    ...buildGatewayStopLines(staleGatewayPattern),
+    'OPENCLAW="$(command -v openclaw)";',
+    'if [ -z "$OPENCLAW" ]; then echo OPENCLAW_MISSING; exit 1; fi;',
+    gatewayRootGosuLaunchCommand('"$OPENCLAW" gateway run --port ' + port, "gateway"),
+    "GPID=$!; sleep 2;",
+    'if kill -0 "$GPID" 2>/dev/null; then echo "GATEWAY_PID=$GPID"; else echo GATEWAY_FAILED; tail -5 "$_GATEWAY_LOG" 2>/dev/null; exit 1; fi;',
+  ].join(" ");
+}
+
+function buildHermesConfigRestartLines(): string[] {
+  return [
+    "_HERMES_DIR=/sandbox/.hermes;",
+    "_HERMES_HASH_FILE=/etc/nemoclaw/hermes.config-hash;",
+    '_HERMES_PYTHON=/opt/hermes/.venv/bin/python; [ -x "$_HERMES_PYTHON" ] || _HERMES_PYTHON="$(command -v python3 || echo python3)";',
+    "_HERMES_RUNTIME_CONFIG_GUARD=/usr/local/lib/nemoclaw/hermes-runtime-config-guard.py;",
+    '[ -f "$_HERMES_RUNTIME_CONFIG_GUARD" ] || { echo HERMES_RUNTIME_CONFIG_GUARD_MISSING; exit 1; };',
+    '[ -d "$_HERMES_DIR" ] && [ ! -L "$_HERMES_DIR" ] || { echo HERMES_UNSAFE_CONFIG_PATH; exit 1; };',
+    '_nemoclaw_mode_has_write_bit() { _mode="$1"; [ -n "$_mode" ] || return 0; _mode="${_mode#0}"; case "$_mode" in \'\'|*[!0-7]*) return 0 ;; *[2367]*) return 0 ;; *) return 1 ;; esac; };',
+    '_nemoclaw_owner_mode() { _path="$1"; _owner="$(stat -c \'%U:%G\' "$_path" 2>/dev/null || stat -f \'%Su:%Sg\' "$_path" 2>/dev/null || true)"; _mode="$(stat -c \'%a\' "$_path" 2>/dev/null || stat -f \'%Lp\' "$_path" 2>/dev/null || true)"; printf \'%s %s\\n\' "$_owner" "$_mode"; };',
+    '_nemoclaw_hermes_path_locked() { _path="$1"; [ -f "$_path" ] && [ ! -L "$_path" ] || return 1; _om="$(_nemoclaw_owner_mode "$_path")"; _owner="${_om% *}"; _mode="${_om##* }"; [ "$_owner" = "root:root" ] || return 1; ! _nemoclaw_mode_has_write_bit "$_mode"; };',
+    '_nemoclaw_hermes_root_locked() { _om="$(_nemoclaw_owner_mode "$_HERMES_DIR")"; _owner="${_om% *}"; _mode="${_om##* }"; case "${_owner} ${_mode}" in \'root:root 755\'|\'root:root 0755\') ;; *) return 1 ;; esac; _nemoclaw_hermes_path_locked "$_HERMES_DIR/config.yaml" && _nemoclaw_hermes_path_locked "$_HERMES_DIR/.env"; };',
+    '_nemoclaw_hermes_hash_locked() { [ -f "$_HERMES_HASH_FILE" ] && [ ! -L "$_HERMES_HASH_FILE" ] || return 1; _uid="$(stat -c \'%u\' "$_HERMES_HASH_FILE" 2>/dev/null || stat -f \'%u\' "$_HERMES_HASH_FILE" 2>/dev/null || echo unknown)"; _mode="$(stat -c \'%a\' "$_HERMES_HASH_FILE" 2>/dev/null || stat -f \'%Lp\' "$_HERMES_HASH_FILE" 2>/dev/null || echo unknown)"; [ "$_uid" = "0" ] || return 1; ! _nemoclaw_mode_has_write_bit "$_mode"; };',
+    "if _nemoclaw_hermes_root_locked; then",
+    "  _nemoclaw_hermes_hash_locked || { echo HERMES_UNSAFE_CONFIG_PATH; exit 1; };",
+    '  sha256sum -c "$_HERMES_HASH_FILE" --status || { echo HERMES_LOCKED_HASH_MISMATCH; exit 1; };',
+    "else",
+    '  "$_HERMES_PYTHON" "$_HERMES_RUNTIME_CONFIG_GUARD" refresh-hashes --hermes-dir "$_HERMES_DIR" --hash-file "$_HERMES_HASH_FILE" --mode strict || { echo HERMES_UNSAFE_CONFIG_PATH; exit 1; };',
+    '  "$_HERMES_PYTHON" "$_HERMES_RUNTIME_CONFIG_GUARD" refresh-hashes --hermes-dir "$_HERMES_DIR" --hash-file "$_HERMES_HASH_FILE" --mode compat || { echo HERMES_UNSAFE_CONFIG_PATH; exit 1; };',
+    "fi;",
+  ];
+}
+
+function buildHermesRootBoundaryGuard(
+  args: "env-file /sandbox/.hermes/.env" | "runtime-env",
+): string {
+  const gatewayPattern = "[h]ermes[[:space:]]+gateway([[:space:]]|$)";
+  const dashboardPattern = "[h]ermes[[:space:]]+dashboard([[:space:]]|$)";
+  const kill = [
+    `pkill -TERM -f ${shellQuote(gatewayPattern)} 2>/dev/null || true;`,
+    `pkill -TERM -f ${shellQuote(dashboardPattern)} 2>/dev/null || true;`,
+    "sleep 1;",
+    `pkill -KILL -f ${shellQuote(gatewayPattern)} 2>/dev/null || true;`,
+    `pkill -KILL -f ${shellQuote(dashboardPattern)} 2>/dev/null || true;`,
+  ].join(" ");
+  return `python3 ${shellQuote(HERMES_SECRET_BOUNDARY_VALIDATOR_PATH)} ${args} || { ${kill} echo SECRET_BOUNDARY_REFUSED; exit 1; };`;
+}
+
+function buildHermesApiSocatRecoveryLines(): string[] {
+  return [
+    "_HERMES_PUBLIC_PORT=8642;",
+    "_HERMES_INTERNAL_PORT=18642;",
+    '_HERMES_PUBLIC_CODE=$(curl -so /dev/null -w "%{http_code}" --max-time 3 "http://127.0.0.1:${_HERMES_PUBLIC_PORT}/health" 2>/dev/null || echo 000);',
+    'case "$_HERMES_PUBLIC_CODE" in 200|401) echo HERMES_SOCAT_HEALTHY ;; *)',
+    '  if ! ss -tln 2>/dev/null | grep -q "[.:]${_HERMES_PUBLIC_PORT}[[:space:]]"; then',
+    "    if command -v socat >/dev/null 2>&1; then",
+    '      for _i in 1 2 3 4 5 6 7 8 9 10; do ss -tln 2>/dev/null | grep -q "127.0.0.1:${_HERMES_INTERNAL_PORT}[[:space:]]" && break; sleep 1; done;',
+    '      nohup socat TCP-LISTEN:"${_HERMES_PUBLIC_PORT}",bind=0.0.0.0,fork,reuseaddr TCP:127.0.0.1:"${_HERMES_INTERNAL_PORT}" >/dev/null 2>&1 &',
+    '      echo "HERMES_SOCAT_PID=$!";',
+    "    else echo HERMES_SOCAT_MISSING; fi;",
+    "  fi ;;",
+    "esac;",
+  ];
+}
+
+/**
+ * Build the Hermes forced-restart shell script used by
+ * `sandbox gateway restart`. This runs only through root sandbox exec so the
+ * host, not the sandbox user, mediates gateway-user process control.
+ */
+export function buildHermesGatewayRestartScript(agent: AgentDefinition, port: number): string {
+  const binaryPath = agent.binary_path || "/usr/local/bin/hermes";
+  const binaryName = binaryPath.split("/").pop() ?? "hermes";
+  const configuredGatewayCommand = agent.gateway_command?.trim() || `${binaryName} gateway run`;
+  const usesValidatedBinary = configuredGatewayCommand === `${binaryName} gateway run`;
+  const customGatewayExecutable = configuredGatewayCommand.split(/\s+/)[0] ?? binaryName;
+  const validationSteps = usesValidatedBinary
+    ? [
+        `AGENT_BIN=${shellQuote(binaryPath)}; if [ ! -x "$AGENT_BIN" ]; then AGENT_BIN="$(command -v ${shellQuote(binaryName)})"; fi;`,
+        'if [ -z "$AGENT_BIN" ]; then echo AGENT_MISSING; exit 1; fi;',
+      ]
+    : [
+        `GATEWAY_CMD_BIN=${shellQuote(customGatewayExecutable)};`,
+        'case "$GATEWAY_CMD_BIN" in */*) [ -x "$GATEWAY_CMD_BIN" ] || { echo AGENT_MISSING; exit 1; } ;; *) command -v "$GATEWAY_CMD_BIN" >/dev/null 2>&1 || { echo AGENT_MISSING; exit 1; } ;; esac;',
+      ];
+  const launchCommand = usesValidatedBinary
+    ? gatewayRootGosuLaunchCommand(
+        `env ${hermesGatewayEnvPrefix()} "$AGENT_BIN" gateway run`,
+        "gateway",
+      )
+    : gatewayRootGosuLaunchCommand(
+        `env ${hermesGatewayEnvPrefix()} ${configuredGatewayCommand}`,
+        "gateway",
+      );
+  const staleGatewayPattern = "[h]ermes[[:space:]]+gateway[[:space:]]+run([[:space:]]|$)";
+
+  return [
+    `export HERMES_HOME=/sandbox/.hermes; _NEMOCLAW_RESTART_HEALTH_PORT=${port};`,
+    '[ "$(id -u)" = "0" ] || { echo ROOT_EXEC_UNAVAILABLE; exit 1; };',
+    ...buildGatewayLogSetup(false),
+    `${buildNoFollowLogSetupCommand("/tmp/gateway-recovery.log")} || exit 1;`,
+    buildGatewayLogSelection(),
+    `[ -f ${shellQuote(HERMES_SECRET_BOUNDARY_VALIDATOR_PATH)} ] || { echo SECRET_BOUNDARY_VALIDATOR_MISSING; exit 1; };`,
+    buildHermesRootBoundaryGuard("env-file /sandbox/.hermes/.env"),
+    ...buildGatewayGuardRecoveryLines(),
+    gatewayGuardRefusalCommand(),
+    "[ -f ~/.bashrc ] && . ~/.bashrc;",
+    buildHermesRootBoundaryGuard("runtime-env"),
+    ...buildHermesConfigRestartLines(),
+    ...buildGatewayStopLines(staleGatewayPattern),
+    ...validationSteps,
+    launchCommand,
+    "GPID=$!; sleep 2;",
+    'if kill -0 "$GPID" 2>/dev/null; then echo "GATEWAY_PID=$GPID"; else echo GATEWAY_FAILED; tail -5 "$_GATEWAY_LOG" 2>/dev/null; exit 1; fi;',
+    ...buildHermesApiSocatRecoveryLines(),
   ].join(" ");
 }
 

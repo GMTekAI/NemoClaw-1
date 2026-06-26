@@ -5,7 +5,9 @@ import { describe, expect, it } from "vitest";
 // Import from compiled dist/ so coverage is attributed correctly.
 import {
   buildHermesDashboardProcessRecoveryScript,
+  buildHermesGatewayRestartScript,
   buildManualRecoveryCommand,
+  buildOpenClawGatewayRestartScript,
   buildOpenClawRecoveryScript,
   buildRecoveryScript,
 } from "../../../dist/lib/agent/runtime";
@@ -360,6 +362,87 @@ describe("buildRecoveryScript", () => {
       expect(script).not.toContain("gosu gateway");
       expect(script).not.toContain("gosu 'gateway'");
     });
+  });
+});
+
+describe("buildHermesGatewayRestartScript (#2426)", () => {
+  it("uses root/gateway relaunch, HERMES_HOME, and no port override", () => {
+    const script = buildHermesGatewayRestartScript(hermesAgent, 8642);
+
+    expect(script).toContain('[ "$(id -u)" = "0" ] || { echo ROOT_EXEC_UNAVAILABLE; exit 1; };');
+    expect(script).toContain("gosu 'gateway' env HERMES_HOME=/sandbox/.hermes");
+    expect(script).toContain('"$AGENT_BIN" gateway run');
+    expect(script).toContain("export HERMES_HOME=/sandbox/.hermes");
+    expect(script).not.toContain("--port 8642");
+    expect(script).not.toContain("ALREADY_RUNNING");
+  });
+
+  it("keeps the root-exec shell compatible with sh", () => {
+    const script = buildHermesGatewayRestartScript(hermesAgent, 8642);
+    const configSection = script.slice(
+      script.indexOf("_HERMES_DIR=/sandbox/.hermes;"),
+      script.indexOf("_GATEWAY_PROC_PATTERN="),
+    );
+
+    expect(configSection).not.toMatch(/(^|[;\s])local\s+/);
+  });
+
+  it("validates Hermes boundaries before hash adoption and relaunch", () => {
+    const script = buildHermesGatewayRestartScript(hermesAgent, 8642);
+
+    const envBoundaryIdx = script.indexOf("env-file /sandbox/.hermes/.env");
+    const runtimeBoundaryIdx = script.indexOf("runtime-env");
+    const refreshHashIdx = script.indexOf("refresh-hashes --hermes-dir");
+    const stopIdx = script.indexOf('pkill -TERM -f "$_GATEWAY_PROC_PATTERN"');
+    const launchIdx = script.indexOf("gosu 'gateway'");
+
+    expect(envBoundaryIdx).toBeGreaterThanOrEqual(0);
+    expect(runtimeBoundaryIdx).toBeGreaterThan(envBoundaryIdx);
+    expect(refreshHashIdx).toBeGreaterThan(runtimeBoundaryIdx);
+    expect(stopIdx).toBeGreaterThan(refreshHashIdx);
+    expect(launchIdx).toBeGreaterThan(stopIdx);
+  });
+
+  it("refreshes strict and compatibility hashes only for mutable config state", () => {
+    const script = buildHermesGatewayRestartScript(hermesAgent, 8642);
+
+    expect(script).toContain("if _nemoclaw_hermes_root_locked; then");
+    expect(script).toContain('sha256sum -c "$_HERMES_HASH_FILE" --status');
+    expect(script).toContain("HERMES_LOCKED_HASH_MISMATCH");
+    expect(script).toContain("--mode strict");
+    expect(script).toContain("--mode compat");
+
+    const lockedIdx = script.indexOf("if _nemoclaw_hermes_root_locked; then");
+    const strictVerifyIdx = script.indexOf('sha256sum -c "$_HERMES_HASH_FILE" --status');
+    const elseIdx = script.indexOf("else", strictVerifyIdx);
+    const strictRefreshIdx = script.indexOf("--mode strict", elseIdx);
+    const compatRefreshIdx = script.indexOf("--mode compat", elseIdx);
+
+    expect(lockedIdx).toBeGreaterThanOrEqual(0);
+    expect(strictVerifyIdx).toBeGreaterThan(lockedIdx);
+    expect(strictRefreshIdx).toBeGreaterThan(elseIdx);
+    expect(compatRefreshIdx).toBeGreaterThan(strictRefreshIdx);
+  });
+
+  it("preserves or recreates the Hermes API socat bridge before health validation", () => {
+    const script = buildHermesGatewayRestartScript(hermesAgent, 8642);
+
+    expect(script).toContain("HERMES_SOCAT_HEALTHY");
+    expect(script).toContain("TCP-LISTEN");
+    expect(script).toContain("18642");
+    expect(script).toContain("8642");
+  });
+});
+
+describe("buildOpenClawGatewayRestartScript (#2426)", () => {
+  it("force-restarts OpenClaw as the gateway user without a healthy fast path", () => {
+    const script = buildOpenClawGatewayRestartScript(18789);
+
+    expect(script).toContain("gosu 'gateway'");
+    expect(script).toContain('"$OPENCLAW" gateway run --port 18789');
+    expect(script).toContain('pkill -TERM -f "$_GATEWAY_PROC_PATTERN"');
+    expect(script).toContain("GATEWAY_STALE_PROCESSES");
+    expect(script).not.toContain("ALREADY_RUNNING");
   });
 });
 

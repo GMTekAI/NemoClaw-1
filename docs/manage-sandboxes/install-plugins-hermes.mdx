@@ -31,6 +31,15 @@ Use this path when the plugin adds Python code, runtime hooks, or dependencies t
 `nemohermes <name> skill install <path>` is only for `SKILL.md` agent skills.
 It uploads skill instructions and refreshes skill discovery, but it does not install Hermes runtime plugins.
 
+When you change a Hermes plugin or a startup-only setting that already exists in the running sandbox, restart the Hermes gateway from the host:
+
+```bash
+nemohermes <name> gateway restart
+```
+
+The restart command keeps the gateway process under the `gateway` user, validates `/sandbox/.hermes/.env` before relaunch, and checks or recovers the Hermes API, dashboard, and declared forwards after health passes.
+Use `recover` only when the gateway or forwards are missing and you want the idempotent repair path.
+
 ## Prepare a Build Directory
 
 Put the custom Dockerfile and everything it needs to `COPY` in one directory.

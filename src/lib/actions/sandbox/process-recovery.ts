@@ -409,6 +409,232 @@ function recoverSandboxProcesses(sandboxName: string): boolean {
   return recoveredSsh(executeSandboxCommand(sandboxName, script));
 }
 
+export type GatewayRestartFailureLayer =
+  | "unsupported agent"
+  | "root exec unavailable"
+  | "secret-boundary refusal"
+  | "unsafe config path"
+  | "hash mismatch while locked"
+  | "launch failure"
+  | "health timeout";
+
+export type GatewayRestartResult =
+  | {
+      ok: true;
+      restarted: true;
+      healthPassed: true;
+      forwardRecovered: boolean;
+    }
+  | {
+      ok: false;
+      failureLayer: GatewayRestartFailureLayer;
+      detail: string;
+    };
+
+type GatewayRestartDeps = {
+  getSessionAgent?: typeof agentRuntime.getSessionAgent;
+  getSandbox?: typeof registry.getSandbox;
+  resolveSandboxDashboardPort?: typeof resolveSandboxDashboardPort;
+  buildOpenClawGatewayRestartScript?: typeof agentRuntime.buildOpenClawGatewayRestartScript;
+  buildHermesGatewayRestartScript?: typeof agentRuntime.buildHermesGatewayRestartScript;
+  executeSandboxExecCommand?: typeof executeSandboxExecCommand;
+  waitForRecoveredSandboxGateway?: typeof waitForRecoveredSandboxGateway;
+  ensureSandboxPortForward?: typeof ensureSandboxPortForward;
+  ensureHermesDashboardPortForwardIfEnabled?: typeof ensureHermesDashboardPortForwardIfEnabled;
+  recoverHermesDashboardProcessIfEnabled?: typeof recoverHermesDashboardProcessIfEnabled;
+  recoverMessagingHostForward?: typeof recoverMessagingHostForward;
+  recoverDeclaredAgentForwardPorts?: typeof recoverDeclaredAgentForwardPorts;
+  printGatewayWedgeDiagnostics?: typeof printGatewayWedgeDiagnostics;
+};
+
+function sandboxAgentName(
+  sandboxName: string,
+  getSandbox: typeof registry.getSandbox,
+): string | null {
+  try {
+    return getSandbox(sandboxName)?.agent ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function gatewayRestartOutput(result: SandboxCommandResult): string {
+  return [result.stdout, result.stderr].filter(Boolean).join("\n");
+}
+
+function classifyGatewayRestartFailure(result: SandboxCommandResult | null): {
+  layer: GatewayRestartFailureLayer;
+  detail: string;
+} {
+  if (!result) {
+    return {
+      layer: "root exec unavailable",
+      detail: "root sandbox exec did not return command output",
+    };
+  }
+
+  const output = gatewayRestartOutput(result);
+  if (
+    output.includes("ROOT_EXEC_UNAVAILABLE") ||
+    output.includes("GOSU_MISSING") ||
+    output.includes("GATEWAY_USER_MISSING")
+  ) {
+    return { layer: "root exec unavailable", detail: output.trim() || "root exec unavailable" };
+  }
+  if (output.includes("SECRET_BOUNDARY_REFUSED")) {
+    return { layer: "secret-boundary refusal", detail: output.trim() || "boundary refused" };
+  }
+  if (
+    output.includes("HERMES_UNSAFE_CONFIG_PATH") ||
+    output.includes("HERMES_RUNTIME_CONFIG_GUARD_MISSING") ||
+    output.includes("SECRET_BOUNDARY_VALIDATOR_MISSING") ||
+    output.includes("refusing unsafe Hermes runtime config path") ||
+    output.includes("refusing runtime config update") ||
+    output.includes("refusing to follow symlink") ||
+    output.includes("refusing hardlinked runtime config path")
+  ) {
+    return { layer: "unsafe config path", detail: output.trim() || "unsafe config path" };
+  }
+  if (output.includes("HERMES_LOCKED_HASH_MISMATCH")) {
+    return {
+      layer: "hash mismatch while locked",
+      detail: output.trim() || "Hermes config hash mismatch while locked",
+    };
+  }
+  return { layer: "launch failure", detail: output.trim() || `restart exited ${result.status}` };
+}
+
+function printGatewayRestartFailure(
+  sandboxName: string,
+  layer: GatewayRestartFailureLayer,
+  detail: string,
+): void {
+  console.error(`  Failure layer: ${layer} - gateway restart failed for '${sandboxName}'.`);
+  if (!detail.trim()) return;
+  const lines = detail
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(-12);
+  for (const line of lines) {
+    console.error(`  ${line}`);
+  }
+}
+
+export function restartSandboxGateway(
+  sandboxName: string,
+  {
+    quiet = false,
+    deps = {},
+  }: {
+    quiet?: boolean;
+    deps?: GatewayRestartDeps;
+  } = {},
+): GatewayRestartResult {
+  const getSessionAgent = deps.getSessionAgent ?? agentRuntime.getSessionAgent;
+  const getSandbox = deps.getSandbox ?? registry.getSandbox;
+  const agent = getSessionAgent(sandboxName);
+  const persistedAgent = sandboxAgentName(sandboxName, getSandbox);
+  const agentName = agent?.name ?? persistedAgent ?? "openclaw";
+  const dashboardPort = (deps.resolveSandboxDashboardPort ?? resolveSandboxDashboardPort)(
+    sandboxName,
+  );
+
+  let script: string | null = null;
+  if (!agent && persistedAgent && persistedAgent !== "openclaw") {
+    const detail = `${persistedAgent} agent definition could not be loaded.`;
+    printGatewayRestartFailure(sandboxName, "unsupported agent", detail);
+    return { ok: false, failureLayer: "unsupported agent", detail };
+  }
+  if (agent && !agentRuntime.hasGatewayRuntime(agent)) {
+    const detail = `${agentRuntime.getAgentDisplayName(agent)} has no gateway runtime.`;
+    printGatewayRestartFailure(sandboxName, "unsupported agent", detail);
+    return { ok: false, failureLayer: "unsupported agent", detail };
+  }
+  if (agentName === "hermes") {
+    if (!agent || agent.name !== "hermes") {
+      const detail = "Hermes agent definition could not be loaded.";
+      printGatewayRestartFailure(sandboxName, "unsupported agent", detail);
+      return { ok: false, failureLayer: "unsupported agent", detail };
+    }
+    script = (deps.buildHermesGatewayRestartScript ?? agentRuntime.buildHermesGatewayRestartScript)(
+      agent,
+      dashboardPort,
+    );
+  } else if (!agent || agentName === "openclaw") {
+    script = (
+      deps.buildOpenClawGatewayRestartScript ?? agentRuntime.buildOpenClawGatewayRestartScript
+    )(dashboardPort);
+  } else {
+    const detail =
+      `${agentRuntime.getAgentDisplayName(agent)} does not declare a supported root-mediated ` +
+      "gateway restart runtime.";
+    printGatewayRestartFailure(sandboxName, "unsupported agent", detail);
+    return { ok: false, failureLayer: "unsupported agent", detail };
+  }
+
+  if (!quiet) {
+    console.log("");
+    console.log(
+      `  Restarting ${agentRuntime.getAgentDisplayName(agent)} gateway in '${sandboxName}'...`,
+    );
+  }
+  const execRestart = deps.executeSandboxExecCommand ?? executeSandboxExecCommand;
+  const restartResult = execRestart(sandboxName, script, 30000);
+  const hasRestartMarker =
+    restartResult?.status === 0 &&
+    restartResult.stdout.split(/\r?\n/).some((line) => line.startsWith("GATEWAY_PID="));
+  if (!hasRestartMarker) {
+    const failure = classifyGatewayRestartFailure(restartResult);
+    printGatewayRestartFailure(sandboxName, failure.layer, failure.detail);
+    return { ok: false, failureLayer: failure.layer, detail: failure.detail };
+  }
+
+  const waitForGateway = deps.waitForRecoveredSandboxGateway ?? waitForRecoveredSandboxGateway;
+  if (!waitForGateway(sandboxName, { quiet })) {
+    const detail = "gateway process restarted but health did not pass before timeout";
+    printGatewayRestartFailure(sandboxName, "health timeout", detail);
+    const printWedgeDiagnostics = deps.printGatewayWedgeDiagnostics ?? printGatewayWedgeDiagnostics;
+    printWedgeDiagnostics(sandboxName, executeSandboxExecCommand);
+    return { ok: false, failureLayer: "health timeout", detail };
+  }
+
+  const ensurePrimaryForward = deps.ensureSandboxPortForward ?? ensureSandboxPortForward;
+  const recoverDashboardProcess =
+    deps.recoverHermesDashboardProcessIfEnabled ?? recoverHermesDashboardProcessIfEnabled;
+  const ensureHermesDashboardForward =
+    deps.ensureHermesDashboardPortForwardIfEnabled ?? ensureHermesDashboardPortForwardIfEnabled;
+  const recoverMessagingForward = deps.recoverMessagingHostForward ?? recoverMessagingHostForward;
+  const recoverDeclaredForwards =
+    deps.recoverDeclaredAgentForwardPorts ?? recoverDeclaredAgentForwardPorts;
+
+  const forwardRecovered = ensurePrimaryForward(sandboxName);
+  const dashboardProcessRecovered = recoverDashboardProcess(sandboxName);
+  const dashboardForwardRecovered = ensureHermesDashboardForward(sandboxName);
+  const messagingForwardRecovered = recoverMessagingForward(sandboxName, { quiet });
+  const declaredForwardsRecovered = recoverDeclaredForwards(sandboxName, dashboardPort, { quiet });
+
+  if (!quiet) {
+    if (!forwardRecovered) {
+      console.error("  Dashboard port forward could not be re-established.");
+    }
+  }
+  console.log(
+    `  ${G}✓${R} Gateway restarted; health passed; forwards checked/recovered for '${sandboxName}'.`,
+  );
+  return {
+    ok: true,
+    restarted: true,
+    healthPassed: true,
+    forwardRecovered:
+      forwardRecovered ||
+      dashboardProcessRecovered === true ||
+      dashboardForwardRecovered === true ||
+      messagingForwardRecovered === true ||
+      declaredForwardsRecovered === true,
+  };
+}
+
 function recoverDeclaredAgentForwardPorts(
   sandboxName: string,
   recoveryPort: number,

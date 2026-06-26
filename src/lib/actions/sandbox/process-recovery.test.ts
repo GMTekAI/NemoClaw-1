@@ -1,11 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { afterEach, describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 
 // Import from compiled dist for parity with the other CLI tests in this project.
 import {
   probeSandboxInferenceGatewayHealth,
+  restartSandboxGateway,
   waitForRecoveredSandboxGateway,
 } from "../../../../dist/lib/actions/sandbox/process-recovery";
 
@@ -134,5 +135,171 @@ describe("waitForRecoveredSandboxGateway — #4710 settle-window confirm", () =>
       sleepImpl: () => {},
     });
     expect(ok).toBe(false);
+  });
+});
+
+describe("restartSandboxGateway — host-mediated gateway restart", () => {
+  function silenceConsole() {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    return () => {
+      log.mockRestore();
+      error.mockRestore();
+    };
+  }
+
+  function baseDeps(overrides = {}) {
+    return {
+      getSessionAgent: () => null,
+      getSandbox: () => ({ name: "alpha", agent: "openclaw" }),
+      resolveSandboxDashboardPort: () => 18789,
+      buildOpenClawGatewayRestartScript: vi.fn(() => "restart openclaw"),
+      executeSandboxExecCommand: vi.fn(() => ({
+        status: 0,
+        stdout: "GATEWAY_PID=123",
+        stderr: "",
+      })),
+      waitForRecoveredSandboxGateway: vi.fn(() => true),
+      ensureSandboxPortForward: vi.fn(() => true),
+      recoverHermesDashboardProcessIfEnabled: vi.fn(() => null),
+      ensureHermesDashboardPortForwardIfEnabled: vi.fn(() => null),
+      recoverMessagingHostForward: vi.fn(() => null),
+      recoverDeclaredAgentForwardPorts: vi.fn(() => null),
+      printGatewayWedgeDiagnostics: vi.fn(() => false),
+      ...overrides,
+    };
+  }
+
+  it("force-restarts through root exec even when a gateway might already be healthy", () => {
+    const restore = silenceConsole();
+    try {
+      const deps = baseDeps();
+      const result = restartSandboxGateway("alpha", { deps });
+
+      expect(result).toMatchObject({ ok: true, restarted: true, healthPassed: true });
+      expect(deps.buildOpenClawGatewayRestartScript).toHaveBeenCalledWith(18789);
+      expect(deps.executeSandboxExecCommand).toHaveBeenCalledWith(
+        "alpha",
+        "restart openclaw",
+        30000,
+      );
+      expect(deps.waitForRecoveredSandboxGateway).toHaveBeenCalledWith("alpha", {
+        quiet: false,
+      });
+      expect(deps.ensureSandboxPortForward).toHaveBeenCalledWith("alpha");
+    } finally {
+      restore();
+    }
+  });
+
+  it("reports root exec unavailability", () => {
+    const restore = silenceConsole();
+    try {
+      const deps = baseDeps({ executeSandboxExecCommand: vi.fn(() => null) });
+      const result = restartSandboxGateway("alpha", { quiet: true, deps });
+
+      expect(result).toMatchObject({
+        ok: false,
+        failureLayer: "root exec unavailable",
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("reports Hermes boundary refusals without hiding diagnostics in quiet mode", () => {
+    const restore = silenceConsole();
+    try {
+      const deps = baseDeps({
+        getSessionAgent: () => ({ name: "hermes", displayName: "Hermes Agent" }),
+        getSandbox: () => ({ name: "alpha", agent: "hermes" }),
+        buildHermesGatewayRestartScript: vi.fn(() => "restart hermes"),
+        executeSandboxExecCommand: vi.fn(() => ({
+          status: 1,
+          stdout: "SECRET_BOUNDARY_REFUSED",
+          stderr: "[SECURITY] TELEGRAM_BOT_TOKEN (line 2)",
+        })),
+      });
+      const result = restartSandboxGateway("alpha", { quiet: true, deps });
+
+      expect(result).toMatchObject({
+        ok: false,
+        failureLayer: "secret-boundary refusal",
+      });
+      expect(console.error).toHaveBeenCalledWith(
+        "  Failure layer: secret-boundary refusal - gateway restart failed for 'alpha'.",
+      );
+    } finally {
+      restore();
+    }
+  });
+
+  it("reports launch failure markers", () => {
+    const restore = silenceConsole();
+    try {
+      const deps = baseDeps({
+        executeSandboxExecCommand: vi.fn(() => ({
+          status: 1,
+          stdout: "GATEWAY_FAILED",
+          stderr: "tail output",
+        })),
+      });
+      const result = restartSandboxGateway("alpha", { deps });
+
+      expect(result).toMatchObject({ ok: false, failureLayer: "launch failure" });
+    } finally {
+      restore();
+    }
+  });
+
+  it("reports a health timeout after the restart process marker", () => {
+    const restore = silenceConsole();
+    try {
+      const deps = baseDeps({ waitForRecoveredSandboxGateway: vi.fn(() => false) });
+      const result = restartSandboxGateway("alpha", { deps });
+
+      expect(result).toMatchObject({ ok: false, failureLayer: "health timeout" });
+      expect(deps.printGatewayWedgeDiagnostics).toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
+
+  it("refuses terminal agents with an unsupported-agent layer", () => {
+    const restore = silenceConsole();
+    try {
+      const deps = baseDeps({
+        getSessionAgent: () => ({
+          name: "terminal-agent",
+          displayName: "Terminal Agent",
+          runtime: { kind: "terminal" },
+        }),
+        getSandbox: () => ({ name: "alpha", agent: "terminal-agent" }),
+      });
+      const result = restartSandboxGateway("alpha", { deps });
+
+      expect(result).toMatchObject({ ok: false, failureLayer: "unsupported agent" });
+      expect(deps.executeSandboxExecCommand).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
+
+  it("refuses custom agents when the explicit runtime definition is unavailable", () => {
+    const restore = silenceConsole();
+    try {
+      const deps = baseDeps({
+        getSessionAgent: () => null,
+        getSandbox: () => ({ name: "alpha", agent: "custom-agent" }),
+      });
+      const result = restartSandboxGateway("alpha", { deps });
+
+      expect(result).toMatchObject({ ok: false, failureLayer: "unsupported agent" });
+      expect(result.detail).toContain("custom-agent agent definition could not be loaded");
+      expect(deps.buildOpenClawGatewayRestartScript).not.toHaveBeenCalled();
+      expect(deps.executeSandboxExecCommand).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
   });
 });

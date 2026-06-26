@@ -168,9 +168,19 @@ If `$$nemoclaw <name> status` reports the sandbox is alive but the Hermes gatewa
 $$nemoclaw <sandbox-name> recover
 ```
 
-The command restarts the in-sandbox gateway and re-establishes the dashboard port-forward in one step.
+The command repairs a stopped in-sandbox gateway and re-establishes the dashboard port-forward in one step.
 It is idempotent and safe to script.
+If the gateway is already healthy, `recover` exits after the probe and does not restart it.
 Refer to [`$$nemoclaw <name> recover`](../reference/commands#$$nemoclaw-name-recover) for details.
+
+Use `gateway restart` when you intentionally need a supported OpenClaw or Hermes gateway to reload runtime configuration or plugins.
+
+```bash
+$$nemoclaw <sandbox-name> gateway restart
+```
+
+The restart command force-restarts the gateway through the host-mediated path, waits for health, and checks or recovers the dashboard and agent forwards.
+Refer to [`$$nemoclaw <name> gateway restart`](../reference/commands#$$nemoclaw-name-gateway-restart) for details.
 
 ### Reset a Stored Credential
 

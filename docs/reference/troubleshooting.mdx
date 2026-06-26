@@ -403,11 +403,11 @@ NemoClaw prevents and self-heals this:
 - The generated sandbox config pins `gateway.reload.mode` to `hot`, so configuration changes never make the gateway restart itself out from under the sandbox supervisor.
 - A serving watchdog inside the sandbox kills a gateway that stops listening after it has served, and the supervisor relaunches it (look for `[gateway-watchdog]` lines in `$$nemoclaw <name> logs`).
 
-Because of the `hot` pin, restart-class configuration changes made inside the sandbox — for example `openclaw plugins install` — log `config reload requires gateway restart; hot mode ignoring` and do not take effect until the gateway restarts.
+Because of the `hot` pin, restart-class configuration changes made inside the sandbox, for example `openclaw plugins install`, log `config reload requires gateway restart; hot mode ignoring` and do not take effect until the gateway restarts.
 Apply them with a supervised restart:
 
 ```bash
-$$nemoclaw <name> recover
+$$nemoclaw <name> gateway restart
 ```
 
 or rebuild the sandbox for changes that affect provisioning:

@@ -510,12 +510,13 @@ nemohermes my-assistant shields down --timeout 5m --reason "maintenance"
 
 ### `nemohermes <name> recover`
 
-Restart the in-sandbox gateway and re-establish the host-side dashboard port-forward without opening an SSH session.
+Repair a stopped in-sandbox gateway and re-establish host-side forwards without opening an SSH session.
 Use this after a sandbox pod restart, a sandbox crash, or whenever `nemohermes <name> status` reports the gateway is not running but the sandbox is alive.
 
 `recover` runs the same recovery the `connect` command performs as a side effect, but without dropping into a shell, so it is safe to call from scripts and automation.
 It is idempotent.
 If the gateway is already running, the command exits zero with a probe message and makes no changes.
+Use [`nemohermes <name> gateway restart`](#nemohermes-name-gateway-restart) when you deliberately need a running gateway to reload runtime configuration or plugins.
 
 ```bash
 nemohermes my-assistant recover
@@ -525,6 +526,27 @@ nemohermes my-assistant recover
 If the file contains raw secret-shaped values (for example a pasted Telegram, Discord, or Slack bot token in place of the expected `openshell:resolve:env:<name>` placeholder), the command stops the running gateway, exits non-zero, and prints the offending key.
 Replace each flagged value with the `openshell:resolve:env:<name>` placeholder and re-run.
 Older Hermes sandbox images that predate the standalone validator are detected and left untouched: `recover` prints a `[boundary]` warning naming the sandbox and noting that `/sandbox/.hermes/.env` was not re-evaluated, then proceeds with the rest of the recovery path rather than blocking the gateway. Re-image the sandbox to a current Hermes build to enable the per-run boundary re-evaluation described above.
+
+### `nemohermes <name> gateway restart`
+
+Force-restart the supported in-sandbox gateway process through the host-mediated root exec path.
+Use this after runtime configuration or plugin changes that the agent reads only at gateway startup, such as Hermes Langfuse plugin settings.
+Unlike `recover`, this command restarts a healthy gateway instead of exiting after the health probe.
+
+```bash
+nemohermes my-assistant gateway restart [--quiet|-q]
+```
+
+On success, the command reports that the gateway was restarted, health passed, and forwards were checked or recovered.
+It also checks the dashboard forward, messaging forward, and manifest-declared agent forwards.
+`--quiet` suppresses progress lines but still prints refusal diagnostics.
+
+For Hermes, the restart runs as root through `openshell sandbox exec`, validates `/sandbox/.hermes/.env` against the secret-boundary guard, validates the runtime environment, refreshes mutable config hashes only after those checks pass, and relaunches the process as the `gateway` user with `HERMES_HOME=/sandbox/.hermes`.
+Locked or immutable Hermes config must match the existing strict hash.
+If locked config has drifted, the command refuses instead of blessing the change.
+
+The command can fail at these layers: unsupported agent, root exec unavailable, secret-boundary refusal, unsafe config path, hash mismatch while locked, launch failure, or health timeout.
+Terminal agents do not have a gateway runtime and fail as unsupported.
 
 ### `nemohermes <name> status`
 
@@ -1017,7 +1039,7 @@ For new installs, the agent session index is refreshed so the agent discovers th
 Remove an installed skill from a running sandbox by skill name.
 The command validates the skill name, removes the sandbox upload directory, and refreshes the agent session index so the remaining skills are rediscovered on the next session.
 
-For Hermes, restart the Hermes gateway if prompted so the removal takes effect.
+For Hermes, run `nemohermes <name> gateway restart` if prompted so the removal takes effect.
 
 ```bash
 nemohermes my-assistant skill remove my-skill
