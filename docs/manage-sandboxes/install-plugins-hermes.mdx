@@ -38,7 +38,8 @@ nemohermes <name> gateway restart
 ```
 
 The restart command keeps the gateway process under the `gateway` user, validates `/sandbox/.hermes/.env` before relaunch, and checks or recovers the Hermes API, dashboard, and declared forwards after health passes.
-Use `recover` only when the gateway or forwards are missing and you want the idempotent repair path.
+`recover` re-evaluates the Hermes secret boundary on every run, including healthy gateways, and repairs stopped gateways or forwards.
+Use `gateway restart` when you need a forced runtime reload.
 
 ## Prepare a Build Directory
 

@@ -119,25 +119,37 @@ describe("buildHermesGatewayRestartScript (#2426)", () => {
     expect(launchIdx).toBeGreaterThan(stopIdx);
   });
 
-  it("refreshes strict and compatibility hashes only for mutable config state", () => {
+  it("verifies locked hashes and refreshes strict and compatibility hashes only for mutable config state", () => {
     const script = buildHermesGatewayRestartScript(hermesAgent, 8642);
 
     expect(script).toContain("if _nemoclaw_hermes_root_locked; then");
+    expect(script).toContain(
+      "_nemoclaw_hermes_hash_locked || { echo HERMES_UNSAFE_CONFIG_PATH; exit 1; };",
+    );
     expect(script).toContain('sha256sum -c "$_HERMES_HASH_FILE" --status');
     expect(script).toContain("HERMES_LOCKED_HASH_MISMATCH");
     expect(script).toContain("--mode strict");
     expect(script).toContain("--mode compat");
 
     const lockedIdx = script.indexOf("if _nemoclaw_hermes_root_locked; then");
+    const hashLockedIdx = script.indexOf("_nemoclaw_hermes_hash_locked", lockedIdx);
     const strictVerifyIdx = script.indexOf('sha256sum -c "$_HERMES_HASH_FILE" --status');
     const elseIdx = script.indexOf("else", strictVerifyIdx);
     const strictRefreshIdx = script.indexOf("--mode strict", elseIdx);
     const compatRefreshIdx = script.indexOf("--mode compat", elseIdx);
+    const fiIdx = script.indexOf("fi;", compatRefreshIdx);
+    const lockedBranch = script.slice(lockedIdx, elseIdx);
+    const mutableBranch = script.slice(elseIdx, fiIdx);
 
     expect(lockedIdx).toBeGreaterThanOrEqual(0);
+    expect(hashLockedIdx).toBeGreaterThan(lockedIdx);
+    expect(hashLockedIdx).toBeLessThan(strictVerifyIdx);
     expect(strictVerifyIdx).toBeGreaterThan(lockedIdx);
     expect(strictRefreshIdx).toBeGreaterThan(elseIdx);
     expect(compatRefreshIdx).toBeGreaterThan(strictRefreshIdx);
+    expect(lockedBranch).not.toContain("refresh-hashes");
+    expect(mutableBranch).toContain("refresh-hashes --hermes-dir");
+    expect(mutableBranch).not.toContain('sha256sum -c "$_HERMES_HASH_FILE" --status');
   });
 
   it("preserves or recreates the Hermes API socat bridge before health validation", () => {

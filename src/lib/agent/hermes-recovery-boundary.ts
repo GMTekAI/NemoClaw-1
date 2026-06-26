@@ -69,15 +69,17 @@ function buildHermesValidatorMissingLog(): string {
   return `printf '%s\\n' ${shellQuote(message)} | tee -a ${shellQuote(HERMES_BOUNDARY_RECOVERY_LOG)} >&2;`;
 }
 
-// REMOVAL CONDITION (#2426 follow-up): the warn-and-skip path above is
-// fail-open by design so that a newer NemoClaw CLI talking to an older Hermes
-// sandbox image still recovers. Target the cutoff for the first release whose
-// minimum supported `ghcr.io/nvidia/nemoclaw/hermes-sandbox-base` image is
-// rebuilt from this PR or newer, then flip the missing-file branch to
-// fail-closed (kill + `echo ${SECRET_BOUNDARY_VALIDATOR_MISSING_MARKER}; exit
-// 1;`) and update `runtime-hermes-secret-boundary-behavioural.test.ts` to
-// assert the refusal. Track the cutoff against the base-image version pinned
-// in `agents/hermes/Dockerfile` during the #2426 release checklist.
+// REMOVAL CONDITION (tracked by GitHub issue #2426): the warn-and-skip path
+// above is fail-open by design so that a newer NemoClaw CLI talking to an older
+// Hermes sandbox image still recovers. Root-mediated Hermes gateway recovery and
+// restart fail closed separately if the validator is missing. Remove this
+// legacy non-root compatibility branch once NemoClaw drops Hermes images older
+// than the first #2426 final image layered on
+// `ghcr.io/nvidia/nemoclaw/hermes-sandbox-base@sha256:60333c1982ad855d55887b4488e867eb343f3930a30aa8e0268e5397fc6f2926`
+// or a newer base image. Then flip this missing-file branch to fail-closed
+// (kill + `echo ${SECRET_BOUNDARY_VALIDATOR_MISSING_MARKER}; exit 1;`) and
+// update `runtime-hermes-secret-boundary-behavioural.test.ts` to assert the
+// refusal.
 
 /**
  * Build the shell snippet that re-runs the documented Hermes secret-boundary
