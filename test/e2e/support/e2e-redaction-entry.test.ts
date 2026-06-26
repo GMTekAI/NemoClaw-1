@@ -15,10 +15,16 @@
  * focuses on the entry-point behaviour and SecretStore delegation.
  */
 
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
 import { describe, expect, it } from "vitest";
 
-import { SecretStore } from "../fixtures/secrets.ts";
+import { ArtifactSink } from "../fixtures/artifacts.ts";
 import { redactString } from "../fixtures/redaction.ts";
+import { SecretStore } from "../fixtures/secrets.ts";
+import { ShellProbe, trustedShellCommand } from "../fixtures/shell-probe.ts";
 
 describe("fixture redaction entry point", () => {
   it("redacts explicit values with [REDACTED] and canonical shapes with <REDACTED>", () => {
@@ -85,5 +91,49 @@ describe("fixture redaction entry point", () => {
     expect(out).not.toContain(envSecret);
     expect(out).not.toContain(extraSecret);
     expect(out).not.toContain(canonical);
+  });
+
+  it("redacts fake hosted inference keys from uploaded shell-probe artifacts", async () => {
+    const fakeHostedKey = "fake-hosted-inference-key-for-artifact-scan";
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "nemoclaw-e2e-artifact-redaction-"));
+    const artifacts = new ArtifactSink(path.join(rootDir, "e2e-artifacts/live/redaction-smoke"));
+    await artifacts.ensureRoot();
+    const secrets = new SecretStore(
+      { NVIDIA_INFERENCE_API_KEY: fakeHostedKey },
+      (note?: string): never => {
+        throw new Error(note ?? "skipped");
+      },
+    );
+    const probe = new ShellProbe({
+      artifacts,
+      redact: (text, extra) => secrets.redact(text, extra),
+      signal: new AbortController().signal,
+    });
+
+    const result = await probe.run(
+      trustedShellCommand({
+        command: "bash",
+        args: [
+          "-lc",
+          "printf 'stdout:%s\\n' \"$NVIDIA_INFERENCE_API_KEY\"; printf 'stderr:%s\\n' \"$NVIDIA_INFERENCE_API_KEY\" >&2",
+        ],
+        reason: "exercise hosted inference secret redaction in uploaded shell-probe artifacts",
+      }),
+      {
+        artifactName: "hosted-inference-secret-smoke",
+        env: { NVIDIA_INFERENCE_API_KEY: fakeHostedKey },
+        redactionValues: [fakeHostedKey],
+      },
+    );
+    const uploadedTexts = await Promise.all(
+      Object.values(result.artifacts).map((artifactPath) => fs.readFile(artifactPath, "utf8")),
+    );
+
+    expect(result.stdout).toContain("[REDACTED]");
+    expect(result.stderr).toContain("[REDACTED]");
+    expect(uploadedTexts.join("\n")).not.toContain(fakeHostedKey);
+    expect(uploadedTexts.join("\n")).toContain("[REDACTED]");
+
+    await fs.rm(rootDir, { recursive: true, force: true });
   });
 });
