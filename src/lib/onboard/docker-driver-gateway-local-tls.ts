@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { spawnSync, type SpawnSyncOptions } from "node:child_process";
+import { createPrivateKey, createPublicKey, X509Certificate, type KeyObject } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -43,13 +44,28 @@ export function getDockerDriverGatewayLocalTlsBundle(
 
 export function dockerDriverGatewayLocalTlsBundleIsComplete(stateDir: string): boolean {
   const bundle = getDockerDriverGatewayLocalTlsBundle(stateDir);
-  return [
+  const expectedFiles = [
     bundle.caPath,
     bundle.serverCertPath,
     bundle.serverKeyPath,
     bundle.clientCertPath,
     bundle.clientKeyPath,
-  ].every((candidate) => fs.existsSync(candidate));
+  ];
+  if (!expectedFiles.every((candidate) => fs.existsSync(candidate))) return false;
+
+  const ca = readCertificate(bundle.caPath);
+  const serverCert = readCertificate(bundle.serverCertPath);
+  const clientCert = readCertificate(bundle.clientCertPath);
+  const serverKey = readPrivateKey(bundle.serverKeyPath);
+  const clientKey = readPrivateKey(bundle.clientKeyPath);
+  if (!ca || !serverCert || !clientCert || !serverKey || !clientKey) return false;
+
+  return (
+    certificateMatchesPrivateKey(serverCert, serverKey) &&
+    certificateMatchesPrivateKey(clientCert, clientKey) &&
+    certificateVerifiesAgainstCa(serverCert, ca) &&
+    certificateVerifiesAgainstCa(clientCert, ca)
+  );
 }
 
 export function buildDockerDriverGatewayLocalTlsEnv(stateDir: string): Record<string, string> {
@@ -64,6 +80,50 @@ function text(value: Buffer | string | null | undefined): string {
   return "";
 }
 
+function readCertificate(filePath: string): X509Certificate | null {
+  try {
+    return new X509Certificate(fs.readFileSync(filePath));
+  } catch {
+    return null;
+  }
+}
+
+function readPrivateKey(filePath: string): KeyObject | null {
+  try {
+    return createPrivateKey(fs.readFileSync(filePath));
+  } catch {
+    return null;
+  }
+}
+
+function certificateMatchesPrivateKey(
+  certificate: X509Certificate,
+  privateKey: KeyObject,
+): boolean {
+  try {
+    const certPublicKey = certificate.publicKey.export({ format: "der", type: "spki" });
+    const keyPublicKey = createPublicKey(privateKey).export({ format: "der", type: "spki" });
+    return Buffer.from(certPublicKey).equals(Buffer.from(keyPublicKey));
+  } catch {
+    return false;
+  }
+}
+
+function certificateVerifiesAgainstCa(certificate: X509Certificate, ca: X509Certificate): boolean {
+  try {
+    return certificate.verify(ca.publicKey);
+  } catch {
+    return false;
+  }
+}
+
+function normalizeDockerDriverGatewayLocalTlsBundlePermissions(
+  bundle: DockerDriverGatewayLocalTlsBundle,
+): void {
+  fs.chmodSync(bundle.serverKeyPath, 0o600);
+  fs.chmodSync(bundle.clientKeyPath, 0o600);
+}
+
 export function ensureDockerDriverGatewayLocalTlsBundle({
   env = process.env,
   gatewayBin,
@@ -73,7 +133,10 @@ export function ensureDockerDriverGatewayLocalTlsBundle({
   const bundle = getDockerDriverGatewayLocalTlsBundle(stateDir);
   fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   fs.chmodSync(stateDir, 0o700);
-  if (dockerDriverGatewayLocalTlsBundleIsComplete(stateDir)) return bundle;
+  if (dockerDriverGatewayLocalTlsBundleIsComplete(stateDir)) {
+    normalizeDockerDriverGatewayLocalTlsBundlePermissions(bundle);
+    return bundle;
+  }
 
   const result = spawnSyncImpl(
     gatewayBin,
@@ -102,9 +165,10 @@ export function ensureDockerDriverGatewayLocalTlsBundle({
   }
   if (!dockerDriverGatewayLocalTlsBundleIsComplete(stateDir)) {
     throw new Error(
-      `OpenShell gateway certificate generation did not create a complete mTLS bundle in ${bundle.localTlsDir}`,
+      `OpenShell gateway certificate generation did not create a complete, valid mTLS bundle in ${bundle.localTlsDir}`,
     );
   }
+  normalizeDockerDriverGatewayLocalTlsBundlePermissions(bundle);
 
   return bundle;
 }

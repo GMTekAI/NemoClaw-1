@@ -2159,7 +2159,6 @@ async function startDockerDriverGateway({
         gatewayBin,
         gatewayEnv,
         stateDir,
-        // biome-ignore format: keep src/lib/onboard.ts net-neutral for growth guardrail.
         sandboxBin: resolveOpenShellSandboxBinary(),
         compatContainerName: gatewayBinding.resolveGatewayCompatContainerName(GATEWAY_PORT),
         ensureLocalTlsBundle: true,
