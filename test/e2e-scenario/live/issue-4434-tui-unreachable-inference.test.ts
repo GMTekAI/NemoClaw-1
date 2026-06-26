@@ -48,11 +48,18 @@ const CONNECTED_SPINNER_RE =
 const STATUS_LINE_RE =
   /(connecting|gateway connected|connected|sending|running|flibbertigibbeting).*\|\s*(connected|error)/i;
 const ERROR_STATUS_RE = /\|\s*error\b/i;
+const ISSUE_4434_ACCEPTANCE_FIELD_PATTERNS = {
+  httpStatusOrCause: /\b(?:HTTP\s+\d{3}|status(?:\s+code)?\s*[:=]\s*\d{3}|cause\s*[:=]\s*\S+)/i,
+  reportingLayer:
+    /\b(?:gateway proxy|gateway layer|reported by gateway|upstream API|from upstream)\b/i,
+  recoveryHint: /\b(?:recovery hint|hint\s*[:=]|check (?:egress|network|provider)|retry)\b/i,
+} as const;
 
 const runIssue4434LiveTest =
   shouldRunLiveE2EScenarios() && process.env.NEMOCLAW_ISSUE_4434_LIVE === "1" ? test : test.skip;
 
 type CommandResultText = { stdout: string; stderr: string };
+type Issue4434AcceptanceFields = Record<keyof typeof ISSUE_4434_ACCEPTANCE_FIELD_PATTERNS, boolean>;
 
 function resultText(result: CommandResultText): string {
   return [result.stdout, result.stderr].filter(Boolean).join("\n");
@@ -78,6 +85,19 @@ function stripTerminalControl(value: string): string {
     .replace(/\r/g, "\n");
 }
 
+function classifyIssue4434AcceptanceFields(plain: string): Issue4434AcceptanceFields {
+  return Object.fromEntries(
+    Object.entries(ISSUE_4434_ACCEPTANCE_FIELD_PATTERNS).map(([name, pattern]) => [
+      name,
+      pattern.test(plain),
+    ]),
+  ) as Issue4434AcceptanceFields;
+}
+
+function hasFullIssue4434Diagnostics(fields: Issue4434AcceptanceFields): boolean {
+  return fields.httpStatusOrCause && fields.reportingLayer && fields.recoveryHint;
+}
+
 function analyzeIssue4434TuiCapture(capture: string) {
   const plain = stripTerminalControl(capture);
   const statusLines = plain
@@ -93,6 +113,7 @@ function analyzeIssue4434TuiCapture(capture: string) {
     lastStatusLine,
     finalStatusIsError: ERROR_STATUS_RE.test(lastStatusLine),
     finalStatusIsConnectedSpinner: CONNECTED_SPINNER_RE.test(lastStatusLine),
+    diagnosticFields: classifyIssue4434AcceptanceFields(plain),
   };
 }
 
@@ -299,16 +320,22 @@ runIssue4434LiveTest(
       lastStatusLine: analysis.lastStatusLine,
       finalStatusIsError: analysis.finalStatusIsError,
       finalStatusIsConnectedSpinner: analysis.finalStatusIsConnectedSpinner,
+      diagnosticFields: analysis.diagnosticFields,
     });
 
     const failureContext = [
       `expect exit=${tui.exitCode}`,
       `capture=${captureFile}`,
       `lastStatusLine=${analysis.lastStatusLine}`,
+      `diagnosticFields=${JSON.stringify(analysis.diagnosticFields)}`,
       "plain capture:",
       analysis.plain,
     ].join("\n");
 
+    expect(
+      hasFullIssue4434Diagnostics(analysis.diagnosticFields),
+      "OpenClaw output now includes HTTP/cause, gateway/upstream layer, and recovery hint; tighten both live guards and remove the partial-acceptance wording from docs/security/openclaw-2026.6.9-dependency-review.md",
+    ).toBe(false);
     expect(analysis.visibleError, failureContext).toBe(true);
     expect(tui.exitCode, failureContext).toBe(0);
     expect(analysis.issue4434Signature, failureContext).toBe(false);

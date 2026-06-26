@@ -125,14 +125,21 @@ RUN chmod 755 /usr/local/lib/nemoclaw/patch-openclaw-tool-catalog.js \
 # hadolint ignore=DL3059,DL4006,DL3016
 RUN set -eu; \
     CODEX_ACP_SPEC='@zed-industries/codex-acp@0.11.1'; \
+    CODEX_ACP_TARBALL='https://registry.npmjs.org/@zed-industries/codex-acp/-/codex-acp-0.11.1.tgz'; \
     REGISTRY_CODEX_ACP_INTEGRITY=$(npm view "${CODEX_ACP_SPEC}" dist.integrity); \
+    REGISTRY_CODEX_ACP_TARBALL=$(npm view "${CODEX_ACP_SPEC}" dist.tarball); \
     if [ "$REGISTRY_CODEX_ACP_INTEGRITY" != "$CODEX_ACP_0_11_1_INTEGRITY" ]; then \
         echo "ERROR: ${CODEX_ACP_SPEC} npm integrity mismatch" >&2; \
         echo "Expected: ${CODEX_ACP_0_11_1_INTEGRITY}" >&2; \
         echo "Actual:   ${REGISTRY_CODEX_ACP_INTEGRITY}" >&2; exit 1; \
     fi; \
+    if [ "$REGISTRY_CODEX_ACP_TARBALL" != "$CODEX_ACP_TARBALL" ]; then \
+        echo "ERROR: ${CODEX_ACP_SPEC} npm tarball URL mismatch" >&2; \
+        echo "Expected: ${CODEX_ACP_TARBALL}" >&2; \
+        echo "Actual:   ${REGISTRY_CODEX_ACP_TARBALL}" >&2; exit 1; \
+    fi; \
     npm install -g --no-audit --no-fund --no-progress \
-        "${CODEX_ACP_SPEC}"; \
+        "${CODEX_ACP_TARBALL}"; \
     command -v codex-acp >/dev/null
 
 # Upgrade OpenClaw if the base image is stale.
@@ -708,7 +715,7 @@ ENV NEMOCLAW_MODEL=${NEMOCLAW_MODEL} \
 # forwards explicit runtime env, so nemoclaw-start reads this generic artifact
 # when the env plan is absent.
 # hadolint ignore=DL3059
-RUN node --experimental-strip-types /src/lib/messaging/applier/build/messaging-build-applier.mts --agent openclaw --phase runtime-setup
+RUN OPENCLAW_VERSION="${OPENCLAW_VERSION}" node --experimental-strip-types /src/lib/messaging/applier/build/messaging-build-applier.mts --agent openclaw --phase runtime-setup
 
 WORKDIR /sandbox
 USER sandbox
@@ -777,7 +784,7 @@ RUN set -eu; \
     fi
 
 # hadolint ignore=DL3059,DL4006
-RUN node --experimental-strip-types /src/lib/messaging/applier/build/messaging-build-applier.mts --agent openclaw --phase agent-install
+RUN OPENCLAW_VERSION="${OPENCLAW_VERSION}" node --experimental-strip-types /src/lib/messaging/applier/build/messaging-build-applier.mts --agent openclaw --phase agent-install
 
 # Lock down npm for the next RUN: the local OpenClaw plugin install must
 # resolve from /opt/nemoclaw and the staged plugin-runtime-deps tree without
@@ -814,7 +821,7 @@ RUN openclaw plugins install /opt/nemoclaw \
 
 # Apply messaging render and post-agent-install build-file hooks after agent/plugin installation.
 # hadolint ignore=DL3059,DL4006
-RUN node --experimental-strip-types /src/lib/messaging/applier/build/messaging-build-applier.mts --agent openclaw --phase post-agent-install
+RUN OPENCLAW_VERSION="${OPENCLAW_VERSION}" node --experimental-strip-types /src/lib/messaging/applier/build/messaging-build-applier.mts --agent openclaw --phase post-agent-install
 
 # Release the offline lock so the runtime sandbox can install MCP servers,
 # skills, and ad-hoc packages via the OpenShell L7 proxy.

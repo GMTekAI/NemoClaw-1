@@ -11,6 +11,14 @@ const DEPENDENCY_REVIEW = path.join(
   REPO_ROOT,
   "docs/security/openclaw-2026.6.9-dependency-review.md",
 );
+const LIVE_BASH_GUARD = path.join(
+  REPO_ROOT,
+  "test/e2e/test-issue-4434-tui-unreachable-inference.sh",
+);
+const LIVE_VITEST_GUARD = path.join(
+  REPO_ROOT,
+  "test/e2e-scenario/live/issue-4434-tui-unreachable-inference.test.ts",
+);
 
 const CURRENT_REVIEWED_OPENCLAW_VERSION = "2026.6.9";
 const REVIEWED_OPENCLAW_2026_6_9_ISSUE_4434_TUI_ERROR_OUTPUT = [
@@ -79,9 +87,17 @@ describe("issue #4434 partial OpenClaw TUI error guard", () => {
 
   it("keeps the dependency review tied to the detector and tightening condition", () => {
     const review = fs.readFileSync(DEPENDENCY_REVIEW, "utf-8");
+    const bashGuard = fs.readFileSync(LIVE_BASH_GUARD, "utf-8");
+    const vitestGuard = fs.readFileSync(LIVE_VITEST_GUARD, "utf-8");
     expect(review).toContain("test/issue-4434-error-fields.test.ts");
     expect(review).toContain(
       "Tighten both `test/e2e/test-issue-4434-tui-unreachable-inference.sh`",
     );
+    for (const guard of [bashGuard, vitestGuard]) {
+      expect(guard).toContain("http");
+      expect(guard).toContain("reporting");
+      expect(guard).toContain("recovery");
+      expect(guard).toContain("tighten both live guards");
+    }
   });
 });

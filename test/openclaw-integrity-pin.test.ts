@@ -29,6 +29,8 @@ const PINNED_OPENCLAW_VERSION = "2026.6.9";
 const PINNED_OPENCLAW_INTEGRITY =
   "sha512-y0PGUdE87S8QtQXABPDL0CjNKhH3q/R1h9/WiRQkhVCGSBVhs63/M1iZn2DYVyJCAbDyMz3KNyAE0WzSQIWCRg==";
 const PINNED_CODEX_ACP_VERSION = "0.11.1";
+const PINNED_CODEX_ACP_TARBALL =
+  "https://registry.npmjs.org/@zed-industries/codex-acp/-/codex-acp-0.11.1.tgz";
 const PINNED_CODEX_ACP_INTEGRITY =
   "sha512-My2VSlBtvJipJhImHjFDej2ut/p00QqOISRnZgLgLrSIzjgvdcQvAhaZviWj7XPhk4UIdIb0OoA+Lrls824uiQ==";
 const PINNED_OPENCLAW_DIAGNOSTICS_OTEL_INTEGRITY =
@@ -80,6 +82,7 @@ function runInstallBlock(
     registryIntegrity?: string;
     codexAcpCommittedIntegrity?: string;
     codexAcpRegistryIntegrity?: string;
+    codexAcpRegistryTarball?: string;
     allowLegacyFixture?: boolean;
   } = {},
 ) {
@@ -89,6 +92,7 @@ function runInstallBlock(
     registryIntegrity = committedIntegrity,
     codexAcpCommittedIntegrity = PINNED_CODEX_ACP_INTEGRITY,
     codexAcpRegistryIntegrity = codexAcpCommittedIntegrity,
+    codexAcpRegistryTarball = PINNED_CODEX_ACP_TARBALL,
     allowLegacyFixture = false,
   } = options;
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-openclaw-integrity-"));
@@ -111,6 +115,7 @@ function runInstallBlock(
     '  printf "npm %s\\n" "$*" >> "$call_log";',
     '  if [ "${1:-}" = "view" ] && [ "${3:-}" = "version" ]; then printf "%s\\n" "$OPENCLAW_VERSION"; return 0; fi',
     `  if [ "\${1:-}" = "view" ] && [ "\${2:-}" = "@zed-industries/codex-acp@${PINNED_CODEX_ACP_VERSION}" ] && [ "\${3:-}" = "dist.integrity" ]; then printf "%s\\n" ${JSON.stringify(codexAcpRegistryIntegrity)}; return 0; fi`,
+    `  if [ "\${1:-}" = "view" ] && [ "\${2:-}" = "@zed-industries/codex-acp@${PINNED_CODEX_ACP_VERSION}" ] && [ "\${3:-}" = "dist.tarball" ]; then printf "%s\\n" ${JSON.stringify(codexAcpRegistryTarball)}; return 0; fi`,
     `  if [ "\${1:-}" = "view" ] && [ "\${3:-}" = "dist.integrity" ]; then printf "%s\\n" ${JSON.stringify(registryIntegrity)}; return 0; fi`,
     "}",
     "pip3() { return 0; }",
@@ -156,7 +161,7 @@ function runOptionalOpenClawPluginBlock(
   const command = extractRunBlock(
     DOCKERFILE,
     "# Install non-messaging OpenClaw plugins that need to match the runtime.",
-    "RUN node --experimental-strip-types /src/lib/messaging/applier/build/messaging-build-applier.mts",
+    'RUN OPENCLAW_VERSION="${OPENCLAW_VERSION}" node --experimental-strip-types /src/lib/messaging/applier/build/messaging-build-applier.mts',
   );
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-openclaw-plugin-integrity-"));
   const log = path.join(tmp, "calls.log");
@@ -196,6 +201,7 @@ describe("OpenClaw npm integrity pins", () => {
     expect(reviewNote).toContain(`openclaw@${PINNED_OPENCLAW_VERSION}`);
     expect(reviewNote).toContain(PINNED_OPENCLAW_INTEGRITY);
     expect(reviewNote).toContain(`@zed-industries/codex-acp@${PINNED_CODEX_ACP_VERSION}`);
+    expect(reviewNote).toContain(PINNED_CODEX_ACP_TARBALL);
     expect(reviewNote).toContain(PINNED_CODEX_ACP_INTEGRITY);
     expect(reviewNote).toContain("@openclaw/diagnostics-otel@2026.6.9");
     expect(reviewNote).toContain(PINNED_OPENCLAW_DIAGNOSTICS_OTEL_INTEGRITY);
@@ -216,7 +222,9 @@ describe("OpenClaw npm integrity pins", () => {
     expect(reviewNote).toContain(
       "Accepted residual risk: a compromised or inconsistent registry mirror",
     );
-    expect(reviewNote).toContain("Do not treat these checks as proving lockfile-enforced");
+    expect(reviewNote).toContain(
+      "Do not treat the OpenClaw/plugin checks as proving lockfile-enforced",
+    );
     expect(reviewNote).toContain("add a split-registry fake test");
     expect(reviewNote).toContain("OpenClaw Compiled-Dist Patch Runtime Boundary");
     expect(reviewNote).toContain(
@@ -403,11 +411,14 @@ describe("OpenClaw npm integrity pins", () => {
     expect(codexAcp.calls).toContain(
       `npm view @zed-industries/codex-acp@${PINNED_CODEX_ACP_VERSION} dist.integrity`,
     );
+    expect(codexAcp.calls).toContain(
+      `npm view @zed-industries/codex-acp@${PINNED_CODEX_ACP_VERSION} dist.tarball`,
+    );
     expect(production.calls).toContain(
       `npm install -g --no-audit --no-fund --no-progress openclaw@${PINNED_OPENCLAW_VERSION}`,
     );
     expect(codexAcp.calls).toContain(
-      `npm install -g --no-audit --no-fund --no-progress @zed-industries/codex-acp@${PINNED_CODEX_ACP_VERSION}`,
+      `npm install -g --no-audit --no-fund --no-progress ${PINNED_CODEX_ACP_TARBALL}`,
     );
     expect(base.calls).toContain(`npm view openclaw@${PINNED_OPENCLAW_VERSION} version`);
     expect(base.calls).toContain(`npm view openclaw@${PINNED_OPENCLAW_VERSION} dist.integrity`);
@@ -574,7 +585,41 @@ describe("OpenClaw npm integrity pins", () => {
       `npm view @zed-industries/codex-acp@${PINNED_CODEX_ACP_VERSION} dist.integrity`,
     );
     expect(calls).not.toContain(
-      `npm install -g --no-audit --no-fund --no-progress @zed-industries/codex-acp@${PINNED_CODEX_ACP_VERSION}`,
+      `npm install -g --no-audit --no-fund --no-progress ${PINNED_CODEX_ACP_TARBALL}`,
+    );
+  });
+
+  it("fails closed before installing codex-acp when its registry tarball URL drifts", () => {
+    const { result, calls } = runInstallBlock(
+      extractRunBlock(
+        DOCKERFILE,
+        "# Pre-install the codex-acp package",
+        "# Upgrade OpenClaw if the base image is stale.",
+      ),
+      {
+        openclawVersion: PINNED_OPENCLAW_VERSION,
+        committedIntegrity: PINNED_OPENCLAW_INTEGRITY,
+        registryIntegrity: PINNED_OPENCLAW_INTEGRITY,
+        codexAcpCommittedIntegrity: PINNED_CODEX_ACP_INTEGRITY,
+        codexAcpRegistryIntegrity: PINNED_CODEX_ACP_INTEGRITY,
+        codexAcpRegistryTarball:
+          "https://registry.npmjs.org/@zed-industries/codex-acp/-/codex-acp-0.11.2.tgz",
+      },
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toContain(
+      `@zed-industries/codex-acp@${PINNED_CODEX_ACP_VERSION} npm tarball URL mismatch`,
+    );
+    expect(`${result.stdout}${result.stderr}`).toContain(`Expected: ${PINNED_CODEX_ACP_TARBALL}`);
+    expect(`${result.stdout}${result.stderr}`).toContain(
+      "Actual:   https://registry.npmjs.org/@zed-industries/codex-acp/-/codex-acp-0.11.2.tgz",
+    );
+    expect(calls).toContain(
+      `npm view @zed-industries/codex-acp@${PINNED_CODEX_ACP_VERSION} dist.tarball`,
+    );
+    expect(calls).not.toContain(
+      `npm install -g --no-audit --no-fund --no-progress ${PINNED_CODEX_ACP_TARBALL}`,
     );
   });
 

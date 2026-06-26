@@ -138,6 +138,9 @@ jobs:
             type=ref,event=tag
             type=sha,prefix=,format=short
 
+      - name: Validate Hermes production Docker build args
+        run: scripts/check-production-build-args.sh
+
       - name: Build and push
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:

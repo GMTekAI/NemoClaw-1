@@ -32,6 +32,9 @@ fi
 VISIBLE_ERROR_RE="error|failed|timeout|timed out|unavailable|fetch failed|ETIMEDOUT|ECONN|upstream"
 SPINNER_CONNECTED_RE="flibbertigibbeting|[0-9]+m[[:space:]][0-9]+s[[:space:]]*\\|[[:space:]]*connected"
 STATUS_LINE_RE="(connecting|gateway connected|connected|sending|running|flibbertigibbeting).*\\|[[:space:]]*(connected|error)"
+HTTP_STATUS_OR_CAUSE_RE="\\b(HTTP[[:space:]]+[0-9]{3}|status([[:space:]]+code)?[[:space:]]*[:=][[:space:]]*[0-9]{3}|cause[[:space:]]*[:=][[:space:]]*[^[:space:]])"
+REPORTING_LAYER_RE="\\b(gateway proxy|gateway layer|reported by gateway|upstream API|from upstream)\\b"
+RECOVERY_HINT_RE="\\b(recovery hint|hint[[:space:]]*[:=]|check (egress|network|provider)|retry)\\b"
 BLOCKED_IPS=("75.2.113.119" "99.83.136.103")
 INSERTED_IPS=()
 CLEANUP_SANDBOX=0
@@ -65,6 +68,28 @@ cleanup() {
   cleanup_sandbox
 }
 trap cleanup EXIT
+
+classify_issue_4434_diagnostic_fields() {
+  local capture_file="$1"
+  local has_http_status_or_cause=0
+  local has_reporting_layer=0
+  local has_recovery_hint=0
+
+  if grep -Eiq "$HTTP_STATUS_OR_CAUSE_RE" "$capture_file"; then
+    has_http_status_or_cause=1
+  fi
+  if grep -Eiq "$REPORTING_LAYER_RE" "$capture_file"; then
+    has_reporting_layer=1
+  fi
+  if grep -Eiq "$RECOVERY_HINT_RE" "$capture_file"; then
+    has_recovery_hint=1
+  fi
+
+  info "diagnostic fields: http_status_or_cause=${has_http_status_or_cause} reporting_layer=${has_reporting_layer} recovery_hint=${has_recovery_hint}"
+  if [ "$has_http_status_or_cause" = "1" ] && [ "$has_reporting_layer" = "1" ] && [ "$has_recovery_hint" = "1" ]; then
+    fail "OpenClaw output now includes the full #4434 diagnostic fields; tighten both live guards and remove the partial-acceptance wording from docs/security/openclaw-2026.6.9-dependency-review.md"
+  fi
+}
 
 if [ "${NEMOCLAW_ISSUE_4434_LIVE:-0}" != "1" ]; then
   info "skipping: set NEMOCLAW_ISSUE_4434_LIVE=1 to run the privileged live repro"
@@ -210,6 +235,8 @@ set -e
 
 perl -pe 's/\x1b\][^\a]*(?:\a|\x1b\\)//g; s/\x1b\[[0-9;?]*[ -\/]*[@-~]//g; s/\r/\n/g' \
   "$CAPTURE_FILE" >"$PLAIN_CAPTURE_FILE"
+
+classify_issue_4434_diagnostic_fields "$PLAIN_CAPTURE_FILE"
 
 if ! grep -Eiq "$VISIBLE_ERROR_RE" "$PLAIN_CAPTURE_FILE"; then
   if grep -Eiq "$SPINNER_CONNECTED_RE" "$PLAIN_CAPTURE_FILE"; then

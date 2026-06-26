@@ -275,7 +275,7 @@ describe("sandbox provisioning: non-messaging OpenClaw plugins", () => {
     const command = dockerRunCommandBetween(
       dockerfile,
       "# Install non-messaging OpenClaw plugins",
-      "# hadolint ignore=DL3059,DL4006\nRUN node --experimental-strip-types /src/lib/messaging/applier/build/messaging-build-applier.mts --agent openclaw --phase agent-install",
+      '# hadolint ignore=DL3059,DL4006\nRUN OPENCLAW_VERSION="${OPENCLAW_VERSION}" node --experimental-strip-types /src/lib/messaging/applier/build/messaging-build-applier.mts --agent openclaw --phase agent-install',
     );
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-brave-plugin-install-"));
     try {
