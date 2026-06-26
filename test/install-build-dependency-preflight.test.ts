@@ -56,17 +56,21 @@ function buildSystemPathWithout(nameToExclude: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-preflight-nodep-"));
   const exclude = new Set(["node", "npm", "npx", nameToExclude]);
   for (const sysDir of ["/usr/bin", "/bin"]) {
-    if (!fs.existsSync(sysDir)) continue;
-    for (const name of fs.readdirSync(sysDir)) {
-      if (exclude.has(name)) continue;
+    for (const name of (fs.existsSync(sysDir) ? fs.readdirSync(sysDir) : []).filter(
+      (entry) => !exclude.has(entry),
+    )) {
       try {
         fs.symlinkSync(path.join(sysDir, name), path.join(dir, name));
       } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+        (err as NodeJS.ErrnoException).code === "EEXIST" || throwError(err);
       }
     }
   }
   return dir;
+}
+
+function throwError(error: unknown): never {
+  throw error;
 }
 
 function runWithoutStrings(env: Record<string, string> = {}) {
@@ -75,10 +79,11 @@ function runWithoutStrings(env: Record<string, string> = {}) {
   fs.mkdirSync(fakeBin);
   writeNodeStub(fakeBin);
   writeDockerOkStub(fakeBin);
-  if (env.NEMOCLAW_DEFER_OPENSHELL_INSTALL === "1") {
-    writeNpmStub(fakeBin, 'echo "npm stub stop" >&2; exit 91');
-    env.NPM_PREFIX = path.join(tmp, "prefix");
-  }
+  env.NEMOCLAW_DEFER_OPENSHELL_INSTALL === "1" &&
+    (() => {
+      writeNpmStub(fakeBin, 'echo "npm stub stop" >&2; exit 91');
+      env.NPM_PREFIX = path.join(tmp, "prefix");
+    })();
   return spawnSync("bash", [INSTALLER], {
     cwd: path.join(import.meta.dirname, ".."),
     encoding: "utf-8",
