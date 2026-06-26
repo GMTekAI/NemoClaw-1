@@ -3,7 +3,8 @@
 
 import * as agentRuntime from "../../agent/runtime";
 import * as registry from "../../state/registry";
-import type { SandboxCommandResult, SandboxForwardHealth } from "./process-recovery";
+import type { SandboxForwardHealth } from "./forward-health";
+import type { SandboxCommandResult } from "./process-recovery";
 
 type RecoveryConfigReader = (
   sandboxName: string,

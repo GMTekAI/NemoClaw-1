@@ -2,7 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { spawnSync } from "node:child_process";
-import type { SandboxForwardHealth, SandboxForwardListEntry } from "./process-recovery";
+
+export type SandboxForwardListEntry = {
+  sandboxName: string;
+  port: string;
+  status: string;
+};
+
+export type SandboxForwardHealth = boolean | "occupied" | null;
 
 export function classifySandboxForwardHealth(
   entries: SandboxForwardListEntry[],

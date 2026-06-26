@@ -15,18 +15,15 @@ import { getTerminalCommand } from "./gateway-restart-scripts";
 
 export {
   type AgentRecoveryScript,
-  buildHermesDashboardProcessRecoveryScript,
-  buildHermesGatewayRecoveryScript,
-  buildHermesGatewayRestartScript,
   buildManualRecoveryCommand,
   buildOpenClawGatewayRestartScript,
   buildOpenClawRecoveryScript,
   buildRecoveryScript,
   getTerminalCommand,
-  type HermesDashboardRecoveryConfig,
   isTerminalAgentRecoveryScript,
   TERMINAL_AGENT_RECOVERY_SCRIPT,
 } from "./gateway-restart-scripts";
+export * from "./hermes-gateway-scripts";
 
 /**
  * Resolve the agent for a sandbox. Checks the per-sandbox registry first
