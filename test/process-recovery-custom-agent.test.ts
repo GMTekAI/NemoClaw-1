@@ -20,6 +20,69 @@ function getSandboxExecShellCommand(rawArgs: unknown): string {
   return String(args.at(-1) ?? "");
 }
 
+function restoreEnvValue(name: string, previous: string | undefined): void {
+  previous === undefined ? delete process.env[name] : (process.env[name] = previous);
+}
+
+type SpawnMockResult = {
+  status: number;
+  stdout: string;
+  stderr: string;
+};
+
+function openshellExecResult(rawArgs: unknown, recovered: boolean): SpawnMockResult {
+  const shellCommand = getSandboxExecShellCommand(rawArgs);
+  const status = shellCommand.includes("HTTP_CODE=$(curl")
+    ? recovered
+      ? "RUNNING"
+      : "STOPPED"
+    : "";
+  return {
+    status: 0,
+    stdout: `__NEMOCLAW_SANDBOX_EXEC_STARTED__\n${status}\n`,
+    stderr: "",
+  };
+}
+
+function sshExecResult(
+  rawArgs: unknown,
+  sshCommands: string[],
+  currentRecovered: boolean,
+  setRecovered: (value: boolean) => void,
+): SpawnMockResult {
+  const sshCommand = getSandboxExecShellCommand(rawArgs);
+  const isHealthProbe = sshCommand.includes("HTTP_CODE=$(curl");
+  const launchRecovered = sshCommand.includes('"$AGENT_BIN" gateway run --port 19000');
+  const nextRecovered = isHealthProbe ? currentRecovered : launchRecovered;
+  sshCommands.push(sshCommand);
+  setRecovered(nextRecovered);
+  return {
+    status: 0,
+    stdout: isHealthProbe
+      ? currentRecovered
+        ? "RUNNING"
+        : "STOPPED"
+      : launchRecovered
+        ? "GATEWAY_PID=5150"
+        : "",
+    stderr: "",
+  };
+}
+
+function spawnResultForCommand(
+  command: unknown,
+  rawArgs: unknown,
+  sshCommands: string[],
+  recovered: boolean,
+  setRecovered: (value: boolean) => void,
+): SpawnMockResult {
+  return String(command).endsWith("openshell")
+    ? openshellExecResult(rawArgs, recovered)
+    : command === "ssh"
+      ? sshExecResult(rawArgs, sshCommands, recovered, setRecovered)
+      : { status: 1, stdout: "", stderr: "" };
+}
+
 function withFakeOpenshellBinary<T>(fn: () => T): T {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-fake-openshell-"));
   const bin = path.join(dir, "openshell");
@@ -29,11 +92,7 @@ function withFakeOpenshellBinary<T>(fn: () => T): T {
   try {
     return fn();
   } finally {
-    if (previous === undefined) {
-      delete process.env.NEMOCLAW_OPENSHELL_BIN;
-    } else {
-      process.env.NEMOCLAW_OPENSHELL_BIN = previous;
-    }
+    restoreEnvValue("NEMOCLAW_OPENSHELL_BIN", previous);
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
@@ -64,34 +123,16 @@ custom-box  127.0.0.1  19000  12345  running`;
       } as never);
       vi.spyOn(childProcess, "spawnSync").mockImplementation(
         (command: unknown, rawArgs: unknown) => {
-          const args = Array.isArray(rawArgs) ? rawArgs.map(String) : [];
-          if (String(command).endsWith("openshell")) {
-            const shellCommand = getSandboxExecShellCommand(args);
-            const status = shellCommand.includes("HTTP_CODE=$(curl")
-              ? recovered
-                ? "RUNNING"
-                : "STOPPED"
-              : "";
-            return {
-              status: 0,
-              stdout: `__NEMOCLAW_SANDBOX_EXEC_STARTED__\n${status}\n`,
-              stderr: "",
-            } as never;
-          }
-          if (command === "ssh") {
-            const sshCommand = getSandboxExecShellCommand(args);
-            sshCommands.push(sshCommand);
-            if (sshCommand.includes("HTTP_CODE=$(curl")) {
-              return { status: 0, stdout: recovered ? "RUNNING" : "STOPPED", stderr: "" } as never;
-            }
-            recovered = sshCommand.includes('"$AGENT_BIN" gateway run --port 19000');
-            return {
-              status: 0,
-              stdout: recovered ? "GATEWAY_PID=5150" : "",
-              stderr: "",
-            } as never;
-          }
-          return { status: 1, stdout: "", stderr: "" } as never;
+          const setRecovered = (value: boolean): void => {
+            recovered = value;
+          };
+          return spawnResultForCommand(
+            command,
+            rawArgs,
+            sshCommands,
+            recovered,
+            setRecovered,
+          ) as never;
         },
       );
       vi.spyOn(agentRuntime, "getSessionAgent").mockReturnValue({
@@ -129,15 +170,9 @@ custom-box  127.0.0.1  19000  12345  running`;
       );
       expect(recovered).toBe(true);
     } finally {
-      previousWaitSeconds === undefined
-        ? delete process.env.NEMOCLAW_GATEWAY_RECOVERY_WAIT_SECONDS
-        : (process.env.NEMOCLAW_GATEWAY_RECOVERY_WAIT_SECONDS = previousWaitSeconds);
-      previousPollInterval === undefined
-        ? delete process.env.NEMOCLAW_GATEWAY_RECOVERY_POLL_INTERVAL_SECONDS
-        : (process.env.NEMOCLAW_GATEWAY_RECOVERY_POLL_INTERVAL_SECONDS = previousPollInterval);
-      previousSettleSeconds === undefined
-        ? delete process.env.NEMOCLAW_GATEWAY_RECOVERY_SETTLE_SECONDS
-        : (process.env.NEMOCLAW_GATEWAY_RECOVERY_SETTLE_SECONDS = previousSettleSeconds);
+      restoreEnvValue("NEMOCLAW_GATEWAY_RECOVERY_WAIT_SECONDS", previousWaitSeconds);
+      restoreEnvValue("NEMOCLAW_GATEWAY_RECOVERY_POLL_INTERVAL_SECONDS", previousPollInterval);
+      restoreEnvValue("NEMOCLAW_GATEWAY_RECOVERY_SETTLE_SECONDS", previousSettleSeconds);
     }
   });
 });
