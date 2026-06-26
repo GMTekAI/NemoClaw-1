@@ -295,6 +295,8 @@ describe("restartSandboxGateway — host-mediated gateway restart", () => {
       const result = restartSandboxGateway("alpha", { deps });
 
       expect(result).toMatchObject({ ok: false, failureLayer: "unsupported agent" });
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error("expected unsupported custom-agent restart refusal");
       expect(result.detail).toContain("custom-agent agent definition could not be loaded");
       expect(deps.buildOpenClawGatewayRestartScript).not.toHaveBeenCalled();
       expect(deps.executeSandboxExecCommand).not.toHaveBeenCalled();
