@@ -154,6 +154,7 @@ describe("restartSandboxGateway — host-mediated gateway restart", () => {
       getSandbox: () => ({ name: "alpha", agent: "openclaw" }),
       resolveSandboxDashboardPort: () => 18789,
       buildOpenClawGatewayRestartScript: vi.fn(() => "restart openclaw"),
+      buildHermesGatewayRestartScript: vi.fn(() => "restart hermes"),
       executeSandboxExecCommand: vi.fn(() => ({
         status: 0,
         stdout: "GATEWAY_PID=123",
@@ -223,8 +224,13 @@ describe("restartSandboxGateway — host-mediated gateway restart", () => {
   it("reports Hermes boundary refusals without hiding diagnostics in quiet mode", () => {
     const restore = silenceConsole();
     try {
+      const hermesAgent = {
+        name: "hermes",
+        displayName: "Hermes Agent",
+        healthProbe: { port: 8642 },
+      };
       const deps = baseDeps({
-        getSessionAgent: () => ({ name: "hermes", displayName: "Hermes Agent" }),
+        getSessionAgent: () => hermesAgent,
         getSandbox: () => ({ name: "alpha", agent: "hermes" }),
         buildHermesGatewayRestartScript: vi.fn(() => "restart hermes"),
         executeSandboxExecCommand: vi.fn(() => ({
@@ -239,6 +245,7 @@ describe("restartSandboxGateway — host-mediated gateway restart", () => {
         ok: false,
         failureLayer: "secret-boundary refusal",
       });
+      expect(deps.buildHermesGatewayRestartScript).toHaveBeenCalledWith(hermesAgent, 8642);
       expect(console.error).toHaveBeenCalledWith(
         "  Failure layer: secret-boundary refusal - gateway restart failed for 'alpha'.",
       );
