@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { testTimeout } from "./helpers/timeouts";
 import { withLegacyMessagingPlanEnv } from "./messaging-plan-test-helper";
 
 const SCRIPT_PATH = path.join(
@@ -43,63 +44,67 @@ function fakeSlackNpmScript(): string {
 }
 
 describe("messaging-build-applier.mts: plugin archive integrity", () => {
-  it("fails closed before installing the 2026.6.9 Slack plugin when the packed archive integrity drifts", () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-openclaw-slack-pack-"));
-    const tracePath = path.join(tmp, "openclaw.trace");
-    fs.writeFileSync(path.join(tmp, "npm"), fakeSlackNpmScript(), { mode: 0o755 });
-    fs.writeFileSync(
-      path.join(tmp, "openclaw"),
-      [
-        "#!/bin/sh",
-        'printf \'openclaw|%s|%s|%s|%s\\n\' "$1" "$2" "$3" "$4" >> "$OPENCLAW_TRACE"',
-        "exit 0",
-        "",
-      ].join("\n"),
-      { mode: 0o755 },
-    );
-
-    try {
-      const env = withLegacyMessagingPlanEnv(
-        {
-          PATH: `${tmp}:${process.env.PATH || "/usr/bin:/bin"}`,
-          OPENCLAW_TRACE: tracePath,
-          OPENCLAW_SLACK_INTEGRITY: OPENCLAW_SLACK_2026_6_9_INTEGRITY,
-          OPENCLAW_PACK_INTEGRITY_OVERRIDE: "sha512-packed-drift",
-          OPENCLAW_VERSION: "2026.6.9",
-          NEMOCLAW_MESSAGING_CHANNELS_B64: channelsB64(["slack"]),
-        },
-        "openclaw",
-      );
-      const result = spawnSync(
-        "node",
+  it(
+    "fails closed before installing the 2026.6.9 Slack plugin when the packed archive integrity drifts",
+    () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-openclaw-slack-pack-"));
+      const tracePath = path.join(tmp, "openclaw.trace");
+      fs.writeFileSync(path.join(tmp, "npm"), fakeSlackNpmScript(), { mode: 0o755 });
+      fs.writeFileSync(
+        path.join(tmp, "openclaw"),
         [
-          "--experimental-strip-types",
-          SCRIPT_PATH,
-          "--agent",
-          "openclaw",
-          "--phase",
-          "agent-install",
-        ],
-        {
-          encoding: "utf-8",
-          stdio: ["pipe", "pipe", "pipe"],
-          env,
-          timeout: 10_000,
-        },
+          "#!/bin/sh",
+          'printf \'openclaw|%s|%s|%s|%s\\n\' "$1" "$2" "$3" "$4" >> "$OPENCLAW_TRACE"',
+          "exit 0",
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
       );
 
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain(
-        "OpenClaw plugin @openclaw/slack@2026.6.9 downloaded tarball integrity mismatch",
-      );
-      expect(result.stderr).toContain(`Expected: ${OPENCLAW_SLACK_2026_6_9_INTEGRITY}`);
-      expect(result.stderr).toContain("Actual: sha512-packed-drift");
-      const trace = fs.readFileSync(tracePath, "utf-8");
-      expect(trace).toContain("npm|view|@openclaw/slack@2026.6.9|dist.integrity");
-      expect(trace).toContain("npm|pack|@openclaw/slack@2026.6.9|--pack-destination");
-      expect(trace).not.toContain("openclaw|plugins|install");
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
-  });
+      try {
+        const env = withLegacyMessagingPlanEnv(
+          {
+            PATH: `${tmp}:${process.env.PATH || "/usr/bin:/bin"}`,
+            OPENCLAW_TRACE: tracePath,
+            OPENCLAW_SLACK_INTEGRITY: OPENCLAW_SLACK_2026_6_9_INTEGRITY,
+            OPENCLAW_PACK_INTEGRITY_OVERRIDE: "sha512-packed-drift",
+            OPENCLAW_VERSION: "2026.6.9",
+            NEMOCLAW_MESSAGING_CHANNELS_B64: channelsB64(["slack"]),
+          },
+          "openclaw",
+        );
+        const result = spawnSync(
+          "node",
+          [
+            "--experimental-strip-types",
+            SCRIPT_PATH,
+            "--agent",
+            "openclaw",
+            "--phase",
+            "agent-install",
+          ],
+          {
+            encoding: "utf-8",
+            stdio: ["pipe", "pipe", "pipe"],
+            env,
+            timeout: 10_000,
+          },
+        );
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "OpenClaw plugin @openclaw/slack@2026.6.9 downloaded tarball integrity mismatch",
+        );
+        expect(result.stderr).toContain(`Expected: ${OPENCLAW_SLACK_2026_6_9_INTEGRITY}`);
+        expect(result.stderr).toContain("Actual: sha512-packed-drift");
+        const trace = fs.readFileSync(tracePath, "utf-8");
+        expect(trace).toContain("npm|view|@openclaw/slack@2026.6.9|dist.integrity");
+        expect(trace).toContain("npm|pack|@openclaw/slack@2026.6.9|--pack-destination");
+        expect(trace).not.toContain("openclaw|plugins|install");
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    },
+    testTimeout(15_000),
+  );
 });

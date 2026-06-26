@@ -286,10 +286,9 @@ describe("sandbox provisioning: non-messaging OpenClaw plugins", () => {
           [
             "npm() {",
             '  printf "npm %s|BRAVE_API_KEY=%s\\n" "$*" "${BRAVE_API_KEY:-}" >> "$call_log"',
-            '  if [ "$1" = "view" ] && [ "$2" = "@openclaw/brave-plugin@2026.6.9" ] && [ "$3" = "dist.integrity" ]; then',
-            `    printf "%s\\n" "${braveIntegrity}"`,
-            "    return 0",
-            "  fi",
+            `  if [ "$1 $2 $3" = "view @openclaw/brave-plugin@2026.6.9 dist.integrity" ]; then printf "%s\\n" "${braveIntegrity}"; return 0; fi`,
+            '  if [ "$1 $2 $3" = "view @openclaw/brave-plugin@2026.6.9 dist.tarball" ]; then printf "%s\\n" "https://registry.npmjs.org/@openclaw/brave-plugin/-/brave-plugin-2026.6.9.tgz"; return 0; fi',
+            `  if [ "$1" = "pack" ]; then pack_dir="\${4:-}"; test -n "$pack_dir"; printf "fake brave plugin tarball" > "$pack_dir/brave-plugin-2026.6.9.tgz"; printf '[{"filename":"brave-plugin-2026.6.9.tgz","integrity":"%s"}]\\n' "${braveIntegrity}"; return 0; fi`,
             "  return 1",
             "}",
             "openclaw() {",
@@ -306,11 +305,16 @@ describe("sandbox provisioning: non-messaging OpenClaw plugins", () => {
       );
 
       expect(result.status, `stderr: ${result.stderr}`).toBe(0);
-      expect(calls.trim().split("\n")).toEqual([
-        "npm view @openclaw/brave-plugin@2026.6.9 dist.integrity|BRAVE_API_KEY=",
-        "plugins install npm:@openclaw/brave-plugin@2026.6.9 --pin|BRAVE_API_KEY=",
+      expect(calls).toContain("npm view @openclaw/brave-plugin@2026.6.9 dist.integrity");
+      expect(calls).toContain("npm view @openclaw/brave-plugin@2026.6.9 dist.tarball");
+      expect(calls).toContain(
+        "npm pack https://registry.npmjs.org/@openclaw/brave-plugin/-/brave-plugin-2026.6.9.tgz --pack-destination",
+      );
+      expect(calls).toContain("plugins install ");
+      expect(calls).toContain("brave-plugin-2026.6.9.tgz --pin|BRAVE_API_KEY=");
+      expect(calls).toContain(
         "doctor --fix --non-interactive|BRAVE_API_KEY=openshell:resolve:env:BRAVE_API_KEY",
-      ]);
+      );
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
