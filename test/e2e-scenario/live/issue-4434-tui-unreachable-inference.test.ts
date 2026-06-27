@@ -7,8 +7,8 @@ import path from "node:path";
 import { buildAvailabilityProbeEnv } from "../fixtures/availability-env.ts";
 import { trustedSandboxShellScript, validateSandboxName } from "../fixtures/clients/sandbox.ts";
 import { expect, test } from "../fixtures/e2e-test.ts";
-import { shouldRunLiveE2EScenarios } from "../fixtures/live-project-gate.ts";
 import { requireHostedInferenceConfig } from "../fixtures/hosted-inference.ts";
+import { shouldRunLiveE2EScenarios } from "../fixtures/live-project-gate.ts";
 import { ubuntuRepoDocker } from "../scenarios/matrix.ts";
 
 // Migrated from test/e2e/test-issue-4434-tui-unreachable-inference.sh.
@@ -17,11 +17,9 @@ import { ubuntuRepoDocker } from "../scenarios/matrix.ts";
 // endpoint IPs, drives `openclaw tui` through `openshell sandbox exec --tty`,
 // and requires a visible inference error, full #4434 diagnostic fields, and an
 // error status instead of the broken spinner+connected signature from #4434.
-// The legacy bash lane remains
-// wired until Phase 11 shell retirement and still owns the route provider/model
-// assertion plus the direct `inference.local` pre-block completion probe; this
-// file adds complementary Vitest coverage without introducing shared framework
-// or registry helpers.
+// The legacy bash lane remains wired until Phase 11 shell retirement. Keep its
+// route provider/model assertion and direct `inference.local` pre-block probe in
+// parity here so a status result of "not probed" does not weaken the precondition.
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
 const DOCKERFILE_BASE = path.join(REPO_ROOT, "Dockerfile.base");
@@ -242,7 +240,43 @@ runIssue4434LiveTest(
       timeoutMs: 60_000,
     });
     expect(status.exitCode, resultText(status)).toBe(0);
-    expect(resultText(status)).toMatch(/inference.*healthy|healthy.*inference/i);
+    expect(resultText(status)).toMatch(/managed_inference|inference\.local/i);
+    expect(resultText(status)).toMatch(/Docker health:\s*healthy/i);
+
+    const route = await host.command(
+      "bash",
+      ["-lc", "openshell inference get -g nemoclaw 2>&1 || openshell inference get 2>&1"],
+      {
+        artifactName: "issue4434-openshell-inference-before-block",
+        env: buildAvailabilityProbeEnv(),
+        timeoutMs: 30_000,
+      },
+    );
+    expect(route.exitCode, resultText(route)).toBe(0);
+    const routePlain = stripTerminalControl(resultText(route));
+    expect(routePlain).toContain(`Provider: ${hosted.providerName}`);
+    expect(routePlain).toContain(`Model: ${hosted.model}`);
+
+    const preBlockPayload = JSON.stringify({
+      model: hosted.model,
+      messages: [{ role: "user", content: "Reply with OK." }],
+      max_tokens: 8,
+    });
+    const preBlockProbe = await sandbox.execShell(
+      instance.sandboxName,
+      trustedSandboxShellScript(
+        `command -v curl >/dev/null && curl -fsS --max-time 60 https://inference.local/v1/chat/completions -H 'Content-Type: application/json' -d ${shellSingleQuote(preBlockPayload)} >/dev/null`,
+      ),
+      {
+        artifactName: "issue4434-inference-local-before-block",
+        env: buildAvailabilityProbeEnv(),
+        timeoutMs: 90_000,
+      },
+    );
+    expect(
+      preBlockProbe.exitCode,
+      `inference.local was not reachable before the firewall block\n${resultText(preBlockProbe)}`,
+    ).toBe(0);
 
     const connectProbe = await host.nemoclaw([instance.sandboxName, "connect", "--probe-only"], {
       artifactName: "issue4434-connect-probe-before-block",

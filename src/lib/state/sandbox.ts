@@ -560,21 +560,22 @@ function sanitizeBackupDirectory(dirPath: string): void {
 
 const _verbose = () => process.env.NEMOCLAW_REBUILD_VERBOSE === "1";
 
-// Exact symlinks baked into OpenClaw messaging images at build time by
-// `openclaw plugins install`. Source paths are relative to the agent state-dir
-// root (e.g. for OpenClaw, /sandbox/.openclaw); targets are matched exactly
-// against the value of `readlink(source)`. Source-only matching is unsafe: a
-// compromised agent could repoint one of these to /etc/passwd and the audit
-// would still let it through.
+// Exact symlinks baked into OpenClaw messaging images at build time. Source
+// paths are relative to the agent state-dir root (e.g. /sandbox/.openclaw);
+// targets are matched exactly against `readlink(source)`.
 const AUDIT_SYMLINK_WHITELIST: ReadonlyMap<string, string> = new Map([
   [
     "extensions/openclaw-weixin/node_modules/.bin/qrcode-terminal",
     "../qrcode-terminal/bin/qrcode-terminal.js",
   ],
-  ["extensions/openclaw-weixin/node_modules/openclaw", "/usr/local/lib/node_modules/openclaw"],
 ]);
 
 const EXTENSION_NPM_BIN_RE = /^extensions\/[^/]+\/node_modules\/\.bin\/[^/]+$/;
+// `openclaw plugins install <archive>` creates this peer-dependency link for
+// each extension. Match both the narrow path shape and the immutable image
+// target; source-only matching would permit repointing it to an arbitrary file.
+const OPENCLAW_EXTENSION_PEER_LINK_RE = /^extensions\/[^/]+\/node_modules\/openclaw$/;
+const OPENCLAW_GLOBAL_PACKAGE_PATH = "/usr/local/lib/node_modules/openclaw";
 const OPENCLAW_IMAGE_MANAGED_EXTENSION_DIRS = ["nemoclaw", "openclaw-weixin"] as const;
 
 function isAllowedExtensionNpmBinSymlink(relPath: string, linkTarget: string): boolean {
@@ -595,10 +596,21 @@ function isAllowedExtensionNpmBinSymlink(relPath: string, linkTarget: string): b
   );
 }
 
+function isAllowedOpenClawExtensionPeerSymlink(relPath: string, linkTarget: string): boolean {
+  const normalizedRelPath = relPath.split(path.sep).join("/");
+  return (
+    OPENCLAW_EXTENSION_PEER_LINK_RE.test(normalizedRelPath) &&
+    linkTarget === OPENCLAW_GLOBAL_PACKAGE_PATH
+  );
+}
+
 function isAllowedStateSymlink(relPath: string, linkTarget: string): boolean {
   const exactTarget = AUDIT_SYMLINK_WHITELIST.get(relPath.split(path.sep).join("/"));
   if (exactTarget !== undefined) return exactTarget === linkTarget;
-  return isAllowedExtensionNpmBinSymlink(relPath, linkTarget);
+  return (
+    isAllowedOpenClawExtensionPeerSymlink(relPath, linkTarget) ||
+    isAllowedExtensionNpmBinSymlink(relPath, linkTarget)
+  );
 }
 
 function _log(msg: string): void {

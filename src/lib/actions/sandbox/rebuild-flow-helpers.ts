@@ -5,9 +5,12 @@ import {
   detectOpenShellStateRpcResultIssue,
   printOpenShellStateRpcIssue,
 } from "../../adapters/openshell/gateway-drift";
+import { loadAgent } from "../../agent/defs";
 import { ensureAgentBaseImage } from "../../agent/onboard";
+import { CLI_NAME } from "../../cli/branding";
 import { RD as _RD, G, R, YW } from "../../cli/terminal-style";
 import { getNamedGatewayLifecycleState } from "../../gateway-runtime-action";
+import { resolveSandboxGatewayName } from "../../onboard/gateway-binding";
 import {
   captureSandboxListWithGatewayRecovery,
   printSandboxListFailureWithRecoveryContext,
@@ -17,9 +20,6 @@ import * as shields from "../../shields";
 import * as registry from "../../state/registry";
 import * as sandboxState from "../../state/sandbox";
 import * as userManagedFilesProbe from "../../state/user-managed-files-probe";
-import { loadAgent } from "../../agent/defs";
-import { CLI_NAME } from "../../cli/branding";
-import { resolveSandboxGatewayName } from "../../onboard/gateway-binding";
 import {
   getReconciledSandboxGatewayState,
   printGatewayLifecycleHint,
@@ -190,6 +190,7 @@ export function backupSandboxStateForRebuild(
   const hasAnyBackup = backup.backedUpDirs.length > 0 || backup.backedUpFiles.length > 0;
   if (!backup.success && !hasAnyBackup) {
     console.error("  Failed to back up sandbox state.");
+    if (backup.error) console.error(`  Reason: ${backup.error}`);
     if (backup.failedDirs.length > 0) console.error(`  Failed: ${backup.failedDirs.join(", ")}`);
     if (backup.failedFiles.length > 0)
       console.error(`  Failed files: ${backup.failedFiles.join(", ")}`);

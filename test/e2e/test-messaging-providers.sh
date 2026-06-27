@@ -86,6 +86,8 @@
 
 set -uo pipefail
 
+export NEMOCLAW_REBUILD_VERBOSE=1
+
 PASS=0
 FAIL=0
 SKIP=0

@@ -75,7 +75,7 @@ function makeBail(): (msg: string, code?: number) => never {
   };
 }
 
-describe("backupSandboxStateForRebuild — user-managed file warning", () => {
+describe("backupSandboxStateForRebuild", () => {
   let warnSpy: MockInstance;
   let logSpy: MockInstance;
   let errorSpy: MockInstance;
@@ -210,5 +210,32 @@ describe("backupSandboxStateForRebuild — user-managed file warning", () => {
       true,
     );
     expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it("surfaces the backup failure reason before aborting", () => {
+    backupSpy.mockReturnValue({
+      ...makeBackupResult(),
+      success: false,
+      backedUpDirs: [],
+      backedUpFiles: [],
+      failedDirs: [".state"],
+      failedFiles: ["config.toml"],
+      error: "Pre-backup audit rejected an unsafe symlink",
+    });
+
+    const { backupSandboxStateForRebuild } = loadRebuildFlowHelpers();
+    expect(() =>
+      backupSandboxStateForRebuild(
+        "alpha",
+        makeSandboxEntry(),
+        false,
+        () => undefined,
+        () => true,
+        makeBail(),
+      ),
+    ).toThrow("bail: Failed to back up sandbox state.");
+
+    const errorLines = errorSpy.mock.calls.map((args: unknown[]) => String(args[0]));
+    expect(errorLines).toContain("  Reason: Pre-backup audit rejected an unsafe symlink");
   });
 });
