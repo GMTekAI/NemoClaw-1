@@ -466,7 +466,7 @@ describe("fetch-guard patch regression guard", () => {
     );
     readRequiredMatch(
       DOCKERFILE_BASE,
-      /npm install -g --ignore-scripts --no-audit --no-fund --no-progress "mcporter@\$\{MCPORTER_VERSION\}"/,
+      /(npm install -g --ignore-scripts --no-audit --no-fund --no-progress "mcporter@\$\{MCPORTER_VERSION\}")/,
       "mcporter base install with lifecycle scripts disabled",
     );
     expect(
