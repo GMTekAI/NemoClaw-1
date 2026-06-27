@@ -46,11 +46,15 @@ function resultText(result: Pick<ShellProbeResult, "stdout" | "stderr">): string
 
 async function cleanup(host: HostCliClient, sandbox: SandboxClient): Promise<void> {
   await host
-    .command(process.execPath, [CLI_ENTRYPOINT, SANDBOX_NAME, "destroy", "--yes"], {
-      artifactName: "cleanup-nemoclaw-destroy",
-      env: env(),
-      timeoutMs: 120_000,
-    })
+    .command(
+      process.execPath,
+      [CLI_ENTRYPOINT, SANDBOX_NAME, "destroy", "--yes", "--cleanup-gateway"],
+      {
+        artifactName: "cleanup-nemoclaw-destroy",
+        env: env(),
+        timeoutMs: 120_000,
+      },
+    )
     .catch(() => undefined);
   await sandbox
     .openshell(["sandbox", "delete", SANDBOX_NAME], {
@@ -60,7 +64,7 @@ async function cleanup(host: HostCliClient, sandbox: SandboxClient): Promise<voi
     })
     .catch(() => undefined);
   await sandbox
-    .openshell(["gateway", "destroy", "-g", "nemoclaw"], {
+    .openshell(["gateway", "remove", "nemoclaw"], {
       artifactName: "cleanup-openshell-gateway-destroy",
       env: env(),
       timeoutMs: 60_000,
@@ -103,6 +107,118 @@ def load(name):
         return {}
     return value if isinstance(value, dict) else {}
 print(json.dumps({'pending': list(load('pending.json').values()), 'paired': list(load('paired.json').values())}, sort_keys=True))
+PY
+}
+
+select_initial_pairing_request() {
+python3 - <<'PY'
+import json, sys
+state=json.load(sys.stdin)
+def norm(v): return str(v or '').strip()
+def is_cli(e): return norm(e.get('clientMode')).lower() == 'cli' or 'cli' in norm(e.get('clientId')).lower()
+paired={norm(e.get('deviceId')) for e in state.get('paired') or [] if isinstance(e, dict)}
+for req in sorted([e for e in state.get('pending') or [] if isinstance(e, dict)], key=lambda e:e.get('ts') or 0, reverse=True):
+    if is_cli(req) and norm(req.get('deviceId')) not in paired and norm(req.get('requestId')):
+        print(norm(req.get('requestId')))
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
+seed_initial_pairing() {
+  local request_id="$1"
+  python3 - "$request_id" <<'PY'
+import json, os, secrets, sys, time
+from pathlib import Path
+
+requested_request_id = sys.argv[1]
+root = Path(os.environ.get('OPENCLAW_STATE_DIR') or '/sandbox/.openclaw')
+devices_dir = root / 'devices'
+pending_path = devices_dir / 'pending.json'
+paired_path = devices_dir / 'paired.json'
+auth_path = root / 'identity' / 'device-auth.json'
+
+def load(path):
+    try:
+        value = json.loads(path.read_text(encoding='utf-8'))
+    except FileNotFoundError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+def write(path, value, mode):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name('.' + path.name + '.tmp')
+    with tmp.open('w', encoding='utf-8') as handle:
+        handle.write(json.dumps(value, indent=2, sort_keys=True) + '\n')
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, path)
+    try:
+        os.chmod(path, mode)
+    except PermissionError:
+        pass
+
+def norm(value):
+    return str(value or '').strip()
+
+def is_cli(entry):
+    return norm(entry.get('clientMode')).lower() == 'cli' or 'cli' in norm(entry.get('clientId')).lower()
+
+def is_operator(entry):
+    return 'operator' in {norm(role) for role in (entry.get('roles') or [entry.get('role')]) if norm(role)}
+
+pending = load(pending_path)
+paired = load(paired_path)
+candidates = [
+    (item.get('ts') or 0, key, item)
+    for key, item in pending.items()
+    if isinstance(item, dict)
+    and is_cli(item)
+    and is_operator(item)
+    and norm(item.get('requestId'))
+    and norm(item.get('deviceId'))
+    and 'operator.admin' not in set(item.get('scopes') or item.get('requestedScopes') or [])
+]
+matches = [row for row in candidates if norm(row[2].get('requestId')) == requested_request_id]
+if matches:
+    _, request_key, request = matches[0]
+elif candidates:
+    _, request_key, request = sorted(candidates, reverse=True)[0]
+else:
+    if any(isinstance(item, dict) and is_cli(item) for item in paired.values()):
+        print(json.dumps({'requestId': requested_request_id, 'status': 'already-paired'}))
+        raise SystemExit(0)
+    raise SystemExit('initial CLI pairing request disappeared without a paired device')
+
+approved_scopes = ['operator.pairing']
+now = int(time.time() * 1000)
+token = secrets.token_urlsafe(32)
+device_id = norm(request.get('deviceId'))
+device = {
+    'deviceId': device_id,
+    'publicKey': request.get('publicKey'),
+    'displayName': request.get('displayName'),
+    'platform': request.get('platform'),
+    'deviceFamily': request.get('deviceFamily'),
+    'clientId': request.get('clientId'),
+    'clientMode': request.get('clientMode'),
+    'role': 'operator',
+    'roles': ['operator'],
+    'scopes': approved_scopes,
+    'approvedScopes': approved_scopes,
+    'remoteIp': request.get('remoteIp'),
+    'tokens': {'operator': {'token': token, 'role': 'operator', 'scopes': approved_scopes, 'createdAtMs': now, 'updatedAtMs': now}},
+    'createdAtMs': now,
+    'approvedAtMs': now,
+}
+device = {key: value for key, value in device.items() if value is not None}
+pending.pop(request_key, None)
+paired[device_id] = device
+auth = {'version': 1, 'deviceId': device_id, 'tokens': {'operator': {'token': token, 'role': 'operator', 'scopes': approved_scopes, 'updatedAtMs': now}}}
+write(pending_path, pending, 0o660)
+write(paired_path, paired, 0o660)
+write(auth_path, auth, 0o600)
+print(json.dumps({'requestId': norm(request.get('requestId')), 'deviceId': device_id, 'approvedScopes': approved_scopes}, sort_keys=True))
 PY
 }
 
@@ -154,8 +270,37 @@ raise SystemExit(1)
 PY
 }
 
+approve_request() {
+  local request_id="$1" approve_output approve_log
+  approve_output="$(openclaw devices approve "$request_id" --json 2>&1)"
+  approve_log="/tmp/issue4462-approve-$request_id.log"
+  printf '%s\n' "$approve_output" >"$approve_log"
+  python3 - "$request_id" "$approve_log" <<'PY'
+import json, sys
+want=sys.argv[1]
+raw=open(sys.argv[2], encoding='utf-8').read()
+dec=json.JSONDecoder()
+for idx,ch in enumerate(raw):
+    if ch != '{':
+        continue
+    try:
+        doc,_=dec.raw_decode(raw[idx:])
+    except Exception:
+        continue
+    if doc.get('requestId') == want:
+        raise SystemExit(0)
+print(raw, file=sys.stderr)
+raise SystemExit(1)
+PY
+}
+
 openclaw devices list --json >/tmp/issue4462-devices-list.json 2>&1 || true
 state="$(state_json)"
+initial_request_id="$(printf '%s' "$state" | select_initial_pairing_request 2>/dev/null || true)"
+if [ -n "$initial_request_id" ]; then
+  seed_initial_pairing "$initial_request_id" >/tmp/issue4462-initial-pairing.log
+  state="$(state_json)"
+fi
 request_id="$(printf '%s' "$state" | select_scope_request 2>/dev/null || true)"
 if [ -z "$request_id" ]; then
   session_id="issue-4462-trigger-$(date +%s)-$$"
@@ -186,25 +331,7 @@ if [ -z "$request_id" ]; then
 fi
 
 if [ -n "$request_id" ]; then
-  approve_output="$(openclaw devices approve "$request_id" --json 2>&1)"
-  printf '%s\n' "$approve_output" >/tmp/issue4462-approve.log
-  python3 - <<'PY' "$request_id" </tmp/issue4462-approve.log
-import json, sys
-want=sys.argv[1]
-raw=sys.stdin.read()
-dec=json.JSONDecoder()
-for idx,ch in enumerate(raw):
-    if ch != '{':
-        continue
-    try:
-        doc,_=dec.raw_decode(raw[idx:])
-    except Exception:
-        continue
-    if doc.get('requestId') == want:
-        raise SystemExit(0)
-print(raw, file=sys.stderr)
-raise SystemExit(1)
-PY
+  approve_request "$request_id"
 fi
 
 state="$(state_json)"

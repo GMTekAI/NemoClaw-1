@@ -53,6 +53,7 @@ type SandboxTokenContainerProbeOptions = {
   payload: Buffer;
   port: number;
   stateDir: string;
+  useHostNetwork?: boolean;
 };
 
 const CONTAINER_PROBE_CA_PATH = "/tmp/nemoclaw-probe-ca.crt";
@@ -300,7 +301,18 @@ function mintSandboxJwt(options: { configPath: string; sandboxId: string }): str
   return `${signingInput}.${signature}`;
 }
 
-function noTokenContainerProbe(dockerBin: string, networkName: string, port: number): SpawnResult {
+function containerProbeNetworkArgs(networkName: string, useHostNetwork: boolean): string[] {
+  return useHostNetwork
+    ? ["--network", "host", "--add-host", "host.openshell.internal:127.0.0.1"]
+    : ["--network", networkName, "--add-host", "host.openshell.internal:host-gateway"];
+}
+
+function noTokenContainerProbe(
+  dockerBin: string,
+  networkName: string,
+  port: number,
+  useHostNetwork: boolean,
+): SpawnResult {
   const script = `
 const http2 = require("node:http2");
 const endpoint = "https://host.openshell.internal:${port}";
@@ -349,10 +361,7 @@ req.end(Buffer.alloc(5));
   return run(dockerBin, [
     "run",
     "--rm",
-    "--network",
-    networkName,
-    "--add-host",
-    "host.openshell.internal:host-gateway",
+    ...containerProbeNetworkArgs(networkName, useHostNetwork),
     DOCKER_GRPC_PROBE_IMAGE,
     "node",
     "-e",
@@ -440,10 +449,7 @@ export function buildSandboxTokenContainerProbeDockerArgs(
   return [
     "run",
     "--rm",
-    "--network",
-    options.networkName,
-    "--add-host",
-    "host.openshell.internal:host-gateway",
+    ...containerProbeNetworkArgs(options.networkName, options.useHostNetwork ?? false),
     "--volume",
     `${path.resolve(bundle.caPath)}:${CONTAINER_PROBE_CA_PATH}:ro`,
     "--volume",
@@ -572,6 +578,7 @@ export async function runOpenShellGatewayAuthSourceContractScenario({
   const port = await pickPort();
   const stateDir = createDockerBindableTempDir("nemoclaw-openshell-auth-contract-");
   const networkName = `nemoclaw-auth-contract-${process.pid}-${port}`;
+  const useHostNetwork = process.platform === "linux";
   cleanup.add("remove OpenShell auth contract temp state", () =>
     fs.rmSync(stateDir, { recursive: true, force: true }),
   );
@@ -629,6 +636,7 @@ export async function runOpenShellGatewayAuthSourceContractScenario({
     ],
     gatewayBin,
     networkName,
+    containerProbeNetworkMode: useHostNetwork ? "host" : "bridge",
     port,
     stateDir,
   });
@@ -653,7 +661,7 @@ export async function runOpenShellGatewayAuthSourceContractScenario({
     stateDir,
   });
 
-  const noToken = noTokenContainerProbe(dockerBin, networkName, port);
+  const noToken = noTokenContainerProbe(dockerBin, networkName, port, useHostNetwork);
   await artifacts.writeJson("no-token-container-probe.json", noToken);
   skipUnavailableProbeImage(noToken, skip);
   expect(noTokenProbeWasRejected(noToken), commandOutput(noToken)).toBe(true);
@@ -667,6 +675,7 @@ export async function runOpenShellGatewayAuthSourceContractScenario({
     payload: getSandboxConfigRequest(sandboxId),
     port,
     stateDir,
+    useHostNetwork,
   });
   await artifacts.writeJson("mtls-only-container-probe.json", mtlsOnlyContainerCall);
   skipUnavailableProbeImage(mtlsOnlyContainerCall, skip);
@@ -695,6 +704,7 @@ export async function runOpenShellGatewayAuthSourceContractScenario({
     payload: getSandboxConfigRequest(sandboxId),
     port,
     stateDir,
+    useHostNetwork,
   });
   await artifacts.writeJson("sandbox-jwt-container-probe.json", sandboxContainerCall);
   skipUnavailableProbeImage(sandboxContainerCall, skip);
@@ -711,6 +721,7 @@ export async function runOpenShellGatewayAuthSourceContractScenario({
     payload: getSandboxConfigRequest("sandbox-auth-contract-other"),
     port,
     stateDir,
+    useHostNetwork,
   });
   await artifacts.writeJson("cross-sandbox-jwt-container-probe.json", crossSandboxContainerCall);
   skipUnavailableProbeImage(crossSandboxContainerCall, skip);

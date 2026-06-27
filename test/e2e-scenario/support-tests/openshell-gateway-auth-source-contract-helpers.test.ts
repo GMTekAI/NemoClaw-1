@@ -57,4 +57,18 @@ describe("OpenShell gateway auth source contract helpers", () => {
       valuesAfterFlag(args, "--env").some((value) => value.startsWith("PROBE_AUTHORIZATION=")),
     ).toBe(false);
   });
+
+  it("uses host networking to reach a loopback-only Linux gateway", () => {
+    const args = buildSandboxTokenContainerProbeDockerArgs({
+      dockerBin: "docker",
+      networkName: "nemoclaw-auth-source-net",
+      payload: Buffer.from("sandbox request"),
+      port: 47321,
+      stateDir: path.resolve("/tmp/nemoclaw-auth-source-state"),
+      useHostNetwork: true,
+    });
+
+    expect(valuesAfterFlag(args, "--network")).toEqual(["host"]);
+    expect(valuesAfterFlag(args, "--add-host")).toEqual(["host.openshell.internal:127.0.0.1"]);
+  });
 });
