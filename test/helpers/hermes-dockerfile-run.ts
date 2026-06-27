@@ -27,6 +27,23 @@ export function hermesDockerShellPrelude(): string {
   ].join("; ");
 }
 
+export function precreateHermesStaleOpenclawLayout(
+  layout: boolean | "symlink",
+  openclawDir: string,
+  staleOpenclawTarget: string,
+): void {
+  if (layout === true) {
+    fs.mkdirSync(openclawDir, { recursive: true });
+    fs.writeFileSync(path.join(openclawDir, "openclaw.json"), "{}\n");
+    return;
+  }
+  if (layout === "symlink") {
+    fs.mkdirSync(staleOpenclawTarget, { recursive: true });
+    fs.writeFileSync(path.join(staleOpenclawTarget, "sentinel"), "keep\n");
+    fs.symlinkSync(staleOpenclawTarget, openclawDir, "dir");
+  }
+}
+
 export function dockerRunCommandBetween(
   dockerfile: string,
   startMarker: string,

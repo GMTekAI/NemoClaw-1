@@ -16,7 +16,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { hermesDockerShellPrelude } from "./helpers/hermes-dockerfile-run";
+import {
+  hermesDockerShellPrelude,
+  precreateHermesStaleOpenclawLayout,
+} from "./helpers/hermes-dockerfile-run";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const DOCKERFILE = path.join(ROOT, "Dockerfile");
@@ -1305,20 +1308,7 @@ describe("Hermes sandbox provisioning", () => {
     }
     const openclawDir = path.join(sandboxRoot, ".openclaw");
     const staleOpenclawTarget = path.join(tmp, "stale-openclaw-target");
-    const staleOpenclawLayout = String(precreateStaleOpenclaw) as "false" | "true" | "symlink";
-    const createStaleOpenclawLayout = {
-      false: () => {},
-      true: () => {
-        fs.mkdirSync(openclawDir, { recursive: true });
-        fs.writeFileSync(path.join(openclawDir, "openclaw.json"), "{}\n");
-      },
-      symlink: () => {
-        fs.mkdirSync(staleOpenclawTarget, { recursive: true });
-        fs.writeFileSync(path.join(staleOpenclawTarget, "sentinel"), "keep\n");
-        fs.symlinkSync(staleOpenclawTarget, openclawDir, "dir");
-      },
-    } satisfies Record<typeof staleOpenclawLayout, () => void>;
-    createStaleOpenclawLayout[staleOpenclawLayout]();
+    precreateHermesStaleOpenclawLayout(precreateStaleOpenclaw, openclawDir, staleOpenclawTarget);
     const command = dockerRunCommandBetween(dockerfile, startMarker, endMarker).replaceAll(
       "/root/.cache/pip",
       path.join(tmp, "root-cache", "pip"),
