@@ -25,19 +25,17 @@ describe("Hermes stale OpenClaw guardrails", () => {
     const cleanupCommand = dockerRunCommandContaining(dockerfile, STALE_CLEANUP_SIGNATURE);
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-hermes-stale-digest-"));
     const sandboxRoot = path.join(tmp, "sandbox");
-    const script = [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
-      `BASE_IMAGE=${JSON.stringify(`ghcr.io/nvidia/nemoclaw/hermes-sandbox-base@${DIFFERENT_DIGEST}`)}`,
-      `NEMOCLAW_STALE_OPENCLAW_BASE_DIGEST=${JSON.stringify(STALE_DIGEST)}`,
-      cleanupCommand.replaceAll("/sandbox", sandboxRoot),
-    ].join("\n");
-    const scriptPath = path.join(tmp, "run-cleanup.sh");
     fs.mkdirSync(sandboxRoot, { recursive: true });
-    fs.writeFileSync(scriptPath, script, { mode: 0o700 });
 
     try {
-      const result = spawnSync("bash", [scriptPath], { encoding: "utf-8", timeout: 5000 });
+      const { result } = runDockerShell(
+        [
+          `BASE_IMAGE=${JSON.stringify(`ghcr.io/nvidia/nemoclaw/hermes-sandbox-base@${DIFFERENT_DIGEST}`)}`,
+          `NEMOCLAW_STALE_OPENCLAW_BASE_DIGEST=${JSON.stringify(STALE_DIGEST)}`,
+          cleanupCommand,
+        ].join("; "),
+        sandboxRoot,
+      );
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("remove stale Hermes .openclaw cleanup or update");
       expect(result.stderr).toContain(DIFFERENT_DIGEST);

@@ -79,8 +79,10 @@ export function dockerRunCommandContaining(dockerfile: string, signature: string
   if (signatureIndex === -1) {
     throw new Error(`Expected Dockerfile RUN signature: ${signature}`);
   }
-  const runIndex = dockerfile.lastIndexOf("RUN set -eu;", signatureIndex);
-  if (runIndex === -1) {
+  const previousRunIndex = dockerfile.lastIndexOf("\nRUN ", signatureIndex);
+  const runIndex =
+    previousRunIndex === -1 && dockerfile.startsWith("RUN ") ? 0 : previousRunIndex + 1;
+  if (runIndex <= 0 && !dockerfile.startsWith("RUN ")) {
     throw new Error(`Expected RUN instruction before ${signature}`);
   }
   const linesAfterRun = dockerfile.slice(runIndex).split("\n");
