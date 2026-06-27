@@ -10,11 +10,11 @@ import { buildAvailabilityProbeEnv } from "../fixtures/availability-env.ts";
 import { trustedProviderEndpoint } from "../fixtures/clients/provider.ts";
 import { trustedSandboxShellScript, validateSandboxName } from "../fixtures/clients/sandbox.ts";
 import { expect, test } from "../fixtures/e2e-test.ts";
-import { shouldRunLiveE2EScenarios } from "../fixtures/live-project-gate.ts";
 import {
   DEFAULT_HOSTED_INFERENCE_MODEL,
   requireHostedInferenceConfig,
 } from "../fixtures/hosted-inference.ts";
+import { shouldRunLiveE2EScenarios } from "../fixtures/live-project-gate.ts";
 import type { ShellProbeResult } from "../fixtures/shell-probe.ts";
 
 // Migrated from test/e2e/test-hermes-e2e.sh.
@@ -496,9 +496,9 @@ test.skipIf(!shouldRunLiveE2EScenarios())(
 
     // Phase 5: host-mediated Hermes gateway restart. This validates the
     // runtime contract behind #2426 against a real OpenShell/Hermes sandbox:
-    // the host command controls the gateway-user process, mutable runtime
-    // config is re-hashed only after guards pass, the public API bridge is
-    // restored, and the sandbox user never owns the relaunched gateway.
+    // PID 1 controls the gateway-user process, direct sandbox config drift is
+    // refused rather than adopted, the public bridges and dashboard process
+    // recover together, and PID 1 remains stable throughout.
     const gatewayProcessScript = trustedSandboxShellScript(
       String.raw`
         ps -eo user=,pid=,args= |
@@ -514,14 +514,27 @@ test.skipIf(!shouldRunLiveE2EScenarios())(
     const beforeGateway = parseGatewayProcess(beforeRestartProcess.stdout);
     expect(beforeGateway.owner).toBe("gateway");
 
+    const pid1IdentityScript = trustedSandboxShellScript(
+      String.raw`python3 -c 'from pathlib import Path; text=Path("/proc/1/stat").read_text(); tail=text.rsplit(")", 1)[1].split(); print("1 " + tail[19])'`,
+    );
+    const beforePid1 = await sandbox.execShell(SANDBOX_NAME, pid1IdentityScript, {
+      artifactName: "phase-5-pid1-before-restart",
+      env: commandEnv(),
+      timeoutMs: 30_000,
+    });
+    expect(beforePid1.exitCode, resultText(beforePid1)).toBe(0);
+
     const envMarker = `issue_2426_${Date.now()}`;
+    const envBackup = `/tmp/hermes-e2e-env-before-${Date.now()}`;
     const mutateEnv = await sandbox.execShell(
       SANDBOX_NAME,
       trustedSandboxShellScript(
         [
           "set -eu",
           `marker=${shellQuote(envMarker)}`,
+          `backup=${shellQuote(envBackup)}`,
           "command -v gosu >/dev/null 2>&1",
+          'gosu sandbox cp /sandbox/.hermes/.env "$backup"',
           'gosu sandbox sh -lc \'printf "\\nNEMOCLAW_E2E_RESTART_MARKER=%s\\n" "$1" >> /sandbox/.hermes/.env\' sh "$marker"',
         ].join("; "),
       ),
@@ -532,6 +545,48 @@ test.skipIf(!shouldRunLiveE2EScenarios())(
       },
     );
     expect(mutateEnv.exitCode, resultText(mutateEnv)).toBe(0);
+
+    const refuseMutableDrift = await host.command(
+      "nemohermes",
+      [SANDBOX_NAME, "gateway", "restart", "--quiet"],
+      {
+        artifactName: "phase-5-refuse-untrusted-hermes-env-drift",
+        env: commandEnv(),
+        timeoutMs: 180_000,
+      },
+    );
+    expect(refuseMutableDrift.exitCode, resultText(refuseMutableDrift)).not.toBe(0);
+    expect(resultText(refuseMutableDrift)).toMatch(
+      /config hash mismatch|GATEWAY_CONFIG_HASH_MISMATCH/,
+    );
+
+    const afterMutableRefusalProcess = await sandbox.execShell(SANDBOX_NAME, gatewayProcessScript, {
+      artifactName: "phase-5-hermes-gateway-after-mutable-drift-refusal",
+      env: commandEnv(),
+      timeoutMs: 30_000,
+    });
+    expect(afterMutableRefusalProcess.exitCode, resultText(afterMutableRefusalProcess)).toBe(0);
+    expect(parseGatewayProcess(afterMutableRefusalProcess.stdout).pid).toBe(beforeGateway.pid);
+
+    const restoreMutableEnv = await sandbox.execShell(
+      SANDBOX_NAME,
+      trustedSandboxShellScript(
+        [
+          "set -eu",
+          `backup=${shellQuote(envBackup)}`,
+          'gosu sandbox sh -c \'cat "$1" > /sandbox/.hermes/.env && rm -f "$1"\' sh "$backup"',
+          "sha256sum -c /etc/nemoclaw/hermes.config-hash --status",
+          "echo ENV_RESTORED",
+        ].join("; "),
+      ),
+      {
+        artifactName: "phase-5-restore-hermes-env-after-refusal",
+        env: commandEnv(),
+        timeoutMs: 30_000,
+      },
+    );
+    expect(restoreMutableEnv.exitCode, resultText(restoreMutableEnv)).toBe(0);
+    expect(restoreMutableEnv.stdout).toContain("ENV_RESTORED");
 
     const stopApiForward = await sandbox.openshell(["forward", "stop", "8642", SANDBOX_NAME], {
       artifactName: "phase-5-stop-hermes-api-forward-before-restart",
@@ -559,6 +614,14 @@ test.skipIf(!shouldRunLiveE2EScenarios())(
     const afterGateway = parseGatewayProcess(afterRestartProcess.stdout);
     expect(afterGateway.owner).toBe("gateway");
     expect(afterGateway.pid).not.toBe(beforeGateway.pid);
+
+    const afterRestartPid1 = await sandbox.execShell(SANDBOX_NAME, pid1IdentityScript, {
+      artifactName: "phase-5-pid1-after-restart",
+      env: commandEnv(),
+      timeoutMs: 30_000,
+    });
+    expect(afterRestartPid1.exitCode, resultText(afterRestartPid1)).toBe(0);
+    expect(afterRestartPid1.stdout.trim()).toBe(beforePid1.stdout.trim());
 
     const restartHashCheck = await sandbox.execShell(
       SANDBOX_NAME,
@@ -621,6 +684,31 @@ test.skipIf(!shouldRunLiveE2EScenarios())(
     expect(stopGatewayForRecover.exitCode, resultText(stopGatewayForRecover)).toBe(0);
     expect(stopGatewayForRecover.stdout).toContain("GATEWAY_STOPPED");
 
+    const stopHermesAuxiliaries = await sandbox.execShell(
+      SANDBOX_NAME,
+      trustedSandboxShellScript(
+        [
+          "set -eu",
+          `dashboard_public=${shellQuote(HERMES_DASHBOARD_PORT)}`,
+          `dashboard_internal=${shellQuote(HERMES_DASHBOARD_INTERNAL_PORT)}`,
+          'pids=$(ps -eo pid=,comm=,args= | awk -v dp="$dashboard_public" -v di="$dashboard_internal" \'($2 == "socat" && (index($0, "TCP-LISTEN:8642") || index($0, "TCP-LISTEN:" dp))) || ($2 ~ /^(hermes|hermes[.]real|python|python3)$/ && index($0, "hermes dashboard") && index($0, "--port " di)) { print $1 }\')',
+          "set -- $pids",
+          '[ "$#" -ge 3 ] || { echo "EXPECTED_AT_LEAST_3_AUXILIARIES, found $#" >&2; ps -eo pid,comm,args; exit 1; }',
+          'for pid in "$@"; do kill -TERM "$pid" 2>/dev/null || true; done',
+          "sleep 2",
+          'for pid in "$@"; do kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null || true; done',
+          'echo "AUXILIARIES_STOPPED=$#"',
+        ].join("; "),
+      ),
+      {
+        artifactName: "phase-5-stop-hermes-auxiliaries-before-recover",
+        env: commandEnv(),
+        timeoutMs: 30_000,
+      },
+    );
+    expect(stopHermesAuxiliaries.exitCode, resultText(stopHermesAuxiliaries)).toBe(0);
+    expect(stopHermesAuxiliaries.stdout).toMatch(/AUXILIARIES_STOPPED=[3-9]/);
+
     const recoverStoppedGateway = await host.command("nemohermes", [SANDBOX_NAME, "recover"], {
       artifactName: "phase-5-nemohermes-recover-stopped-gateway",
       env: commandEnv(),
@@ -638,6 +726,14 @@ test.skipIf(!shouldRunLiveE2EScenarios())(
     expect(recoveredGateway.owner).toBe("gateway");
     expect(recoveredGateway.pid).not.toBe(afterGateway.pid);
 
+    const afterRecoverPid1 = await sandbox.execShell(SANDBOX_NAME, pid1IdentityScript, {
+      artifactName: "phase-5-pid1-after-both-down-recover",
+      env: commandEnv(),
+      timeoutMs: 30_000,
+    });
+    expect(afterRecoverPid1.exitCode, resultText(afterRecoverPid1)).toBe(0);
+    expect(afterRecoverPid1.stdout.trim()).toBe(beforePid1.stdout.trim());
+
     const recoverHostHealth = await host.command(
       "curl",
       ["-sf", "--max-time", "10", HERMES_HOST_HEALTH_URL],
@@ -649,6 +745,23 @@ test.skipIf(!shouldRunLiveE2EScenarios())(
     );
     expect(recoverHostHealth.exitCode, resultText(recoverHostHealth)).toBe(0);
     expect(resultText(recoverHostHealth)).toMatch(/"ok"/i);
+
+    const afterBothDownForwardList = await sandbox.openshell(["forward", "list"], {
+      artifactName: "phase-5-forward-list-after-both-down-recover",
+      env: commandEnv(),
+      timeoutMs: 30_000,
+    });
+    expect(afterBothDownForwardList.exitCode, resultText(afterBothDownForwardList)).toBe(0);
+    expect(forwardListHasRunningPort(afterBothDownForwardList.stdout, SANDBOX_NAME, "8642")).toBe(
+      true,
+    );
+    expect(
+      forwardListHasRunningPort(
+        afterBothDownForwardList.stdout,
+        SANDBOX_NAME,
+        HERMES_DASHBOARD_PORT,
+      ),
+    ).toBe(true);
 
     for (const dashboardPort of hermesDashboardE2eEnabled() ? [HERMES_DASHBOARD_PORT] : []) {
       const stopDashboardForward = await sandbox.openshell(
@@ -880,7 +993,7 @@ test.skipIf(!shouldRunLiveE2EScenarios())(
       );
       expect(lockedRestart.exitCode, resultText(lockedRestart)).not.toBe(0);
       expect(resultText(lockedRestart)).toMatch(
-        /hash mismatch while locked|HERMES_LOCKED_HASH_MISMATCH/,
+        /config hash mismatch|GATEWAY_CONFIG_HASH_MISMATCH/,
       );
 
       const afterLockedRefusalProcess = await sandbox.execShell(

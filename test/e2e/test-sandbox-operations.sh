@@ -556,9 +556,9 @@ test_sbx_08_process_recovery() {
 
   log "  Killing OpenClaw gateway process inside sandbox..."
   local kill_output
-  kill_output=$(sandbox_exec "pkill -9 -f 'openclaw gateway' 2>/dev/null || kill -9 \$(pgrep -f 'openclaw gateway') 2>/dev/null || kill -9 \$(ps aux | grep 'openclaw.*gateway' | grep -v grep | awk '{print \$2}') 2>/dev/null; echo EXIT_\$?" 2>&1) || true
+  kill_output=$(sandbox_exec "set -eu; IFS=' ' read -r pid starttime extra </tmp/nemoclaw-gateway.pid; case \"\$pid\" in ''|*[!0-9]*) echo INVALID_GATEWAY_PID >&2; exit 1 ;; esac; case \"\$starttime\" in ''|*[!0-9]*) echo INVALID_GATEWAY_STARTTIME >&2; exit 1 ;; esac; [ -z \"\${extra:-}\" ] || { echo INVALID_GATEWAY_PID_RECORD >&2; exit 1; }; actual_start=\$(python3 -c 'import sys; from pathlib import Path; text=Path(f\"/proc/{sys.argv[1]}/stat\").read_text(); tail=text.rsplit(\")\", 1)[1].split(); print(tail[19])' \"\$pid\"); [ \"\$actual_start\" = \"\$starttime\" ] || { echo GATEWAY_PID_REUSED >&2; exit 1; }; user=\$(ps -p \"\$pid\" -o user= | tr -d ' '); [ \"\$user\" = gateway ] || { echo \"UNEXPECTED_GATEWAY_USER=\$user\" >&2; exit 1; }; comm=\$(ps -p \"\$pid\" -o comm= | tr -d ' '); case \"\$comm\" in openclaw*) ;; *) echo \"UNEXPECTED_GATEWAY_COMM=\$comm\" >&2; exit 1 ;; esac; kill -9 \"\$pid\"; printf 'KILLED_GATEWAY=%s:%s\\n' \"\$pid\" \"\$starttime\"" 2>&1) || true
 
-  if echo "$kill_output" | grep -q "EXIT_0"; then
+  if echo "$kill_output" | grep -qE '^KILLED_GATEWAY=[0-9]+:[0-9]+$'; then
     log "  Process kill confirmed"
   else
     log "  WARNING: Could not confirm process was killed (output: $kill_output)"
@@ -584,6 +584,72 @@ test_sbx_08_process_recovery() {
     pass "TC-SBX-08: SSH works after process recovery"
   else
     fail "TC-SBX-08: Process Recovery (SSH)" "Cannot SSH after recovery"
+  fi
+}
+
+# ── TC-SBX-08b: Forced Gateway Restart ──────────────────────────────────────
+capture_openclaw_gateway_identity() {
+  sandbox_exec "set -eu; IFS=' ' read -r pid starttime extra </tmp/nemoclaw-gateway.pid; case \"\$pid\" in ''|*[!0-9]*) echo INVALID_GATEWAY_PID >&2; exit 1 ;; esac; case \"\$starttime\" in ''|*[!0-9]*) echo INVALID_GATEWAY_STARTTIME >&2; exit 1 ;; esac; [ -z \"\${extra:-}\" ] || { echo INVALID_GATEWAY_PID_RECORD >&2; exit 1; }; actual_start=\$(python3 -c 'import sys; from pathlib import Path; text=Path(f\"/proc/{sys.argv[1]}/stat\").read_text(); tail=text.rsplit(\")\", 1)[1].split(); print(tail[19])' \"\$pid\"); [ \"\$actual_start\" = \"\$starttime\" ] || { echo GATEWAY_PID_REUSED >&2; exit 1; }; user=\$(ps -p \"\$pid\" -o user= | tr -d ' '); [ \"\$user\" = gateway ] || { echo \"UNEXPECTED_GATEWAY_USER=\$user\" >&2; exit 1; }; comm=\$(ps -p \"\$pid\" -o comm= | tr -d ' '); case \"\$comm\" in openclaw*) ;; *) echo \"UNEXPECTED_GATEWAY_COMM=\$comm\" >&2; exit 1 ;; esac; printf 'GATEWAY=%s:%s:%s\\n' \"\$user\" \"\$pid\" \"\$starttime\"; python3 -c 'from pathlib import Path; text=Path(\"/proc/1/stat\").read_text(); tail=text.rsplit(\")\", 1)[1].split(); print(\"PID1_START=\" + tail[19])'"
+}
+
+test_sbx_08b_forced_gateway_restart() {
+  log "=== TC-SBX-08b: Forced Gateway Restart ==="
+  require_sandbox "$SANDBOX_A" "TC-SBX-08b" || return
+
+  local before after before_gateway after_gateway before_identity after_identity before_pid1 after_pid1
+  before=$(capture_openclaw_gateway_identity 2>&1) || true
+  before_gateway=$(printf '%s\n' "$before" | grep -E '^GATEWAY=gateway:[0-9]+:[0-9]+$' | tail -1 || true)
+  before_pid1=$(printf '%s\n' "$before" | sed -n 's/^PID1_START=//p' | tail -1)
+  before_identity="${before_gateway#GATEWAY=gateway:}"
+  if [[ -z "$before_gateway" || -z "$before_pid1" ]]; then
+    fail "TC-SBX-08b: Forced Gateway Restart" "Could not capture the pre-restart gateway/PID1 identity: ${before:0:300}"
+    return
+  fi
+
+  local restart_output restart_exit=0
+  restart_output=$(run_with_timeout 180 nemoclaw "$SANDBOX_A" gateway restart 2>&1) || restart_exit=$?
+  if [[ $restart_exit -ne 0 ]]; then
+    fail "TC-SBX-08b: Forced Gateway Restart" "gateway restart exited $restart_exit: ${restart_output:0:500}"
+    return
+  fi
+
+  after=$(capture_openclaw_gateway_identity 2>&1) || true
+  after_gateway=$(printf '%s\n' "$after" | grep -E '^GATEWAY=gateway:[0-9]+:[0-9]+$' | tail -1 || true)
+  after_pid1=$(printf '%s\n' "$after" | sed -n 's/^PID1_START=//p' | tail -1)
+  after_identity="${after_gateway#GATEWAY=gateway:}"
+  if [[ -z "$after_gateway" || -z "$after_pid1" ]]; then
+    fail "TC-SBX-08b: Forced Gateway Restart" "Could not capture the post-restart gateway/PID1 identity: ${after:0:300}"
+    return
+  fi
+  if [[ "$after_identity" == "$before_identity" ]]; then
+    fail "TC-SBX-08b: Forced Gateway Restart" "Gateway PID/start-time identity did not change ($before_identity)"
+    return
+  fi
+  if [[ "$after_pid1" != "$before_pid1" ]]; then
+    fail "TC-SBX-08b: Forced Gateway Restart" "PID1 changed ($before_pid1 -> $after_pid1)"
+    return
+  fi
+
+  local session_id raw ssh_cfg rc=0 reply
+  session_id="e2e-sbx-08b-$(date +%s)-$$"
+  ssh_cfg="$(mktemp)"
+  if ! openshell sandbox ssh-config "$SANDBOX_A" >"$ssh_cfg" 2>/dev/null; then
+    rm -f "$ssh_cfg"
+    fail "TC-SBX-08b: Inference After Restart" "Failed to fetch SSH config"
+    return
+  fi
+  raw=$(run_with_timeout 120 ssh -F "$ssh_cfg" \
+    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    -o ConnectTimeout=10 -o LogLevel=ERROR \
+    "openshell-${SANDBOX_A}" \
+    "openclaw agent --agent main --json --session-id '${session_id}' -m 'What is 6 multiplied by 7? Reply with only the integer, no extra words.'" \
+    2>&1) || rc=$?
+  rm -f "$ssh_cfg"
+  reply=$(printf '%s' "$raw" | parse_openclaw_agent_text 2>/dev/null) || true
+  if [[ $rc -eq 0 && -n "$reply" ]] && e2e_text_contains_integer_42 "$reply"; then
+    pass "TC-SBX-08b: PID1 stayed stable, gateway PID changed, and live inference passed"
+  else
+    fail "TC-SBX-08b: Inference After Restart" "Expected 42 after restart (rc=$rc): ${raw:0:300}"
   fi
 }
 
@@ -862,6 +928,7 @@ main() {
 
   # Phase 2: Non-destructive recovery (sandbox A stays alive)
   test_sbx_07_registry_rebuild
+  test_sbx_08b_forced_gateway_restart
   test_sbx_08_process_recovery
 
   # Phase 3: Multi-sandbox (onboards sandbox B alongside A)

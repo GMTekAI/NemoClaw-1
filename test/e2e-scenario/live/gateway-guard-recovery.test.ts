@@ -4,10 +4,10 @@
 /**
  * Live E2E: gateway guard-chain recovery after pod-recreate /tmp wipe.
  *
- * Failing-test-first regression guard for NVIDIA/NemoClaw#2701. On `main` at
- * the time this test landed, `buildOpenClawRecoveryScript()` takes a
- * "warn-and-proceed" branch when `/tmp/nemoclaw-proxy-env.sh` is missing —
- * it logs `[gateway-recovery] WARNING` and launches the gateway naked. On
+ * Regression guard for NVIDIA/NemoClaw#2701. The historical recovery shell
+ * took a "warn-and-proceed" branch when `/tmp/nemoclaw-proxy-env.sh` was
+ * missing: it logged `[gateway-recovery] WARNING` and launched the gateway
+ * naked. On
  * aarch64 / DGX Spark this triggers an infinite crash loop in
  * `@homebridge/ciao` (`os.networkInterfaces()` throws because the OpenShell
  * netns blocks the syscall). The only manual recovery is a 5-min
@@ -25,8 +25,8 @@
  * #2701 acceptance scope for this PR:
  *   - Covered: the default OpenClaw production recovery route
  *     (`nemoclaw <sandbox> connect --probe-only` →
- *     checkAndRecoverSandboxProcesses() → `openshell sandbox exec -- sh -c`
- *     buildOpenClawRecoveryScript()) after the pod-recreate-equivalent state
+ *     checkAndRecoverSandboxProcesses() → authenticated PID 1 supervisor)
+ *     after the pod-recreate-equivalent state
  *     of an empty guard-chain `/tmp` plus no running gateway process. This
  *     proves the user no longer needs `nemoclaw <sandbox> rebuild --yes` for
  *     that recovered runtime state.
@@ -82,7 +82,7 @@ test("gateway recovery restores /tmp guard chain after pod-recreate wipe (#2701)
     acceptanceCoverage: {
       covered: [
         "production connect --probe-only recovery route",
-        "openshell sandbox exec -- sh -c OpenClaw recovery script",
+        "authenticated PID 1 OpenClaw recovery supervisor",
         "pod-recreate-equivalent empty /tmp guard chain plus missing gateway process",
         "no rebuild required for the recovered runtime state",
       ],
@@ -126,13 +126,17 @@ test("gateway recovery restores /tmp guard chain after pod-recreate wipe (#2701)
       ...buildAvailabilityProbeEnv(),
       OPENSHELL_GATEWAY: process.env.OPENSHELL_GATEWAY ?? "nemoclaw",
     },
-    timeoutMs: 90_000,
+    timeoutMs: 180_000,
   });
   cleanup.add(`recovery-result-${instance.sandboxName}`, async () => {
     await artifacts.writeJson("recovery-result.json", {
       exitCode: recoveryResult.exitCode,
     });
   });
+  expect(
+    recoveryResult.exitCode,
+    `connect --probe-only recovery failed\nstdout:\n${recoveryResult.stdout}\nstderr:\n${recoveryResult.stderr}`,
+  ).toBe(0);
 
   // ── Assert #2701 contract ────────────────────────────────────────
   // After recovery completes, the guard chain MUST be restored. Before the

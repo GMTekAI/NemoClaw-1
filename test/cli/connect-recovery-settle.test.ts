@@ -7,10 +7,10 @@
 // declaring a recovery that is already dying. Split from
 // connect-recovery.test.ts, which is at the default size budget.
 
-import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { describe, expect, it } from "vitest";
 
 import { runWithEnv, writeSandboxRegistry } from "./helpers";
 
@@ -74,6 +74,31 @@ describe("CLI dispatch", () => {
       ].join("\n"),
       { mode: 0o755 },
     );
+    fs.writeFileSync(
+      path.join(localBin, "docker"),
+      [
+        "#!/usr/bin/env bash",
+        "set -u",
+        `marker_file=${JSON.stringify(markerFile)}`,
+        `state_file=${JSON.stringify(stateFile)}`,
+        'printf \'docker %s\\n\' "$*" >> "$marker_file"',
+        'if [ "$1" = "info" ]; then echo "24.0.0"; exit 0; fi',
+        'if [ "$1" = "ps" ] && [ "$2" = "--format" ]; then',
+        "  echo openshell-alpha",
+        "  exit 0",
+        "fi",
+        'if [ "$#" -eq 7 ] && [ "$1" = "exec" ] && [ "$2" = "--user" ] && [ "$3" = "root" ] && [ "$4" = "openshell-alpha" ] && [ "$5" = "/usr/local/bin/nemoclaw-gateway-control" ] && [ "$6" = "recover" ]; then',
+        '  nonce="$7"',
+        '  case "$nonce" in *[!0-9a-f]*|"") exit 64 ;; esac',
+        '  [ "${#nonce}" -eq 64 ] || exit 64',
+        '  echo recovered > "$state_file"',
+        "  echo 'GATEWAY_PID=123'",
+        "  exit 0",
+        "fi",
+        "exit 65",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
 
     const r = runWithEnv("alpha connect --probe-only", {
       HOME: home,
@@ -89,6 +114,11 @@ describe("CLI dispatch", () => {
     );
     expect(r.out).toContain("#4710 wedge signature");
     expect(r.out).toContain("config change requires gateway restart (plugins.installs)");
+    const calls = fs.readFileSync(markerFile, "utf8");
+    expect(calls).toMatch(
+      /^docker exec --user root openshell-alpha \/usr\/local\/bin\/nemoclaw-gateway-control recover [0-9a-f]{64}$/m,
+    );
+    expect(calls).not.toContain("OPENCLAW=");
     // First probe succeeded, settle confirm observed the dropped listener.
     expect(fs.readFileSync(readyCountFile, "utf8").trim()).toBe("2");
   });

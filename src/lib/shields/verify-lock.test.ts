@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, expect, it } from "vitest";
 import path from "node:path";
+import { describe, expect, it } from "vitest";
 
 // Import from compiled dist/ for correct coverage attribution.
 async function loadVerifier(): Promise<typeof import("../../../dist/lib/shields/verify-lock")> {
@@ -64,6 +64,91 @@ describe("verifyShieldsLockState", () => {
         "dir owner=sandbox:sandbox (expected root:root)",
       ]),
     );
+  });
+
+  it("requires the sticky root-owned sandbox parent for a locked Hermes tree", async () => {
+    const { verifyShieldsLockState } = await loadVerifier();
+    const hermesTarget = {
+      agentName: "hermes",
+      configPath: "/sandbox/.hermes/config.yaml",
+      configDir: "/sandbox/.hermes",
+      sensitiveFiles: ["/sandbox/.hermes/.env", "/sandbox/.hermes/.config-hash"],
+    };
+    const clean = makeExec({
+      "/sandbox/.hermes/config.yaml": "444 root:root",
+      "/sandbox/.hermes/.env": "444 root:root",
+      "/sandbox/.hermes/.config-hash": "444 root:root",
+      "/sandbox/.hermes": "755 root:root",
+      "/sandbox": "1775 root:sandbox",
+    });
+
+    expect(
+      verifyShieldsLockState("hermes", hermesTarget, {
+        exec: clean,
+        verifyParentProtection: true,
+      }),
+    ).toEqual({ ok: true, issues: [] });
+
+    const replaceableParent = makeExec({
+      "/sandbox/.hermes/config.yaml": "444 root:root",
+      "/sandbox/.hermes/.env": "444 root:root",
+      "/sandbox/.hermes/.config-hash": "444 root:root",
+      "/sandbox/.hermes": "755 root:root",
+      "/sandbox": "755 sandbox:sandbox",
+    });
+    const drifted = verifyShieldsLockState("hermes", hermesTarget, {
+      exec: replaceableParent,
+      verifyParentProtection: true,
+    });
+    expect(drifted.ok).toBe(false);
+    expect(drifted.issues).toEqual(
+      expect.arrayContaining([
+        "parent dir mode=755 (expected 1775)",
+        "parent dir owner=sandbox:sandbox (expected root:sandbox)",
+      ]),
+    );
+  });
+
+  it("requires the same protected parent for OpenClaw but does not impose it on custom agents", async () => {
+    const { verifyShieldsLockState } = await loadVerifier();
+    const openClawTarget = { ...target, agentName: "openclaw" };
+    const replaceableParent = makeExec({
+      "/sandbox/.openclaw/openclaw.json": "444 root:root",
+      "/sandbox/.openclaw/.config-hash": "444 root:root",
+      "/sandbox/.openclaw": "755 root:root",
+      "/sandbox": "755 sandbox:sandbox",
+    });
+
+    expect(
+      verifyShieldsLockState("openclaw", openClawTarget, {
+        exec: replaceableParent,
+        verifyParentProtection: true,
+      }).issues,
+    ).toEqual(
+      expect.arrayContaining([
+        "parent dir mode=755 (expected 1775)",
+        "parent dir owner=sandbox:sandbox (expected root:sandbox)",
+      ]),
+    );
+
+    const customTarget = {
+      agentName: "dcode",
+      configPath: "/sandbox/.dcode/config.json",
+      configDir: "/sandbox/.dcode",
+      sensitiveFiles: ["/sandbox/.dcode/.config-hash"],
+    };
+    const customExec = makeExec({
+      "/sandbox/.dcode/config.json": "444 root:root",
+      "/sandbox/.dcode/.config-hash": "444 root:root",
+      "/sandbox/.dcode": "755 root:root",
+      "/sandbox": "755 sandbox:sandbox",
+    });
+    expect(
+      verifyShieldsLockState("dcode", customTarget, {
+        exec: customExec,
+        verifyParentProtection: true,
+      }),
+    ).toEqual({ ok: true, issues: [] });
   });
 
   it.each([

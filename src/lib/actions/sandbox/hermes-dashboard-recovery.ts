@@ -1,14 +1,16 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import * as agentRuntime from "../../agent/runtime";
 import * as registry from "../../state/registry";
 import type { SandboxForwardHealth } from "./forward-health";
-import type { SandboxCommandResult } from "./process-recovery";
 
-type RecoveryConfigReader = (
-  sandboxName: string,
-) => agentRuntime.HermesDashboardRecoveryConfig | null;
+export type HermesDashboardRecoveryConfig = {
+  publicPort: number;
+  internalPort: number;
+  tuiEnabled?: boolean;
+};
+
+type RecoveryConfigReader = (sandboxName: string) => HermesDashboardRecoveryConfig | null;
 
 function isValidPort(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1024 && value <= 65535;
@@ -17,7 +19,7 @@ function isValidPort(value: unknown): value is number {
 export function getHermesDashboardRecoveryConfig(
   sandboxName: string,
   getSandbox: typeof registry.getSandbox = registry.getSandbox,
-): agentRuntime.HermesDashboardRecoveryConfig | null {
+): HermesDashboardRecoveryConfig | null {
   const sandbox = getSandbox(sandboxName);
   if (sandbox?.agent !== "hermes" || sandbox.hermesDashboardEnabled !== true) return null;
   if (!isValidPort(sandbox.hermesDashboardPort)) return null;
@@ -43,25 +45,4 @@ export function ensureHermesDashboardPortForwardIfEnabled(
   if (forwardHealth === true) return true;
   if (forwardHealth === "occupied") return false;
   return deps.ensurePortForward(sandboxName, dashboard.publicPort);
-}
-
-export function recoverHermesDashboardProcessIfEnabled(
-  sandboxName: string,
-  deps: {
-    getRecoveryConfig?: RecoveryConfigReader;
-    executeCommand(sandboxName: string, command: string): SandboxCommandResult | null;
-    buildRecoveryScript?: typeof agentRuntime.buildHermesDashboardProcessRecoveryScript;
-  },
-): boolean | null {
-  const dashboard = (deps.getRecoveryConfig ?? getHermesDashboardRecoveryConfig)(sandboxName);
-  if (dashboard === null) return null;
-  const buildRecoveryScript =
-    deps.buildRecoveryScript ?? agentRuntime.buildHermesDashboardProcessRecoveryScript;
-  const result = deps.executeCommand(sandboxName, buildRecoveryScript(dashboard));
-  return !!(
-    result &&
-    result.status === 0 &&
-    (result.stdout.includes("DASHBOARD_PID=") ||
-      result.stdout.includes("DASHBOARD_ALREADY_RUNNING"))
-  );
 }

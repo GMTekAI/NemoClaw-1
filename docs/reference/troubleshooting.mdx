@@ -623,6 +623,97 @@ If the sandbox was intentionally deleted and you want a clean setup instead, run
 Create a snapshot first when the sandbox is reachable enough to back up state. For details, refer to [Back Up and Restore](../manage-sandboxes/backup-restore).
 </Warning>
 
+### `gateway restart` or `recover` reports `privileged control unavailable`
+
+Built-in OpenClaw and Hermes lifecycle commands require a running direct sandbox container that belongs to the named NemoClaw registry entry.
+The host uses registry-scoped privileged direct-container control to send an authenticated request to the root-owned PID 1 supervisor.
+It does not fall back to ordinary `openshell sandbox exec`, SSH, or a manual in-sandbox relaunch.
+
+This control path requires a direct sandbox container whose PID 1 is the built-in NemoClaw image entrypoint running as root.
+A VM host is supported only when its direct sandbox container uses that root entrypoint.
+Non-root direct-container entrypoints, including VM deployments that launch the image as non-root, cannot use this path and fail with `privileged control unavailable`.
+Rebuild or recreate those sandboxes with the current built-in image in a supported root-entrypoint deployment.
+Kubernetes and other deployments without a matching direct container also fail closed with `privileged control unavailable`.
+Run the lifecycle command from a supported direct-container deployment rather than trying to launch the gateway by hand.
+
+On a direct-container deployment, first confirm that the sandbox is running:
+
+```bash
+$$nemoclaw <name> status
+```
+
+If another lifecycle request is in progress, the helper reports `SUPERVISOR_BUSY`.
+This error is retryable.
+Wait for the active request to finish and retry once.
+If the error mentions `SUPERVISOR_REBUILD_REQUIRED`, `SUPERVISOR_UNAVAILABLE`, or a missing `nemoclaw-gateway-control` helper, the sandbox image predates the supervisor contract.
+Rebuild the image before retrying:
+
+```bash
+$$nemoclaw <name> rebuild --yes
+```
+
+For a custom image, update its Dockerfile to preserve the current NemoClaw entrypoint, root-only gateway control helper, and shared supervisor library before rebuilding.
+
+### Hermes config or shields reports a mutation already in progress
+
+Hermes host config writes, shields transitions, and lifecycle seals use the same root-only mutation lock.
+A host-side config write is bound to the SHA-256 digest of the matching read, installs fresh sealed config inodes, refreshes both config hashes, and restores the prior permissions before releasing that lock.
+For shields changes, the lock remains held through recursive state-directory updates, config verification, and content-seal capture.
+If a concurrent config or shields command reports `Hermes config mutation is already in progress`, do not remove `/run/nemoclaw/hermes-config-mutation.lock` manually.
+Wait for the active config, shields, recovery, or restart command to finish, then retry.
+If the command says shields are up, run `$$nemoclaw <name> shields down` before `config set` or `inference set`.
+
+### Hermes startup reports `HERMES_CONFIG_MUTATION_ORPHANED`
+
+This refusal means a root-owned config or shields transaction stopped without a safely recoverable complete state.
+NemoClaw intentionally does not guess whether a partially updated recursive state tree should be locked or mutable, and it does not treat a leftover lock file as permission to continue.
+Do not delete `/run/nemoclaw/hermes-config-mutation.lock`, the restart state, or the persistent transaction marker manually.
+The config root remains sealed from the sandbox identity, so an ordinary in-place `rebuild` cannot create a new trustworthy backup and will stop before deleting the sandbox.
+If you already have a trusted host-side snapshot, record its selector, destroy the sealed sandbox, re-onboard the same sandbox name from trusted host configuration, and then restore that snapshot:
+
+```bash
+$$nemoclaw <name> snapshot list
+$$nemoclaw <name> destroy
+$$nemoclaw onboard --name <name> --agent hermes
+$$nemoclaw <name> snapshot restore <selector>
+```
+
+Destroying the sealed sandbox permanently discards any state newer than the selected snapshot, so verify that the host-side snapshot exists before confirming destruction.
+Without a trusted pre-incident snapshot, automatic state-preserving recovery is not available.
+Recreate the sandbox from host-side onboarding configuration only if you accept losing the inaccessible in-sandbox state.
+
+### Hermes startup reports `HERMES_RESTART_SEAL_ORPHANED`
+
+This refusal means a container recreation discarded the root-only restart metadata under `/run` while the persistent `/sandbox` tree still carries the frozen transaction marker, or a non-root entrypoint found a root transaction it cannot safely restore.
+NemoClaw cannot safely infer the original ownership, modes, or inode flags from a partial seal, so startup fails closed even when `config.yaml` and `.env` still look readable.
+Do not repair the paths with manual `chown`, `chmod`, or hash regeneration.
+An ordinary `rebuild` cannot safely back up a sealed tree.
+Restore a trusted snapshot into a new sandbox as shown above, or recreate from host-side onboarding configuration if no state-preserving recovery is required.
+
+### Hermes startup reports `HERMES_LOCKED_PARENT_UNPROTECTED`
+
+This refusal means Hermes config files look shields-locked but `/sandbox` is not `root:sandbox 1775`, so the sandbox identity could rename the entire `.hermes` lock root.
+`shields up` cannot repair this after PID 1 has refused startup.
+Do not change the parent ownership manually or accept the current bytes as a new seal.
+Restore a trusted pre-incident snapshot into a new sandbox, or recreate the sandbox from host-side onboarding configuration.
+
+### OpenClaw startup reports `OPENCLAW_LOCKED_PARENT_UNPROTECTED`
+
+This refusal means the OpenClaw config directory is root-owned but `/sandbox` is not `root:sandbox 1775`, so the sandbox identity could rename the entire `.openclaw` lock root.
+PID 1 refuses startup before migration or config reads, and `shields up` cannot repair the parent after that refusal.
+Do not change the parent ownership manually or accept the current bytes as a new seal.
+If you have a trusted host-side snapshot from before the incident, record its selector, destroy the refused sandbox, re-onboard the same sandbox name from trusted host configuration, and restore that snapshot:
+
+```bash
+$$nemoclaw <name> snapshot list
+$$nemoclaw <name> destroy
+$$nemoclaw onboard --name <name> --agent openclaw
+$$nemoclaw <name> snapshot restore <selector>
+```
+
+Destroying the refused sandbox permanently discards state newer than the selected snapshot, so confirm that the host-side snapshot exists before destruction.
+Without a trusted pre-incident snapshot, recreate the sandbox from host-side onboarding configuration only if you accept losing the inaccessible in-sandbox state.
+
 ### Sandbox is running an outdated agent version
 
 After upgrading NemoClaw, `$$nemoclaw <name> connect` and `$$nemoclaw <name> status` warn if the sandbox is running an older agent version than the current image.
@@ -1619,6 +1710,26 @@ After the rebuild completes, return to the Skills page to confirm the skill is r
 
 The issues below are common problems you may encounter when running Hermes through `nemohermes`.
 For setup, refer to [Quickstart with Hermes](../../hermes/get-started/quickstart).
+
+### Hermes restart reports `config hash mismatch`
+
+Every Hermes restart verifies `/sandbox/.hermes/config.yaml` and `/sandbox/.hermes/.env` against the strict root-owned hash at `/etc/nemoclaw/hermes.config-hash`.
+The PID 1 supervisor validates the secret boundary and runtime environment before it stops the tracked gateway, then checks the strict hash again before launch.
+It does not recompute the trusted hash to adopt direct edits made inside the sandbox.
+
+For intended changes, use supported host commands such as `nemohermes <name> config set` and `nemohermes inference set` so NemoClaw updates the config and its strict and compatibility hashes together.
+Do not edit either hash file manually.
+
+If direct edits have already caused a mismatch, restore the original config and environment files or rebuild from the registered configuration:
+
+```bash
+nemohermes <name> rebuild --yes
+```
+
+If the command instead reports `secret-boundary refusal`, inspect `/sandbox/.hermes/.env` for raw secret-shaped values.
+Replace them through the supported credential flow so the file contains `openshell:resolve:env:<name>` placeholders, then run `nemohermes <name> recover`.
+Hermes PID 1 remains responsible for the gateway, dashboard, and internal API and dashboard relays throughout recovery.
+The host only repairs the host-side OpenShell forwards after the supervised processes pass health checks.
 
 ### Port 8642 in a browser shows a blank page or `Cannot GET /`
 

@@ -98,6 +98,62 @@ function withFakeOpenshellBinary<T>(fn: () => T): T {
 }
 
 describe("checkAndRecoverSandboxProcesses custom agent recovery", () => {
+  it("retains SSH health-probe compatibility for an explicitly loaded custom gateway agent", () => {
+    const openshellRuntime = requireDist("../dist/lib/adapters/openshell/runtime.js");
+    const agentRuntime = requireDist("../dist/lib/agent/runtime.js");
+    const registry = requireDist("../dist/lib/state/registry.js");
+    const forwardHealth = requireDist("../dist/lib/actions/sandbox/forward-health.js");
+    const childProcess = requireDist("node:child_process");
+    const sshCommands: string[] = [];
+
+    vi.spyOn(openshellRuntime, "captureSandboxSshConfig").mockReturnValue({
+      status: 0,
+      output: "Host openshell-custom-box\n  HostName 127.0.0.1\n",
+    } as never);
+    vi.spyOn(childProcess, "spawnSync").mockImplementation((command: unknown, rawArgs: unknown) => {
+      if (String(command).endsWith("openshell")) {
+        return { status: 1, stdout: "", stderr: "sandbox exec unavailable" } as never;
+      }
+      if (command === "ssh") {
+        const sshCommand = getSandboxExecShellCommand(rawArgs);
+        sshCommands.push(sshCommand);
+        return { status: 0, stdout: "RUNNING\n", stderr: "" } as never;
+      }
+      return { status: 1, stdout: "", stderr: "" } as never;
+    });
+    vi.spyOn(agentRuntime, "getSessionAgent").mockReturnValue({
+      name: "custom-agent",
+      displayName: "Custom Agent",
+      binary_path: "/usr/local/bin/custom-agent",
+      gateway_command: "custom-agent gateway run",
+      forwardPort: 19000,
+      healthProbe: { url: "http://127.0.0.1:19000/health", port: 19000 },
+    });
+    vi.spyOn(registry, "getSandbox").mockReturnValue({
+      name: "custom-box",
+      agent: "custom-agent",
+      dashboardPort: 19000,
+    });
+    vi.spyOn(forwardHealth, "isLocalForwardReachable").mockReturnValue(true);
+    vi.spyOn(openshellRuntime, "captureOpenshell").mockReturnValue({
+      status: 0,
+      output: `SANDBOX  BIND  PORT  PID  STATUS
+custom-box  127.0.0.1  19000  12345  running`,
+    });
+
+    expect(
+      withFakeOpenshellBinary(() => checkAndRecoverSandboxProcesses("custom-box", { quiet: true })),
+    ).toEqual({
+      checked: true,
+      wasRunning: true,
+      recovered: false,
+      forwardRecovered: false,
+    });
+    expect(sshCommands).toHaveLength(1);
+    expect(sshCommands[0]).toContain("HTTP_CODE=$(curl");
+    expect(sshCommands[0]).not.toContain("gateway run");
+  });
+
   it("recovers a stopped custom gateway agent over SSH fallback", () => {
     const openshellRuntime = requireDist("../dist/lib/adapters/openshell/runtime.js");
     const agentRuntime = requireDist("../dist/lib/agent/runtime.js");
@@ -174,5 +230,53 @@ custom-box  127.0.0.1  19000  12345  running`;
       restoreEnvValue("NEMOCLAW_GATEWAY_RECOVERY_POLL_INTERVAL_SECONDS", previousPollInterval);
       restoreEnvValue("NEMOCLAW_GATEWAY_RECOVERY_SETTLE_SECONDS", previousSettleSeconds);
     }
+  });
+
+  it("fails closed when a persisted non-OpenClaw manifest cannot be loaded", () => {
+    const agentRuntime = requireDist("../dist/lib/agent/runtime.js");
+    const registry = requireDist("../dist/lib/state/registry.js");
+    const childProcess = requireDist("node:child_process");
+    const commands: string[] = [];
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    vi.spyOn(childProcess, "spawnSync").mockImplementation((command: unknown, rawArgs: unknown) => {
+      commands.push(`${String(command)} ${getSandboxExecShellCommand(rawArgs)}`);
+      return {
+        status: 0,
+        stdout: "__NEMOCLAW_SANDBOX_EXEC_STARTED__\nSTOPPED\n",
+        stderr: "",
+      } as never;
+    });
+    vi.spyOn(agentRuntime, "getSessionAgent").mockReturnValue(null);
+    vi.spyOn(registry, "getSandbox").mockReturnValue({
+      name: "custom-box",
+      agent: "missing-custom-agent",
+      dashboardPort: 19000,
+    });
+
+    expect(
+      withFakeOpenshellBinary(() =>
+        checkAndRecoverSandboxProcesses("custom-box", { quiet: false }),
+      ),
+    ).toEqual({
+      checked: true,
+      wasRunning: false,
+      recovered: false,
+      forwardRecovered: false,
+    });
+
+    expect(commands.join("\n")).not.toContain("openclaw gateway run");
+    expect(commands.some((command) => command.startsWith("ssh "))).toBe(false);
+    const errorOutput = errorSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
+    expect(errorOutput).toContain("unsupported agent");
+    expect(errorOutput).toContain("missing-custom-agent agent definition could not be loaded");
+    expect(errorOutput).toContain("nemoclaw 'custom-box' recover");
+    expect(errorOutput).not.toContain("nemoclaw 'custom-box' gateway restart");
+    expect(errorOutput).toContain("nemoclaw 'custom-box' rebuild --yes");
+    expect(errorOutput).not.toContain("nohup");
+    const logOutput = logSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
+    expect(logOutput).toContain("missing-custom-agent gateway is not running");
+    expect(logOutput).not.toContain("OpenClaw gateway");
   });
 });

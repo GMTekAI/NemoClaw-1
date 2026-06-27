@@ -3,7 +3,7 @@
 
 import type { SpawnSyncReturns } from "node:child_process";
 
-import { runOpenshell } from "../adapters/openshell/runtime";
+import { getOpenshellBinary, runOpenshell } from "../adapters/openshell/runtime";
 import { CLI_NAME } from "../cli/branding";
 import { HERMES_PROXY_API_KEY_PLACEHOLDER } from "../hermes-proxy-api-key";
 import {
@@ -12,8 +12,8 @@ import {
   type SandboxInferenceConfig,
 } from "../inference/config";
 import { resolveContextWindowForModel } from "../inference/context-window";
-import { inferenceSelectionRegistryFields } from "../inference/selection";
 import { type ValidationResult, validateLocalProvider } from "../inference/local";
+import { inferenceSelectionRegistryFields } from "../inference/selection";
 import { ensureLocalProviderReachable } from "../onboard/local-inference-topology";
 import {
   type AgentConfigTarget,
@@ -25,6 +25,7 @@ import {
 import type { ConfigObject, ConfigValue } from "../security/credential-filter";
 import { isConfigObject, isConfigValue } from "../security/credential-filter";
 import { appendAuditEntry } from "../shields/audit";
+import { withTimerBoundShieldsMutationLockAsync } from "../shields/timer-bound-lock";
 import * as onboardSession from "../state/onboard-session";
 import type { SandboxEntry } from "../state/registry";
 import * as registry from "../state/registry";
@@ -72,6 +73,7 @@ export interface InferenceSetDeps {
     config: ConfigObject,
   ) => void;
   recomputeSandboxConfigHash: (sandboxName: string, target: AgentConfigTarget) => void;
+  prepareRunOpenshell: () => void;
   runOpenshell: (args: string[], opts?: { ignoreError?: boolean }) => OpenshellRunResult;
   appendAuditEntry: typeof appendAuditEntry;
   log: (message: string) => void;
@@ -79,6 +81,7 @@ export interface InferenceSetDeps {
   validateLocalProvider: (provider: string) => ValidationResult;
   ensureLocalProviderReachable: (provider: string) => boolean;
   resolveContextWindowForModel: (provider: string, model: string) => number | null;
+  isSandboxConfigMutable: (sandboxName: string) => boolean;
 }
 
 export class InferenceSetError extends Error {
@@ -118,6 +121,9 @@ function defaultDeps(): InferenceSetDeps {
     readSandboxConfig,
     writeSandboxConfig,
     recomputeSandboxConfigHash,
+    prepareRunOpenshell: () => {
+      getOpenshellBinary();
+    },
     runOpenshell: (args, opts) => runOpenshell(args, opts),
     appendAuditEntry,
     log: console.log,
@@ -126,6 +132,10 @@ function defaultDeps(): InferenceSetDeps {
     validateLocalProvider,
     ensureLocalProviderReachable,
     resolveContextWindowForModel,
+    isSandboxConfigMutable: (sandboxName) => {
+      const { isShieldsDown }: typeof import("../shields") = require("../shields");
+      return isShieldsDown(sandboxName, true);
+    },
   };
 }
 
@@ -534,7 +544,7 @@ function registryMetadataForProviderSwitch(options: {
   };
 }
 
-export async function runInferenceSet(
+async function runInferenceSetWithoutHostLock(
   options: InferenceSetOptions,
   deps: InferenceSetDeps = defaultDeps(),
 ): Promise<InferenceSetResult> {
@@ -560,6 +570,12 @@ export async function runInferenceSet(
   if (targetAgent !== agentName) {
     throw new InferenceSetError(
       `Sandbox '${sandboxName}' is registered as '${agentName}' but resolved config for '${target.agentName}'.`,
+      2,
+    );
+  }
+  if (!deps.isSandboxConfigMutable(sandboxName)) {
+    throw new InferenceSetError(
+      `${agentName === "hermes" ? "Hermes" : "OpenClaw"} inference changes are unavailable while shields are up for '${sandboxName}'. Run '${CLI_NAME} ${sandboxName} shields down' first.`,
       2,
     );
   }
@@ -755,4 +771,20 @@ export async function runInferenceSet(
     sessionUpdated,
     inSandboxConfigSynced,
   };
+}
+
+export async function runInferenceSet(
+  options: InferenceSetOptions,
+  deps: InferenceSetDeps = defaultDeps(),
+): Promise<InferenceSetResult> {
+  // Resolve once before acquiring so a default-sandbox change cannot make the
+  // protected callback mutate a different sandbox from the one whose lock we
+  // hold. Prime the default OpenShell runner before acquiring too: its legacy
+  // missing-binary path exits the process, which cannot be deferred safely by
+  // an async lock. The inner resolution still validates the live registry entry.
+  const selected = resolveTargetSandbox(options.sandboxName, deps);
+  deps.prepareRunOpenshell();
+  return withTimerBoundShieldsMutationLockAsync(selected.sandboxName, "inference set", () =>
+    runInferenceSetWithoutHostLock({ ...options, sandboxName: selected.sandboxName }, deps),
+  );
 }

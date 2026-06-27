@@ -171,6 +171,8 @@ $$nemoclaw <sandbox-name> recover
 The command repairs a stopped in-sandbox gateway and re-establishes the dashboard port-forward in one step.
 It is idempotent and safe to script.
 If the gateway is already healthy, `recover` exits after the probe and does not restart it.
+For built-in OpenClaw and Hermes sandboxes, recovery sends an authenticated request to the root-owned PID 1 supervisor through registry-scoped privileged direct-container control.
+It does not fall back to ordinary `openshell sandbox exec` or a manual relaunch inside the sandbox.
 Refer to [`$$nemoclaw <name> recover`](../reference/commands#$$nemoclaw-name-recover) for details.
 
 Use `gateway restart` when you intentionally need a supported OpenClaw or Hermes gateway to reload runtime configuration or plugins.
@@ -179,8 +181,21 @@ Use `gateway restart` when you intentionally need a supported OpenClaw or Hermes
 $$nemoclaw <sandbox-name> gateway restart
 ```
 
-The restart command force-restarts the gateway through the host-mediated path, waits for health, and checks or recovers the dashboard and agent forwards.
+The restart command asks the same PID 1 supervisor to stop its tracked gateway child, launch a replacement, and wait for health.
+The host then checks or recovers host-side dashboard, messaging, and agent forwards.
+For Hermes, PID 1 owns the gateway, dashboard process, and internal API and dashboard relays.
+The host does not start those in-sandbox processes independently.
 Refer to [`$$nemoclaw <name> gateway restart`](../reference/commands#$$nemoclaw-name-gateway-restart) for details.
+
+The privileged lifecycle path requires a running direct sandbox container whose PID 1 is the built-in NemoClaw image entrypoint running as root.
+A VM host is supported only when its direct sandbox container uses that root entrypoint.
+Non-root direct-container entrypoints, including VM deployments that launch the image as non-root, cannot use this path and fail closed with `privileged control unavailable`; rebuild or recreate the sandbox with the current built-in image in a supported root-entrypoint deployment.
+Kubernetes and other deployments without a direct container also fail closed with `privileged control unavailable`.
+If a direct-container sandbox uses an older image without the supervisor helper, rebuild it before retrying:
+
+```bash
+$$nemoclaw <sandbox-name> rebuild --yes
+```
 
 ### Reset a Stored Credential
 
@@ -209,6 +224,12 @@ $$nemoclaw <sandbox-name> rebuild
 
 The rebuild command preserves the mounted workspace and registered policies while recreating the container.
 If NemoClaw cannot archive any requested state path, it reports the backup failure and stops before deleting the original sandbox.
+When rebuild starts with shields up, NemoClaw opens a 30-minute shields-down window for backup and recreation.
+A detached auto-lock timer remains the recovery authority until NemoClaw commits a successful shields-up state, including when the host rebuild process exits unexpectedly.
+<AgentOnly variant="hermes">
+For an older Hermes image that predates sealed shields transitions, only the rebuild workflow may use the descriptor-safe compatibility transition needed to archive and replace the sandbox.
+That transition verifies the strict and compatibility hashes and publishes fresh config inodes before changing their lock posture, while ordinary `shields up` and `shields down` commands continue to refuse the older protocol.
+</AgentOnly>
 Refer to [`$$nemoclaw <name> rebuild`](../reference/commands#$$nemoclaw-name-rebuild) for flag details.
 
 ### Add a Network Preset After Onboarding

@@ -135,4 +135,41 @@ describe("waitForRecoveredSandboxGateway — #4710 settle-window confirm", () =>
     });
     expect(ok).toBe(false);
   });
+
+  it("uses the manifest health timeout threaded by the recovery caller", () => {
+    process.env.NEMOCLAW_GATEWAY_RECOVERY_POLL_INTERVAL_SECONDS = "3";
+    process.env.NEMOCLAW_GATEWAY_RECOVERY_SETTLE_SECONDS = "0";
+    let probes = 0;
+
+    const ok = waitForRecoveredSandboxGateway("hermes-box", {
+      probeImpl: () => {
+        probes += 1;
+        return false;
+      },
+      sleepImpl: () => {},
+      timeoutSeconds: 90,
+    });
+
+    expect(ok).toBe(false);
+    expect(probes).toBe(31);
+  });
+
+  it("lets the recovery wait environment override take precedence over the manifest timeout", () => {
+    process.env.NEMOCLAW_GATEWAY_RECOVERY_WAIT_SECONDS = "6";
+    process.env.NEMOCLAW_GATEWAY_RECOVERY_POLL_INTERVAL_SECONDS = "3";
+    process.env.NEMOCLAW_GATEWAY_RECOVERY_SETTLE_SECONDS = "0";
+    let probes = 0;
+
+    const ok = waitForRecoveredSandboxGateway("hermes-box", {
+      probeImpl: () => {
+        probes += 1;
+        return false;
+      },
+      sleepImpl: () => {},
+      timeoutSeconds: 90,
+    });
+
+    expect(ok).toBe(false);
+    expect(probes).toBe(3);
+  });
 });

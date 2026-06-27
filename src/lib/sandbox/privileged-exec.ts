@@ -1,18 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-const { dockerCapture } = require("../adapters/docker/run");
-const registry = require("../state/registry") as {
-  getSandbox?: (name: string) => { name?: string; openshellDriver?: string | null } | null;
-  listSandboxes?: () => {
-    sandboxes?: Array<{ name?: string | null }>;
-    defaultSandbox?: string | null;
-  };
-  load?: () => {
-    sandboxes?: Record<string, { name?: string | null }>;
-    defaultSandbox?: string | null;
-  };
-};
+import { dockerCapture } from "../adapters/docker/run";
+import * as registry from "../state/registry";
 
 type SandboxEntry = {
   name?: string;
@@ -71,20 +61,30 @@ function selectDirectSandboxContainer(
   const names = Array.from(new Set([...registeredNames, sandboxName])).sort(
     (a, b) => b.length - a.length || a.localeCompare(b),
   );
-  const candidates = containerNames
-    .split("\n")
-    .map((line: string) => line.trim())
-    .filter(Boolean)
-    .filter((containerName: string) => {
-      if (!containerNameMatchesSandbox(containerName, sandboxName)) return false;
-      return owningRegisteredSandboxName(containerName, names) === sandboxName;
-    });
-
-  return (
-    candidates.find((containerName: string) => containerName === `openshell-${sandboxName}`) ??
-    candidates[0] ??
-    null
+  const candidates = Array.from(
+    new Set(
+      containerNames
+        .split("\n")
+        .map((line: string) => line.trim())
+        .filter(Boolean)
+        .filter((containerName: string) => {
+          if (!containerNameMatchesSandbox(containerName, sandboxName)) return false;
+          return owningRegisteredSandboxName(containerName, names) === sandboxName;
+        }),
+    ),
   );
+
+  const exact = candidates.find(
+    (containerName: string) => containerName === `openshell-${sandboxName}`,
+  );
+  if (exact) return exact;
+  if (candidates.length === 1) return candidates[0];
+  if (candidates.length > 1) {
+    throw new Error(
+      `Multiple running direct OpenShell containers match registered sandbox '${sandboxName}': ${candidates.join(", ")}. Refusing privileged exec without an exact container identity.`,
+    );
+  }
+  return null;
 }
 
 function expectedDirectContainerPattern(sandboxName: string): string {
@@ -113,6 +113,13 @@ function missingRegistryEntryError(sandboxName: string): Error {
   );
 }
 
+function unsupportedDirectDriverError(sandboxName: string, driver: string): Error {
+  return new Error(
+    `Privileged direct-container control is unavailable for sandbox '${sandboxName}' ` +
+      `(driver: ${driver}); refusing local Docker discovery for a non-direct driver.`,
+  );
+}
+
 function resolveDirectSandboxContainer(sandboxName: string, driver: string | null): string {
   const selected = findDirectSandboxContainer(sandboxName);
   if (selected) return selected;
@@ -123,6 +130,9 @@ function privilegedSandboxExecArgv(sandboxName: string, cmd: string[], stdin = f
   const entry = readSandboxEntry(sandboxName);
   if (!entry) throw missingRegistryEntryError(sandboxName);
   const driver = normalizeDriver(entry?.openshellDriver);
+  if (driver !== null && driver !== "docker" && driver !== "vm") {
+    throw unsupportedDirectDriverError(sandboxName, driver);
+  }
 
   // Docker/direct-container is the only supported privileged mutation path.
   // Try it even when older registry entries do not record a driver, then fail
@@ -137,7 +147,7 @@ function privilegedSandboxExecArgv(sandboxName: string, cmd: string[], stdin = f
 
 export {
   containerNameMatchesSandbox,
-  selectDirectSandboxContainer,
-  resolveDirectSandboxContainer,
   privilegedSandboxExecArgv,
+  resolveDirectSandboxContainer,
+  selectDirectSandboxContainer,
 };

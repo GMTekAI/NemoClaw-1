@@ -1,0 +1,96 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+
+describe("Hermes host config transaction wiring", () => {
+  it("passes the exact read digest and serialized update to the sealed write transaction", () => {
+    const rawConfig = "model:\n  default: trusted-model\n";
+    const expectedDigest = createHash("sha256").update(rawConfig).digest("hex");
+    const script = String.raw`
+const Module = require("node:module");
+const path = require("node:path");
+const root = process.cwd();
+const dist = (...parts) => path.join(root, "dist", "lib", ...parts);
+function installMock(filename, exports) {
+  const resolved = require.resolve(filename);
+  const replacement = new Module(resolved);
+  replacement.filename = resolved;
+  replacement.loaded = true;
+  replacement.exports = exports;
+  require.cache[resolved] = replacement;
+}
+
+const rawConfig = ${JSON.stringify(rawConfig)};
+let captured = null;
+installMock(dist("runner.js"), { validateName: () => undefined, ROOT: root });
+installMock(dist("state", "registry.js"), {
+  getSandbox: () => ({ name: "alpha", agent: "hermes" }),
+});
+installMock(dist("agent", "defs.js"), {
+  loadAgent: () => ({
+    configPaths: { dir: "/sandbox/.hermes", configFile: "config.yaml", format: "yaml" },
+  }),
+});
+installMock(dist("adapters", "openshell", "client.js"), {
+  captureOpenshellCommand: () => ({ status: 0, output: rawConfig }),
+  runOpenshellCommand: () => ({ status: 0 }),
+});
+installMock(dist("sandbox", "privileged-exec.js"), {
+  privilegedSandboxExecArgv: (sandboxName, command, stdin) => [
+    "docker", "exec", ...(stdin ? ["-i"] : []), sandboxName, ...command,
+  ],
+});
+installMock(dist("adapters", "docker", "exec.js"), {
+  dockerExecFileSync: (argv, options) => {
+    captured = { argv, options };
+    return "updated=1\n";
+  },
+});
+
+const config = require(dist("sandbox", "config.js"));
+const target = config.resolveAgentConfig("alpha");
+const parsed = config.readSandboxConfig("alpha", target);
+parsed.model.default = "trusted-model-v2";
+config.writeSandboxConfig("alpha", target, parsed);
+process.stdout.write(JSON.stringify(captured));
+`;
+
+    const result = spawnSync(process.execPath, ["-e", script], {
+      cwd: path.join(import.meta.dirname, ".."),
+      encoding: "utf-8",
+      timeout: 5000,
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    const captured = JSON.parse(result.stdout) as {
+      argv: string[];
+      options: { input: string; timeout: number; stdio: string[] };
+    };
+    const digestFlag = captured.argv.indexOf("--expected-config-sha256");
+    expect(captured.argv).toEqual(
+      expect.arrayContaining([
+        "-i",
+        "timeout",
+        "--signal=TERM",
+        "--kill-after=5s",
+        "2m",
+        "write-config",
+        "--hermes-dir",
+        "/sandbox/.hermes",
+        "--hash-file",
+        "/etc/nemoclaw/hermes.config-hash",
+        "--state-file",
+        "/run/nemoclaw/hermes-restart-seal.json",
+      ]),
+    );
+    expect(digestFlag).toBeGreaterThanOrEqual(0);
+    expect(captured.argv[digestFlag + 1]).toBe(expectedDigest);
+    expect(captured.options.input).toContain("default: trusted-model-v2");
+    expect(captured.options.timeout).toBe(150000);
+    expect(captured.options.stdio).toEqual(["pipe", "pipe", "pipe"]);
+  });
+});

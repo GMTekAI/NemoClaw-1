@@ -30,10 +30,13 @@ describe("Hermes doctor and config hash boundary", () => {
       fs.mkdirSync(profileDir, { recursive: true });
       for (const relativePath of [
         path.join(binDir, "nemoclaw-start"),
+        path.join(binDir, "nemoclaw-gateway-control"),
         path.join(libDir, "sandbox-init.sh"),
+        path.join(libDir, "gateway-supervisor.sh"),
         path.join(libDir, "validate-hermes-env-secret-boundary.py"),
         path.join(libDir, "seed-hermes-dashboard-config.py"),
         path.join(libDir, "hermes-runtime-config-guard.py"),
+        path.join(libDir, "state-dir-guard.py"),
         path.join(libDir, "sandbox-rlimits.sh"),
         path.join(preloadsDir, "gateway-safety-net.js"),
         path.join(nestedDir, "ciao-preload.js"),
@@ -63,7 +66,16 @@ describe("Hermes doctor and config hash boundary", () => {
 
       expect(result.status).toBe(0);
       expect(result.stderr).toBe("");
-      expect(fs.readFileSync(chownLogPath, "utf-8")).toBe(`-R 0:0 ${preloadsDir}\n`);
+      expect(fs.readFileSync(chownLogPath, "utf-8")).toBe(
+        [
+          `root:root ${path.join(binDir, "nemoclaw-gateway-control")} ${path.join(libDir, "gateway-supervisor.sh")} ${path.join(libDir, "state-dir-guard.py")}`,
+          `-R 0:0 ${preloadsDir}`,
+          "",
+        ].join("\n"),
+      );
+      expect(mode(path.join(binDir, "nemoclaw-gateway-control"))).toBe("700");
+      expect(mode(path.join(libDir, "gateway-supervisor.sh"))).toBe("444");
+      expect(mode(path.join(libDir, "state-dir-guard.py"))).toBe("500");
       expect(mode(preloadsDir)).toBe("755");
       expect(mode(nestedDir)).toBe("755");
       expect(mode(path.join(preloadsDir, "gateway-safety-net.js"))).toBe("444");

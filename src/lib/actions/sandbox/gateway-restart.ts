@@ -14,10 +14,10 @@ export type GatewayRestartCommandResult = {
 
 export type GatewayRestartFailureLayer =
   | "unsupported agent"
-  | "root exec unavailable"
+  | "privileged control unavailable"
   | "secret-boundary refusal"
   | "unsafe config path"
-  | "hash mismatch while locked"
+  | "config hash mismatch"
   | "launch failure"
   | "health timeout"
   | "forward recovery failure";
@@ -37,6 +37,12 @@ export type GatewayRestartResult =
 
 type SandboxAgentLookup = (sandboxName: string) => { agent?: string | null } | null | undefined;
 
+type SupervisorAction = (
+  sandboxName: string,
+  action: "restart" | "recover",
+  timeout?: number,
+) => GatewayRestartCommandResult | null;
+
 type SandboxExec = (
   sandboxName: string,
   command: string,
@@ -49,13 +55,14 @@ export type GatewayRestartDeps = {
   getSessionAgent: typeof agentRuntime.getSessionAgent;
   getSandbox: SandboxAgentLookup;
   resolveSandboxDashboardPort: (sandboxName: string) => number;
-  buildOpenClawGatewayRestartScript: typeof agentRuntime.buildOpenClawGatewayRestartScript;
-  buildHermesGatewayRestartScript: typeof agentRuntime.buildHermesGatewayRestartScript;
+  requestGatewaySupervisorAction: SupervisorAction;
   executeSandboxExecCommand: SandboxExec;
-  waitForRecoveredSandboxGateway: (sandboxName: string, options?: { quiet?: boolean }) => boolean;
+  waitForRecoveredSandboxGateway: (
+    sandboxName: string,
+    options?: { quiet?: boolean; timeoutSeconds?: number },
+  ) => boolean;
   ensureSandboxPortForward: (sandboxName: string) => boolean;
   ensureHermesDashboardPortForwardIfEnabled: (sandboxName: string) => boolean | null;
-  recoverHermesDashboardProcessIfEnabled: (sandboxName: string) => boolean | null;
   recoverMessagingHostForward: (sandboxName: string, options: { quiet: boolean }) => boolean | null;
   recoverDeclaredAgentForwardPorts: (
     sandboxName: string,
@@ -105,8 +112,8 @@ export function classifyGatewayRestartFailure(result: GatewayRestartCommandResul
 } {
   if (!result) {
     return {
-      layer: "root exec unavailable",
-      detail: "root sandbox exec did not return command output",
+      layer: "privileged control unavailable",
+      detail: "privileged gateway supervisor control did not return command output",
     };
   }
 
@@ -114,26 +121,44 @@ export function classifyGatewayRestartFailure(result: GatewayRestartCommandResul
   const detail = sanitizeGatewayRestartFailureDetail(output.trim());
   if (
     output.includes(MARKERS.ROOT_EXEC_UNAVAILABLE) ||
+    output.includes("PRIVILEGED_CONTROL_UNAVAILABLE") ||
+    output.includes("SUPERVISOR_UNAVAILABLE") ||
+    output.includes("SUPERVISOR_REBUILD_REQUIRED") ||
+    output.includes("SUPERVISOR_UNSAFE_CONTROL_DIR") ||
+    output.includes("SUPERVISOR_BUSY") ||
+    output.includes("SUPERVISOR_SIGNAL_FAILED") ||
+    output.includes("SUPERVISOR_INVALID_STATUS") ||
     output.includes(MARKERS.GOSU_MISSING) ||
     output.includes(MARKERS.GATEWAY_USER_MISSING)
   ) {
-    return { layer: "root exec unavailable", detail: detail || "root exec unavailable" };
+    return {
+      layer: "privileged control unavailable",
+      detail: detail || "privileged gateway supervisor control unavailable",
+    };
   }
   if (output.includes(MARKERS.SECRET_BOUNDARY_REFUSED)) {
     return { layer: "secret-boundary refusal", detail: detail || "boundary refused" };
   }
   if (
-    output.includes(MARKERS.HERMES_UNSAFE_CONFIG_PATH) ||
+    output.includes(MARKERS.GATEWAY_UNSAFE_CONFIG_PATH) ||
+    output.includes("HERMES_UNSAFE_CONFIG_PATH") ||
     output.includes(MARKERS.HERMES_RUNTIME_CONFIG_GUARD_MISSING) ||
     output.includes(MARKERS.SECRET_BOUNDARY_VALIDATOR_MISSING)
   ) {
     return { layer: "unsafe config path", detail: detail || "unsafe config path" };
   }
-  if (output.includes(MARKERS.HERMES_LOCKED_HASH_MISMATCH)) {
+  if (
+    output.includes(MARKERS.GATEWAY_CONFIG_HASH_MISMATCH) ||
+    output.includes("HERMES_LOCKED_HASH_MISMATCH") ||
+    output.includes("HERMES_CONFIG_HASH_MISMATCH")
+  ) {
     return {
-      layer: "hash mismatch while locked",
-      detail: detail || "Hermes config hash mismatch while locked",
+      layer: "config hash mismatch",
+      detail: detail || "gateway config hash mismatch",
     };
+  }
+  if (output.includes("GATEWAY_HEALTH_TIMEOUT") || output.includes("SUPERVISOR_TIMEOUT")) {
+    return { layer: "health timeout", detail: detail || "gateway health timeout" };
   }
   return { layer: "launch failure", detail: detail || `restart exited ${result.status}` };
 }
@@ -153,18 +178,6 @@ export function printGatewayRestartFailure(
   for (const line of lines) {
     console.error(`  ${line}`);
   }
-}
-
-function isValidPort(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 65535;
-}
-
-function restartPortForAgent(
-  agent: ReturnType<typeof agentRuntime.getSessionAgent>,
-  fallback: number,
-): number {
-  const port = (agent as { healthProbe?: { port?: unknown } } | null)?.healthProbe?.port;
-  return isValidPort(port) ? port : fallback;
 }
 
 function unsupportedGatewayRestartAgentDetail(agentName: string, reason: string): string {
@@ -214,7 +227,6 @@ export function restartSandboxGatewayWithDeps(
   const agentName = agent?.name ?? persistedAgent ?? "openclaw";
   const dashboardPort = deps.resolveSandboxDashboardPort(sandboxName);
 
-  let script: string | null = null;
   if (!agent && persistedAgent && persistedAgent !== "openclaw") {
     const detail = unsupportedGatewayRestartAgentDetail(
       persistedAgent,
@@ -237,14 +249,12 @@ export function restartSandboxGatewayWithDeps(
       printGatewayRestartFailure(sandboxName, "unsupported agent", detail);
       return { ok: false, failureLayer: "unsupported agent", detail };
     }
-    script = deps.buildHermesGatewayRestartScript(agent, restartPortForAgent(agent, dashboardPort));
-  } else if (!agent || agentName === "openclaw") {
-    script = deps.buildOpenClawGatewayRestartScript(dashboardPort);
-  } else {
+  } else if (agentName !== "openclaw" || (agent && agent.name !== "openclaw")) {
+    const unsupportedAgentName = agent?.name ?? agentName;
     const reason =
-      `${agentRuntime.getAgentDisplayName(agent)} does not declare a supported root-mediated ` +
+      `${agentRuntime.getAgentDisplayName(agent)} does not declare a supported supervisor-mediated ` +
       "gateway restart runtime.";
-    const detail = unsupportedGatewayRestartAgentDetail(agent.name, reason);
+    const detail = unsupportedGatewayRestartAgentDetail(unsupportedAgentName, reason);
     printGatewayRestartFailure(sandboxName, "unsupported agent", detail);
     return { ok: false, failureLayer: "unsupported agent", detail };
   }
@@ -255,7 +265,7 @@ export function restartSandboxGatewayWithDeps(
       `  Restarting ${agentRuntime.getAgentDisplayName(agent)} gateway in '${sandboxName}'...`,
     );
   }
-  const restartResult = deps.executeSandboxExecCommand(sandboxName, script, 30000);
+  const restartResult = deps.requestGatewaySupervisorAction(sandboxName, "restart", 210000);
   const hasRestartMarker =
     restartResult?.status === 0 &&
     restartResult.stdout.split(/\r?\n/).some((line) => line.startsWith("GATEWAY_PID="));
@@ -273,7 +283,6 @@ export function restartSandboxGatewayWithDeps(
   }
 
   const forwardRecovered = deps.ensureSandboxPortForward(sandboxName);
-  const dashboardProcessRecovered = deps.recoverHermesDashboardProcessIfEnabled(sandboxName);
   const dashboardForwardRecovered = deps.ensureHermesDashboardPortForwardIfEnabled(sandboxName);
   const messagingForwardRecovered = deps.recoverMessagingHostForward(sandboxName, { quiet });
   const declaredForwardsRecovered = deps.recoverDeclaredAgentForwardPorts(
@@ -282,7 +291,6 @@ export function restartSandboxGatewayWithDeps(
     { quiet },
   );
   const auxiliaryFailureDetail = failedAuxiliaryRecoveryDetail([
-    { label: "the Hermes dashboard process", recovered: dashboardProcessRecovered },
     { label: "the Hermes dashboard host forward", recovered: dashboardForwardRecovered },
     { label: "the messaging webhook host forward", recovered: messagingForwardRecovered },
     { label: "one or more agent-declared host forwards", recovered: declaredForwardsRecovered },
@@ -310,7 +318,6 @@ export function restartSandboxGatewayWithDeps(
     healthPassed: true,
     forwardRecovered:
       forwardRecovered ||
-      dashboardProcessRecovered === true ||
       dashboardForwardRecovered === true ||
       messagingForwardRecovered === true ||
       declaredForwardsRecovered === true,

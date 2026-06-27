@@ -5,6 +5,7 @@ import { captureOpenshell, isCommandTimeout, runOpenshell } from "../../adapters
 import { OPENSHELL_PROBE_TIMEOUT_MS } from "../../adapters/openshell/timeouts";
 import * as agentRuntime from "../../agent/runtime";
 import { DASHBOARD_PORT } from "../../core/ports";
+import { waitUntil } from "../../core/wait";
 import { getActiveMessagingHostForward } from "../../messaging/host-forward";
 import type { SandboxMessagingHostForwardPlan } from "../../messaging/manifest";
 import { hydrateDerivedSandboxMessagingPlanFields } from "../../messaging/persistence";
@@ -20,14 +21,7 @@ import {
 import {
   ensureHermesDashboardPortForwardIfEnabled as ensureHermesDashboardPortForward,
   getHermesDashboardRecoveryConfig,
-  recoverHermesDashboardProcessIfEnabled as recoverHermesDashboardProcess,
 } from "./hermes-dashboard-recovery";
-
-type SandboxCommandResult = {
-  status: number;
-  stdout: string;
-  stderr: string;
-};
 
 type SandboxPortAgent = { forwardPort?: unknown; runtime?: { kind?: unknown } } | null;
 
@@ -35,8 +29,6 @@ type SandboxPortDeps = {
   getSandbox?: typeof registry.getSandbox;
   getSessionAgent?: (sandboxName?: string) => SandboxPortAgent;
 };
-
-type SandboxCommandExec = (sandboxName: string, command: string) => SandboxCommandResult | null;
 
 function isValidPort(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 65535;
@@ -79,11 +71,8 @@ export function ensureSandboxPortForward(sandboxName: string): boolean {
  * dimensions: the forward can die (host SSH session dropped, list shows
  * STATUS=dead) while the gateway keeps listening on 127.0.0.1:<port>.
  *
- * Also falls back to a local TCP/HTTP probe of 127.0.0.1:<port> when
- * `forward list` would classify the entry as not-running. openshell's
- * STATUS column lags real state - it can show "dead" for an entry that
- * is still serving traffic, or hide an entry whose SSH session was just
- * recycled (#3334).
+ * Local reachability is intentionally not sufficient: an unrelated listener
+ * cannot prove that OpenShell assigned this sandbox the requested host port.
  */
 export function isSandboxForwardHealthy(sandboxName: string): SandboxForwardHealth {
   return isSandboxPortForwardHealthy(sandboxName, resolveSandboxDashboardPort(sandboxName));
@@ -125,7 +114,36 @@ export function ensureSandboxPortForwardForPort(sandboxName: string, port: numbe
     },
   );
   if (startResult.status !== 0) return false;
-  return isSandboxPortForwardHealthy(sandboxName, port) === true;
+
+  // `forward start --background` can return before its authoritative list
+  // entry becomes visible. Poll for the exact live sandbox+port owner instead
+  // of accepting an arbitrary reachable listener or failing on the first
+  // metadata refresh.
+  let health = isSandboxPortForwardHealthy(sandboxName, port);
+  if (health === true) return true;
+  if (health === "occupied") return false;
+  const configuredWaitMs = Number(process.env.NEMOCLAW_FORWARD_RECOVERY_WAIT_MS ?? "3000");
+  const waitMs = Number.isFinite(configuredWaitMs) ? Math.max(0, configuredWaitMs) : 3000;
+  if (waitMs === 0) return false;
+
+  let occupied = false;
+  const settled = waitUntil(
+    () => {
+      health = isSandboxPortForwardHealthy(sandboxName, port);
+      if (health === "occupied") {
+        occupied = true;
+        return true;
+      }
+      return health === true;
+    },
+    {
+      deadlineMs: Date.now() + waitMs,
+      initialIntervalMs: 100,
+      maxIntervalMs: 500,
+      backoffFactor: 1.5,
+    },
+  );
+  return settled && !occupied;
 }
 
 export function ensureHermesDashboardPortForwardIfEnabled(sandboxName: string): boolean | null {
@@ -215,11 +233,4 @@ export function recoverDeclaredAgentForwardPorts(
     console.error("  One or more agent-declared port forwards could not be re-established.");
   }
   return recovered;
-}
-
-export function recoverHermesDashboardProcessIfEnabled(
-  sandboxName: string,
-  executeCommand: SandboxCommandExec,
-): boolean | null {
-  return recoverHermesDashboardProcess(sandboxName, { executeCommand });
 }

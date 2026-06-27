@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { shellQuote } from "../runner";
-import { GATEWAY_RESTART_MARKERS as MARKERS } from "./gateway-restart-markers";
 import { buildGatewayGuardRecoveryLines } from "./runtime-recovery-preload";
 
 export function buildNoFollowLogSetupCommand(
@@ -83,24 +82,6 @@ export function gatewayLaunchCommand(command: string, runAsUser?: string): strin
     return `${logSelection} ${userLaunch}`;
   }
   return `${logSelection} if [ "$(id -u)" = "0" ] && command -v gosu >/dev/null 2>&1 && id ${shellQuote(runAsUser)} >/dev/null 2>&1; then nohup gosu ${shellQuote(runAsUser)} ${command} >> "$_GATEWAY_LOG" 2>&1 & else ${userLaunch} fi;`;
-}
-
-export function gatewayRootGosuLaunchCommand(command: string, runAsUser: string): string {
-  const logSelection = buildGatewayLogSelection();
-  return [
-    logSelection,
-    `[ "$(id -u)" = "0" ] || { echo ${MARKERS.ROOT_EXEC_UNAVAILABLE}; exit 1; };`,
-    `command -v gosu >/dev/null 2>&1 || { echo ${MARKERS.GOSU_MISSING}; exit 1; };`,
-    `id ${shellQuote(runAsUser)} >/dev/null 2>&1 || { echo ${MARKERS.GATEWAY_USER_MISSING}; exit 1; };`,
-    `nohup gosu ${shellQuote(runAsUser)} ${command} >> "$_GATEWAY_LOG" 2>&1 &`,
-  ].join(" ");
-}
-
-export function buildGatewayStopLines(staleGatewayPattern: string): string[] {
-  return [
-    `_GATEWAY_PROC_PATTERN=${shellQuote(staleGatewayPattern)};`,
-    `if [ -n "$_GATEWAY_PROC_PATTERN" ]; then pkill -TERM -f "$_GATEWAY_PROC_PATTERN" 2>/dev/null || true; for _i in 1 2 3 4 5; do pgrep -f "$_GATEWAY_PROC_PATTERN" >/dev/null 2>&1 || break; sleep 1; done; pkill -KILL -f "$_GATEWAY_PROC_PATTERN" 2>/dev/null || true; for _i in 1 2 3 4 5; do pgrep -f "$_GATEWAY_PROC_PATTERN" >/dev/null 2>&1 || break; sleep 1; done; if pgrep -f "$_GATEWAY_PROC_PATTERN" >/dev/null 2>&1; then echo ${MARKERS.GATEWAY_STALE_PROCESSES}; exit 1; fi; fi;`,
-  ];
 }
 
 export { buildGatewayGuardRecoveryLines };

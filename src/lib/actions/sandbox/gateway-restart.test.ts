@@ -6,65 +6,31 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { classifyGatewayRestartFailure } from "../../../../dist/lib/actions/sandbox/gateway-restart";
 import { restartSandboxGateway } from "../../../../dist/lib/actions/sandbox/process-recovery";
 import { GATEWAY_RESTART_MARKERS as MARKERS } from "../../../../dist/lib/agent/gateway-restart-markers";
-import {
-  buildHermesGatewayRestartScript,
-  buildOpenClawGatewayRestartScript,
-} from "../../../../dist/lib/agent/runtime";
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
 describe("gateway restart failure markers", () => {
-  it("keeps generated Hermes restart markers aligned with the classifier", () => {
-    const script = buildHermesGatewayRestartScript(
-      {
-        name: "hermes",
-        displayName: "Hermes Agent",
-        binary_path: "/usr/local/bin/hermes",
-        gateway_command: "hermes gateway run",
-      } as never,
-      8642,
-    );
+  it("keeps supervisor failure markers aligned with the classifier", () => {
     const expectedMarkers: Array<
       [string, ReturnType<typeof classifyGatewayRestartFailure>["layer"]]
     > = [
-      [MARKERS.ROOT_EXEC_UNAVAILABLE, "root exec unavailable"],
-      [MARKERS.GOSU_MISSING, "root exec unavailable"],
-      [MARKERS.GATEWAY_USER_MISSING, "root exec unavailable"],
+      ["PRIVILEGED_CONTROL_UNAVAILABLE", "privileged control unavailable"],
+      ["SUPERVISOR_REBUILD_REQUIRED", "privileged control unavailable"],
+      ["SUPERVISOR_BUSY", "privileged control unavailable"],
       [MARKERS.SECRET_BOUNDARY_REFUSED, "secret-boundary refusal"],
       [MARKERS.SECRET_BOUNDARY_VALIDATOR_MISSING, "unsafe config path"],
-      [MARKERS.HERMES_RUNTIME_CONFIG_GUARD_MISSING, "unsafe config path"],
-      [MARKERS.HERMES_UNSAFE_CONFIG_PATH, "unsafe config path"],
-      [MARKERS.HERMES_LOCKED_HASH_MISMATCH, "hash mismatch while locked"],
+      [MARKERS.GATEWAY_UNSAFE_CONFIG_PATH, "unsafe config path"],
+      [MARKERS.GATEWAY_CONFIG_HASH_MISMATCH, "config hash mismatch"],
+      ["HERMES_UNSAFE_CONFIG_PATH", "unsafe config path"],
+      ["HERMES_LOCKED_HASH_MISMATCH", "config hash mismatch"],
+      ["HERMES_CONFIG_HASH_MISMATCH", "config hash mismatch"],
+      ["GATEWAY_HEALTH_TIMEOUT", "health timeout"],
       [MARKERS.GATEWAY_FAILED, "launch failure"],
     ] as const;
 
     for (const [marker, layer] of expectedMarkers) {
-      expect(script).toContain(marker);
-      expect(
-        classifyGatewayRestartFailure({
-          status: 1,
-          stdout: marker,
-          stderr: "",
-        }),
-      ).toMatchObject({ layer });
-    }
-  });
-
-  it("keeps generated OpenClaw restart markers aligned with the classifier", () => {
-    const script = buildOpenClawGatewayRestartScript(18789);
-    const expectedMarkers: Array<
-      [string, ReturnType<typeof classifyGatewayRestartFailure>["layer"]]
-    > = [
-      [MARKERS.ROOT_EXEC_UNAVAILABLE, "root exec unavailable"],
-      [MARKERS.GOSU_MISSING, "root exec unavailable"],
-      [MARKERS.GATEWAY_USER_MISSING, "root exec unavailable"],
-      [MARKERS.GATEWAY_FAILED, "launch failure"],
-    ] as const;
-
-    for (const [marker, layer] of expectedMarkers) {
-      expect(script).toContain(marker);
       expect(
         classifyGatewayRestartFailure({
           status: 1,
@@ -91,16 +57,14 @@ describe("restartSandboxGateway — host-mediated gateway restart", () => {
       getSessionAgent: () => null,
       getSandbox: () => ({ name: "alpha", agent: "openclaw" }),
       resolveSandboxDashboardPort: () => 18789,
-      buildOpenClawGatewayRestartScript: vi.fn(() => "restart openclaw"),
-      buildHermesGatewayRestartScript: vi.fn(() => "restart hermes"),
-      executeSandboxExecCommand: vi.fn(() => ({
+      requestGatewaySupervisorAction: vi.fn(() => ({
         status: 0,
         stdout: "GATEWAY_PID=123",
         stderr: "",
       })),
+      executeSandboxExecCommand: vi.fn(() => null),
       waitForRecoveredSandboxGateway: vi.fn(() => true),
       ensureSandboxPortForward: vi.fn(() => true),
-      recoverHermesDashboardProcessIfEnabled: vi.fn(() => null),
       ensureHermesDashboardPortForwardIfEnabled: vi.fn(() => null),
       recoverMessagingHostForward: vi.fn(() => null),
       recoverDeclaredAgentForwardPorts: vi.fn(() => null),
@@ -109,10 +73,10 @@ describe("restartSandboxGateway — host-mediated gateway restart", () => {
     };
   }
 
-  it("refuses root exec output that the transport parser cannot frame", () => {
+  it("refuses supervisor output without a completion marker", () => {
     const deps = baseDeps({
       getSandbox: () => ({ name: "openclaw-box", agent: "openclaw" }),
-      executeSandboxExecCommand: vi.fn(() => null),
+      requestGatewaySupervisorAction: vi.fn(() => null),
     });
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
@@ -120,31 +84,26 @@ describe("restartSandboxGateway — host-mediated gateway restart", () => {
 
     expect(result).toMatchObject({
       ok: false,
-      failureLayer: "root exec unavailable",
+      failureLayer: "privileged control unavailable",
     });
-    expect(deps.executeSandboxExecCommand).toHaveBeenCalledWith(
+    expect(deps.requestGatewaySupervisorAction).toHaveBeenCalledWith(
       "openclaw-box",
-      "restart openclaw",
-      30000,
+      "restart",
+      210000,
     );
     expect(errorSpy).toHaveBeenCalledWith(
-      "  Failure layer: root exec unavailable - gateway restart failed for 'openclaw-box'.",
+      "  Failure layer: privileged control unavailable - gateway restart failed for 'openclaw-box'.",
     );
   });
 
-  it("force-restarts through root exec even when a gateway might already be healthy", () => {
+  it("force-restarts through PID 1 even when a gateway might already be healthy", () => {
     const restore = silenceConsole();
     try {
       const deps = baseDeps();
       const result = restartSandboxGateway("alpha", { deps });
 
       expect(result).toMatchObject({ ok: true, restarted: true, healthPassed: true });
-      expect(deps.buildOpenClawGatewayRestartScript).toHaveBeenCalledWith(18789);
-      expect(deps.executeSandboxExecCommand).toHaveBeenCalledWith(
-        "alpha",
-        "restart openclaw",
-        30000,
-      );
+      expect(deps.requestGatewaySupervisorAction).toHaveBeenCalledWith("alpha", "restart", 210000);
       expect(deps.waitForRecoveredSandboxGateway).toHaveBeenCalledWith("alpha", {
         quiet: false,
       });
@@ -167,15 +126,15 @@ describe("restartSandboxGateway — host-mediated gateway restart", () => {
     }
   });
 
-  it("reports root exec unavailability", () => {
+  it("reports privileged supervisor unavailability", () => {
     const restore = silenceConsole();
     try {
-      const deps = baseDeps({ executeSandboxExecCommand: vi.fn(() => null) });
+      const deps = baseDeps({ requestGatewaySupervisorAction: vi.fn(() => null) });
       const result = restartSandboxGateway("alpha", { quiet: true, deps });
 
       expect(result).toMatchObject({
         ok: false,
-        failureLayer: "root exec unavailable",
+        failureLayer: "privileged control unavailable",
       });
     } finally {
       restore();
@@ -193,8 +152,7 @@ describe("restartSandboxGateway — host-mediated gateway restart", () => {
       const deps = baseDeps({
         getSessionAgent: () => hermesAgent,
         getSandbox: () => ({ name: "alpha", agent: "hermes" }),
-        buildHermesGatewayRestartScript: vi.fn(() => "restart hermes"),
-        executeSandboxExecCommand: vi.fn(() => ({
+        requestGatewaySupervisorAction: vi.fn(() => ({
           status: 1,
           stdout: "SECRET_BOUNDARY_REFUSED",
           stderr: "[SECURITY] TELEGRAM_BOT_TOKEN (line 2)",
@@ -206,7 +164,7 @@ describe("restartSandboxGateway — host-mediated gateway restart", () => {
         ok: false,
         failureLayer: "secret-boundary refusal",
       });
-      expect(deps.buildHermesGatewayRestartScript).toHaveBeenCalledWith(hermesAgent, 8642);
+      expect(deps.requestGatewaySupervisorAction).toHaveBeenCalledWith("alpha", "restart", 210000);
       expect(console.error).toHaveBeenCalledWith(
         "  Failure layer: secret-boundary refusal - gateway restart failed for 'alpha'.",
       );
@@ -219,7 +177,7 @@ describe("restartSandboxGateway — host-mediated gateway restart", () => {
     const restore = silenceConsole();
     try {
       const deps = baseDeps({
-        executeSandboxExecCommand: vi.fn(() => ({
+        requestGatewaySupervisorAction: vi.fn(() => ({
           status: 1,
           stdout: "GATEWAY_FAILED",
           stderr: "tail output",
@@ -237,7 +195,7 @@ describe("restartSandboxGateway — host-mediated gateway restart", () => {
     const restore = silenceConsole();
     try {
       const deps = baseDeps({
-        executeSandboxExecCommand: vi.fn(() => ({
+        requestGatewaySupervisorAction: vi.fn(() => ({
           status: 1,
           stdout: "GATEWAY_FAILED",
           stderr: "\u001b[31mOPENAI_API_KEY=sk-review-secret\u001b[0m",
@@ -354,7 +312,7 @@ describe("restartSandboxGateway — host-mediated gateway restart", () => {
         "Agent 'langchain-deepagents-code' does not support gateway restart.",
       );
       expect(errorOutput).toContain("Gateway restart-supported agents: openclaw, hermes.");
-      expect(deps.executeSandboxExecCommand).not.toHaveBeenCalled();
+      expect(deps.requestGatewaySupervisorAction).not.toHaveBeenCalled();
     } finally {
       restore();
     }
@@ -378,8 +336,7 @@ describe("restartSandboxGateway — host-mediated gateway restart", () => {
       const errorOutput = vi.mocked(console.error).mock.calls.join("\n");
       expect(errorOutput).toContain("Agent 'custom-agent' does not support gateway restart.");
       expect(errorOutput).toContain("Gateway restart-supported agents: openclaw, hermes.");
-      expect(deps.buildOpenClawGatewayRestartScript).not.toHaveBeenCalled();
-      expect(deps.executeSandboxExecCommand).not.toHaveBeenCalled();
+      expect(deps.requestGatewaySupervisorAction).not.toHaveBeenCalled();
     } finally {
       restore();
     }
@@ -401,8 +358,7 @@ describe("restartSandboxGateway — host-mediated gateway restart", () => {
         failureLayer: "unsupported agent",
         detail: expect.stringContaining("Sandbox agent lookup failed: registry unavailable."),
       });
-      expect(deps.buildOpenClawGatewayRestartScript).not.toHaveBeenCalled();
-      expect(deps.executeSandboxExecCommand).not.toHaveBeenCalled();
+      expect(deps.requestGatewaySupervisorAction).not.toHaveBeenCalled();
     } finally {
       restore();
     }
@@ -426,13 +382,12 @@ describe("restartSandboxGateway — host-mediated gateway restart", () => {
       expect(failure.detail).toContain("Agent 'custom-gateway' does not support gateway restart.");
       expect(failure.detail).toContain("Gateway restart-supported agents: openclaw, hermes.");
       expect(failure.detail).toContain(
-        "Custom Gateway Agent does not declare a supported root-mediated gateway restart runtime.",
+        "Custom Gateway Agent does not declare a supported supervisor-mediated gateway restart runtime.",
       );
       const errorOutput = vi.mocked(console.error).mock.calls.join("\n");
       expect(errorOutput).toContain("Agent 'custom-gateway' does not support gateway restart.");
       expect(errorOutput).toContain("Gateway restart-supported agents: openclaw, hermes.");
-      expect(deps.buildOpenClawGatewayRestartScript).not.toHaveBeenCalled();
-      expect(deps.executeSandboxExecCommand).not.toHaveBeenCalled();
+      expect(deps.requestGatewaySupervisorAction).not.toHaveBeenCalled();
     } finally {
       restore();
     }

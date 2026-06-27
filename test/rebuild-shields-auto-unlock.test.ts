@@ -14,6 +14,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { killTimer } from "../src/lib/shields/timer-control";
 
 const REPO_ROOT = path.join(import.meta.dirname, "..");
 const NODE_BIN = path.dirname(process.execPath);
@@ -21,6 +22,16 @@ const tmpFixtures: string[] = [];
 
 afterEach(() => {
   for (const dir of tmpFixtures.splice(0)) {
+    const previousHome = process.env.HOME;
+    try {
+      process.env.HOME = dir;
+      killTimer("my-assistant");
+    } catch {
+      // Best effort; fixture removal below must still run.
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+    }
     try {
       fs.rmSync(dir, { recursive: true, force: true });
     } catch {
@@ -221,6 +232,35 @@ if (a[0]==="exec") {
     index++; // container name
     cmd = a.slice(index);
   }
+  const pythonIndex = cmd.indexOf("python3");
+  if (pythonIndex >= 0) {
+    const helper = cmd[pythonIndex + 2];
+    const action = cmd[pythonIndex + 3];
+    if (helper === "/usr/local/lib/nemoclaw/openclaw-config-guard.py") {
+      if (action === "lock") writeLockState("locked");
+      if (action === "unlock") writeLockState("unlocked");
+      process.stdout.write(JSON.stringify({
+        type: "result",
+        action,
+        status: "ok",
+        configDir: "/sandbox/.openclaw",
+        files: ["openclaw.json", ".config-hash"],
+        chattrApplied: action === "lock",
+      }) + "\\n");
+      process.exit(0);
+    }
+    if (helper === "/usr/local/lib/nemoclaw/state-dir-guard.py") {
+      if (action === "lock") writeLockState("locked");
+      if (action === "unlock") writeLockState("unlocked");
+      process.stdout.write(JSON.stringify({
+        type: "result",
+        action,
+        status: "ok",
+        issueCount: 0,
+      }) + "\\n");
+      process.exit(0);
+    }
+  }
   // Verification reads:
   //   stat -c '%a %U:%G' <path>      → expect "660 sandbox:sandbox" or "2770 sandbox:sandbox"
   //   lsattr -d <path>               → "----i------" (locked) or no immutable bit (unlocked)
@@ -240,6 +280,10 @@ if (a[0]==="exec") {
   if (cmd[0]==="stat") {
     const target = cmd[cmd.length-1];
     const locked = readLockState() === "locked";
+    if (target === "/sandbox") {
+      process.stdout.write("755 sandbox:sandbox\\n");
+      process.exit(0);
+    }
     // Heuristic: directories tend to end with .openclaw or have no extension
     if (target.endsWith(".openclaw") || target.endsWith(".hermes") || /\\/(workspace|skills|hooks|cron|agents|extensions|plugins|memory|credentials|identity|devices|canvas|telegram)$/.test(target)) {
       process.stdout.write(locked ? "755 root:root\\n" : "2770 sandbox:sandbox\\n");
@@ -314,6 +358,13 @@ describe("Issue #3113: rebuild auto-unlocks when shields are UP", () => {
     const r = runRebuild(f);
     const output = (r.stdout || "") + (r.stderr || "");
 
+    // This focused fixture intentionally stops later in rebuild when the fake
+    // gateway cannot perform the recreate. Assert the exact handled failure,
+    // rather than silently accepting a timeout/signal or null spawn status.
+    expect(r.status, output).toBe(1);
+    expect(r.signal).toBeNull();
+    expect(r.error).toBeUndefined();
+
     // Without the fix this would be:
     //   "Failed to back up sandbox state. Aborting rebuild to prevent data loss."
     expect(output).not.toContain("Aborting rebuild to prevent data loss");
@@ -331,6 +382,10 @@ describe("Issue #3113: rebuild auto-unlocks when shields are UP", () => {
     const f = createFixture({ shieldsLocked: false });
     const r = runRebuild(f);
     const output = (r.stdout || "") + (r.stderr || "");
+
+    expect(r.status, output).toBe(1);
+    expect(r.signal).toBeNull();
+    expect(r.error).toBeUndefined();
 
     expect(output).not.toContain("Shields are UP");
     expect(output).not.toContain("temporarily unlocking for rebuild backup");

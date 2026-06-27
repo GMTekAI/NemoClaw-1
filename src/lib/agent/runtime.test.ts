@@ -3,13 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 // Import from compiled dist/ so coverage is attributed correctly.
-import {
-  buildHermesDashboardProcessRecoveryScript,
-  buildHermesGatewayRecoveryScript,
-  buildManualRecoveryCommand,
-  buildOpenClawRecoveryScript,
-  buildRecoveryScript,
-} from "../../../dist/lib/agent/runtime";
+import { buildRecoveryScript } from "../../../dist/lib/agent/runtime";
 import type { AgentDefinition } from "./defs";
 
 function makeAgent(overrides: Partial<AgentDefinition> = {}): AgentDefinition {
@@ -76,8 +70,12 @@ function toJsRegex(pattern: string): RegExp {
 }
 
 describe("buildRecoveryScript", () => {
-  it("returns null for null agent (OpenClaw inline script handles it)", () => {
+  it("returns null for null agent because PID 1 owns OpenClaw recovery", () => {
     expect(buildRecoveryScript(null, 18789)).toBeNull();
+  });
+
+  it("returns null for Hermes because PID 1 owns Hermes recovery", () => {
+    expect(buildRecoveryScript(hermesAgent, 8642)).toBeNull();
   });
 
   it("embeds the port in the gateway launch command (#1925)", () => {
@@ -102,92 +100,6 @@ describe("buildRecoveryScript", () => {
     expect(script).toContain('"$AGENT_BIN" gateway run --port 19000');
   });
 
-  it("omits --port for Hermes so config.yaml controls the internal listen port (#2426)", () => {
-    const script = buildRecoveryScript(hermesAgent, 8642);
-    expect(script).toContain("export HERMES_HOME=/sandbox/.hermes");
-    expect(script).toContain("HERMES_HOME=/sandbox/.hermes");
-    expect(script).not.toContain("DISCORD_PROXY=");
-    expect(script).not.toContain("PYTHONPATH=/opt/nemoclaw-hermes-discord-preload");
-    expect(script).not.toContain("HTTPS_PROXY=http://127.0.0.1:3129");
-    expect(script).not.toContain("nemoclaw-decode-proxy");
-    expect(script).not.toContain("nemoclaw-discord-facade");
-    expect(script).not.toContain("NEMOCLAW_DISCORD_FACADE_URL");
-    expect(script).toContain('"$AGENT_BIN" gateway run');
-    expect(script).not.toContain('"$AGENT_BIN" gateway run --port 8642');
-    expect(script).not.toContain("hermes gateway run --port 8642");
-    expect(script).not.toContain("command -v 'hermes'");
-  });
-
-  it("relaunches the optional Hermes dashboard during recovery", () => {
-    const script = buildRecoveryScript(hermesAgent, 8642, {
-      hermesDashboard: { publicPort: 9119, internalPort: 19119, tuiEnabled: true },
-    });
-    expect(script).toContain("/tmp/hermes-dashboard.log");
-    expect(script).toContain("_HERMES_DASHBOARD_HOME=/sandbox/.hermes/dashboard-home");
-    expect(script).toContain("/usr/local/lib/nemoclaw/seed-hermes-dashboard-config.py");
-    expect(script).toContain("${_HERMES_DASHBOARD_HOME}/gateway_state.json");
-    expect(script).toContain('HERMES_HOME="$_HERMES_DASHBOARD_HOME"');
-    expect(script).not.toContain("HERMES_HOME=/sandbox/.hermes nohup");
-    expect(script).toContain(
-      '"$AGENT_BIN" dashboard --host 127.0.0.1 --port 19119 --skip-build --no-open --tui',
-    );
-    expect(script).toContain("DASHBOARD_PID=$DPID");
-    expect(script).toContain("DASHBOARD_FAILED");
-  });
-
-  it("can recover only the optional Hermes dashboard process", () => {
-    const script = buildHermesDashboardProcessRecoveryScript({
-      publicPort: 9119,
-      internalPort: 19119,
-      tuiEnabled: false,
-    });
-    const validationIndex = script.indexOf(
-      "_nemoclaw_validate_recovery_proxy_env /tmp/nemoclaw-proxy-env.sh",
-    );
-    const sourceIndex = script.indexOf('. "$_NEMOCLAW_RECOVERY_SOURCE_ENV"');
-    expect(validationIndex).toBeGreaterThanOrEqual(0);
-    expect(sourceIndex).toBeGreaterThan(validationIndex);
-    expect(script).toContain('. "$_NEMOCLAW_RECOVERY_SOURCE_ENV"');
-    expect(script).toContain("/usr/local/bin/hermes");
-    expect(script).not.toContain("command -v hermes");
-    expect(script).toContain('if [ ! -x "$AGENT_BIN" ]; then echo AGENT_MISSING; exit 1; fi;');
-    expect(script).toContain("_HERMES_DASHBOARD_HOME=/sandbox/.hermes/dashboard-home");
-    expect(script).toContain("/usr/local/lib/nemoclaw/seed-hermes-dashboard-config.py");
-    expect(script).toContain('HERMES_HOME="$_HERMES_DASHBOARD_HOME"');
-    expect(script).toContain(
-      '"$AGENT_BIN" dashboard --host 127.0.0.1 --port 19119 --skip-build --no-open',
-    );
-    expect(script).not.toContain("HERMES_HOME=/sandbox/.hermes nohup");
-    expect(script).not.toContain("--tui");
-  });
-
-  it("does not launch a Hermes decode proxy during recovery", () => {
-    const script = buildRecoveryScript(hermesAgent, 8642);
-    expect(script).not.toContain("/usr/local/bin/nemoclaw-decode-proxy");
-    expect(script).not.toContain("/opt/hermes/.venv/bin/python");
-    expect(script).not.toContain("nemoclaw-discord-facade");
-  });
-
-  it("does not wait for removed Hermes bridge ports during recovery", () => {
-    const recoveryScript = buildRecoveryScript(hermesAgent, 8642);
-    expect(recoveryScript).not.toBeNull();
-    for (const script of [recoveryScript!, buildManualRecoveryCommand(hermesAgent, 8642)]) {
-      expect(script).not.toContain("127\\.0\\.0\\.1:3129");
-      expect(script).not.toContain('grep -q "127.0.0.1:3129"');
-      expect(script).not.toContain('grep -q "127.0.0.1:3130"');
-      expect(script).not.toContain("do ! command -v ss >/dev/null 2>&1 || ss -tln");
-    }
-  });
-
-  it("does not relaunch the removed Hermes Discord facade during recovery", () => {
-    const recoveryScript = buildRecoveryScript(hermesAgent, 8642);
-    expect(recoveryScript).not.toBeNull();
-    for (const script of [recoveryScript!, buildManualRecoveryCommand(hermesAgent, 8642)]) {
-      expect(script).not.toContain("discord-facade");
-      expect(script).not.toContain("DISCORD_FACADE_LOG");
-    }
-  });
-
   it("falls back to openclaw gateway run when gateway_command is absent", () => {
     const agent = makeAgent({ gateway_command: undefined });
     const script = buildRecoveryScript(agent, 19000);
@@ -206,17 +118,6 @@ describe("buildRecoveryScript", () => {
       toJsRegex(extractGatewayProcessPattern(script)),
     );
     expect(script).toContain("nohup custom-launch --mode recovery --port 19000");
-  });
-
-  it("does not append the external forward port to custom Hermes launch commands (#2426)", () => {
-    const agent = makeAgent({
-      ...hermesAgent,
-      gateway_command: "hermes gateway run --profile recovery",
-    });
-    const script = buildRecoveryScript(agent, 8642);
-    expect(script).toContain("nohup env HERMES_HOME=/sandbox/.hermes");
-    expect(script).toContain("hermes gateway run --profile recovery");
-    expect(script).not.toContain("hermes gateway run --profile recovery --port 8642");
   });
 
   // Regression coverage for #2478. The recovery script must validate
@@ -252,19 +153,6 @@ describe("buildRecoveryScript", () => {
       expect(script).toContain("nemoclaw-ciao-network-guard");
       expect(script).toContain("NODE_OPTIONS missing safety-net preload");
       expect(script).toContain("or ciao preload");
-    });
-
-    it("restores guards before stopped Hermes gateway recovery probes health", () => {
-      const script = buildHermesGatewayRecoveryScript(hermesAgent, 8642);
-      expect(script).toContain("restoring library guards from packaged preloads");
-      expect(script).toContain("nemoclaw-sandbox-safety-net");
-      expect(script).toContain("nemoclaw-ciao-network-guard");
-      expect(script).toContain("NODE_OPTIONS missing safety-net preload");
-      const guardIdx = script.indexOf("restoring library guards from packaged preloads");
-      const healthIdx = script.indexOf("_GW_CODE=");
-      expect(guardIdx).toBeGreaterThanOrEqual(0);
-      expect(healthIdx).toBeGreaterThanOrEqual(0);
-      expect(guardIdx).toBeLessThan(healthIdx);
     });
 
     it("stops stale launcher and gateway processes before relaunch", () => {
@@ -305,12 +193,6 @@ describe("buildRecoveryScript", () => {
       expect(logSelectionIdx).toBeLessThan(warnIdx);
     });
 
-    it("stops recovery when hardened log setup fails", () => {
-      const script = buildOpenClawRecoveryScript(18789);
-      expect(script).toContain(" /tmp/gateway.log 'gateway' || exit 1;");
-      expect(script).toContain(" /tmp/auto-pair.log 'sandbox' || exit 1;");
-    });
-
     it("appends (not truncates) gateway.log on launch so warnings survive", () => {
       const script = buildRecoveryScript(minimalAgent, 19000);
       // Truncating with `>` wipes the [gateway-recovery] WARNING that the
@@ -318,62 +200,6 @@ describe("buildRecoveryScript", () => {
       // gateway.log would see the eventual crash without the explanation.
       expect(script).toContain('>> "$_GATEWAY_LOG" 2>&1 &');
       expect(script).not.toMatch(/[^>]> \/tmp\/gateway\.log 2>&1 &/);
-    });
-
-    it("preserves an existing gateway.log and has a writable fallback log", () => {
-      const script = buildOpenClawRecoveryScript(18789);
-      expect(script).not.toContain("rm -f /tmp/gateway.log");
-      expect(script).toContain("_GATEWAY_LOG=/tmp/gateway.log");
-      expect(script).toContain("_GATEWAY_LOG=/tmp/gateway-recovery.log");
-      expect(script).toContain('_nemoclaw_recovery_log "$_W"');
-      expect(script).toContain('tail -5 "$_GATEWAY_LOG"');
-      expect(script).not.toContain('echo "$_W" >> /tmp/gateway.log');
-      expect(script).not.toContain("cat /tmp/gateway.log");
-    });
-
-    it("rejects a symlinked gateway.log before preparing the log", () => {
-      const script = buildOpenClawRecoveryScript(18789);
-      const noFollowIdx = script.indexOf("O_NOFOLLOW");
-      const openIdx = script.indexOf("os.open(path, flags, 0o644)");
-      const fchownIdx = script.indexOf("os.fchown(fd");
-      expect(script).toContain("refusing to prepare symlinked /tmp/gateway.log");
-      expect(script).toContain("sys.exit(1)");
-      expect(script).not.toContain(": > /tmp/gateway.log");
-      expect(script).not.toContain("chown 'gateway:gateway' /tmp/gateway.log");
-      expect(noFollowIdx).toBeGreaterThanOrEqual(0);
-      expect(openIdx).toBeGreaterThanOrEqual(0);
-      expect(fchownIdx).toBeGreaterThanOrEqual(0);
-      expect(noFollowIdx).toBeLessThan(openIdx);
-      expect(openIdx).toBeLessThan(fchownIdx);
-    });
-
-    it("prepares gateway.log for the real gateway-owned sandbox log", () => {
-      const script = buildOpenClawRecoveryScript(18789);
-      expect(script).toContain("os.fchown(fd");
-      expect(script).toContain("pw.pw_gid");
-      expect(script).not.toContain("grp.getgrnam");
-      expect(script).toContain("owner_mode = 0o644");
-      expect(script).toContain("os.fchmod(fd, owner_mode)");
-      expect(script).toContain("/tmp/gateway.log 'gateway'");
-      expect(script).toContain("gosu 'gateway'");
-    });
-
-    it("terminates the conditional launch branch before capturing the gateway pid", () => {
-      const script = buildOpenClawRecoveryScript(18789);
-      expect(script).toContain(" fi; GPID=$!");
-      expect(script).not.toContain(" fi GPID=$!");
-    });
-
-    it("prepares auto-pair.log without unlinking or following symlinks", () => {
-      const script = buildOpenClawRecoveryScript(18789);
-      expect(script).toContain("refusing to prepare symlinked /tmp/auto-pair.log");
-      expect(script).toContain("/tmp/auto-pair.log 'sandbox'");
-      expect(script).toContain("owner_mode = 0o600");
-      expect(script).not.toContain("rm -f /tmp/auto-pair.log");
-      expect(script).not.toContain(": > /tmp/auto-pair.log");
-      expect(script).not.toContain("touch /tmp/auto-pair.log");
-      expect(script).not.toContain("chown sandbox:sandbox /tmp/auto-pair.log");
-      expect(script).not.toContain("chmod 600 /tmp/auto-pair.log");
     });
 
     it("does not force non-OpenClaw agents to run as the gateway user", () => {

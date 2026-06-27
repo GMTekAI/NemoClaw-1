@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +16,131 @@ import {
   writeRecordingCommand,
   writeSandboxRegistry,
 } from "./helpers";
+
+type GatewayControlDockerStubOptions = {
+  callsFile: string;
+  stateFile: string;
+  recoveryStatus?: number;
+};
+
+function writeGatewayControlDockerStub(
+  localBin: string,
+  { callsFile, stateFile, recoveryStatus = 0 }: GatewayControlDockerStubOptions,
+): void {
+  fs.writeFileSync(
+    path.join(localBin, "docker"),
+    [
+      "#!/usr/bin/env bash",
+      `calls=${JSON.stringify(callsFile)}`,
+      `state_file=${JSON.stringify(stateFile)}`,
+      `recovery_status=${recoveryStatus}`,
+      'printf \'%s\\n\' "$*" >> "$calls"',
+      'if [ "$1" = "info" ]; then echo "24.0.0"; exit 0; fi',
+      'if [ "$1" = "ps" ]; then',
+      '  if [[ "$*" == *"{{.ID}}"* ]]; then',
+      "    printf 'container-id\\topenshell-alpha\\n'",
+      "  else",
+      "    echo openshell-alpha",
+      "  fi",
+      "  exit 0",
+      "fi",
+      'if [ "$1" = "exec" ]; then',
+      '  if [[ "$*" == *"/usr/local/bin/nemoclaw-gateway-control recover "* ]]; then',
+      '    if [ "$recovery_status" -ne 0 ]; then',
+      "      echo 'privileged gateway control failed' >&2",
+      '      exit "$recovery_status"',
+      "    fi",
+      '    echo recovered > "$state_file"',
+      "    echo 'GATEWAY_PID=123'",
+      "    exit 0",
+      "  fi",
+      '  if [[ "$*" == *"curl -so"* ]]; then',
+      "    echo '__NEMOCLAW_SANDBOX_EXEC_STARTED__'",
+      '    if [ "$(cat "$state_file")" = recovered ]; then echo RUNNING; else echo STOPPED; fi',
+      "    exit 0",
+      "  fi",
+      "fi",
+      "exit 1",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+}
+
+function expectGatewayControlRecovery(callsFile: string): void {
+  const calls = fs.readFileSync(callsFile, "utf8");
+  expect(calls).toContain("ps --format {{.Names}}");
+  expect(calls).toMatch(
+    /^exec --user root openshell-alpha \/usr\/local\/bin\/nemoclaw-gateway-control recover [0-9a-f]{64}$/m,
+  );
+  expect(calls).not.toContain("OPENCLAW=");
+  expect(calls).not.toContain("base64 -d | sh");
+}
+
+async function startForwardListeners(ports: number[]): Promise<() => Promise<void>> {
+  const script = [
+    'const net = require("node:net");',
+    "const ports = JSON.parse(process.argv[1]);",
+    "const servers = [];",
+    "let pending = ports.length;",
+    "const markReady = () => { pending -= 1; if (pending === 0) process.stdout.write('ready\\n'); };",
+    "for (const port of ports) {",
+    "  const server = net.createServer((socket) => socket.end());",
+    "  server.on('error', (error) => {",
+    "    if (error.code === 'EADDRINUSE') { markReady(); return; }",
+    "    console.error(error.stack || error);",
+    "    process.exit(1);",
+    "  });",
+    "  server.listen(port, '127.0.0.1', () => {",
+    "    servers.push(server);",
+    "    markReady();",
+    "  });",
+    "}",
+    "const shutdown = () => {",
+    "  let remaining = servers.length;",
+    "  if (remaining === 0) process.exit(0);",
+    "  for (const server of servers) server.close(() => { if (--remaining === 0) process.exit(0); });",
+    "  setTimeout(() => process.exit(0), 1000).unref();",
+    "};",
+    "process.on('SIGTERM', shutdown);",
+  ].join("\n");
+  const child = spawn(process.execPath, ["-e", script, JSON.stringify(ports)], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`forward listener startup timed out: ${stderr}`)),
+      2000,
+    );
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      if (!chunk.includes("ready")) return;
+      clearTimeout(timer);
+      resolve();
+    });
+    child.once("exit", (code) => {
+      clearTimeout(timer);
+      reject(new Error(`forward listener exited with ${code}: ${stderr}`));
+    });
+  });
+
+  return async () => {
+    if (child.exitCode !== null) return;
+    child.kill("SIGTERM");
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 1500);
+      child.once("exit", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+  };
+}
 
 describe("CLI dispatch", () => {
   it("connect does not pre-start a duplicate port forward", testTimeoutOptions(15_000), () => {
@@ -63,6 +189,7 @@ describe("CLI dispatch", () => {
         "  exit 0",
         "fi",
         'if [ "$1" = "forward" ] && [ "$2" = "list" ]; then echo "alpha 127.0.0.1 18789 12345 running"; exit 0; fi',
+        'if [ "$1" = "forward" ]; then exit 99; fi',
         "exit 0",
       ].join("\n"),
       { mode: 0o755 },
@@ -150,10 +277,11 @@ describe("CLI dispatch", () => {
   it(
     "connect --probe-only recovers the gateway without opening SSH",
     testTimeoutOptions(15_000),
-    () => {
+    async () => {
       const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-cli-connect-probe-"));
       const localBin = path.join(home, "bin");
       const markerFile = path.join(home, "openshell-calls");
+      const dockerCalls = path.join(home, "docker-calls");
       const sshMarkerFile = path.join(home, "ssh-calls");
       const stateFile = path.join(home, "probe-state");
       fs.mkdirSync(localBin, { recursive: true });
@@ -178,12 +306,6 @@ describe("CLI dispatch", () => {
           'if [ "$1" = "sandbox" ] && [ "$2" = "exec" ] && [ "$3" = "--name" ] && [ "$4" = "alpha" ]; then',
           '  cmd="$8"',
           '  case "$cmd" in',
-          '    *"OPENCLAW="*)',
-          '      echo recovered > "$state_file"',
-          "      echo '__NEMOCLAW_SANDBOX_EXEC_STARTED__'",
-          "      echo 'GATEWAY_PID=123'",
-          "      exit 42",
-          "      ;;",
           "    *'curl -so'*)",
           "      echo '__NEMOCLAW_SANDBOX_EXEC_STARTED__'",
           '      if [ "$(cat "$state_file")" = recovered ]; then echo RUNNING; else echo STOPPED; fi',
@@ -192,34 +314,43 @@ describe("CLI dispatch", () => {
           "  esac",
           "fi",
           'if [ "$1" = "forward" ] && [ "$2" = "list" ]; then echo "alpha 127.0.0.1 18789 12345 running"; exit 0; fi',
+          'if [ "$1" = "forward" ]; then exit 99; fi',
           "exit 0",
         ].join("\n"),
         { mode: 0o755 },
       );
+      writeGatewayControlDockerStub(localBin, { callsFile: dockerCalls, stateFile });
       writeRecordingCommand(localBin, "ssh", sshMarkerFile, 98);
+      const stopForwardListeners = await startForwardListeners([18789]);
 
-      const r = runWithEnv("alpha connect --probe-only", {
-        HOME: home,
-        PATH: `${localBin}:${process.env.PATH || ""}`,
-      });
+      try {
+        const r = runWithEnv("alpha connect --probe-only", {
+          HOME: home,
+          PATH: `${localBin}:${process.env.PATH || ""}`,
+        });
 
-      expect(r.code).toBe(0);
-      expect(r.out).toContain("Probe complete: recovered OpenClaw gateway");
-      const calls = fs.readFileSync(markerFile, "utf8").trim().split("\n").filter(Boolean);
-      expect(calls).toContain("sandbox get alpha");
-      expect(calls.some((call) => call.startsWith("sandbox exec --name alpha -- sh -c"))).toBe(
-        true,
-      );
-      expect(calls).not.toContain("sandbox ssh-config alpha");
-      expect(calls).not.toContain("sandbox connect alpha");
-      expect(fs.existsSync(sshMarkerFile)).toBe(false);
+        expect(r.code).toBe(0);
+        expect(r.out).toContain("Probe complete: recovered OpenClaw gateway");
+        const calls = fs.readFileSync(markerFile, "utf8").trim().split("\n").filter(Boolean);
+        expect(calls).toContain("sandbox get alpha");
+        expect(calls.some((call) => call.startsWith("sandbox exec --name alpha -- sh -c"))).toBe(
+          true,
+        );
+        expect(calls).not.toContain("sandbox ssh-config alpha");
+        expect(calls).not.toContain("sandbox connect alpha");
+        expect(fs.existsSync(sshMarkerFile)).toBe(false);
+        expectGatewayControlRecovery(dockerCalls);
+      } finally {
+        await stopForwardListeners();
+      }
     },
   );
 
-  it("waits for recovered gateway health before failing probe-only", () => {
+  it("waits for recovered gateway health before failing probe-only", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-cli-connect-probe-wait-"));
     const localBin = path.join(home, "bin");
     const markerFile = path.join(home, "openshell-calls");
+    const dockerCalls = path.join(home, "docker-calls");
     const stateFile = path.join(home, "probe-state");
     const readyCountFile = path.join(home, "ready-count");
     fs.mkdirSync(localBin, { recursive: true });
@@ -245,12 +376,6 @@ describe("CLI dispatch", () => {
         'if [ "$1" = "sandbox" ] && [ "$2" = "exec" ] && [ "$3" = "--name" ] && [ "$4" = "alpha" ]; then',
         '  cmd="$8"',
         '  case "$cmd" in',
-        '    *"OPENCLAW="*)',
-        '      echo recovered > "$state_file"',
-        "      echo '__NEMOCLAW_SANDBOX_EXEC_STARTED__'",
-        "      echo 'GATEWAY_PID=123'",
-        "      exit 0",
-        "      ;;",
         "    *'curl -so'*)",
         "      echo '__NEMOCLAW_SANDBOX_EXEC_STARTED__'",
         '      if [ "$(cat "$state_file")" != recovered ]; then echo STOPPED; exit 0; fi',
@@ -268,20 +393,27 @@ describe("CLI dispatch", () => {
       ].join("\n"),
       { mode: 0o755 },
     );
+    writeGatewayControlDockerStub(localBin, { callsFile: dockerCalls, stateFile });
+    const stopForwardListeners = await startForwardListeners([18789]);
 
-    const r = runWithEnv("alpha connect --probe-only", {
-      HOME: home,
-      PATH: `${localBin}:${process.env.PATH || ""}`,
-      NEMOCLAW_GATEWAY_RECOVERY_WAIT_SECONDS: "3",
-      NEMOCLAW_GATEWAY_RECOVERY_POLL_INTERVAL_SECONDS: "0",
-    });
+    try {
+      const r = runWithEnv("alpha connect --probe-only", {
+        HOME: home,
+        PATH: `${localBin}:${process.env.PATH || ""}`,
+        NEMOCLAW_GATEWAY_RECOVERY_WAIT_SECONDS: "3",
+        NEMOCLAW_GATEWAY_RECOVERY_POLL_INTERVAL_SECONDS: "0",
+      });
 
-    expect(r.code).toBe(0);
-    expect(r.out).toContain("Probe complete: recovered OpenClaw gateway");
-    expect(fs.readFileSync(readyCountFile, "utf8").trim()).toBe("3");
+      expect(r.code).toBe(0);
+      expect(r.out).toContain("Probe complete: recovered OpenClaw gateway");
+      expect(fs.readFileSync(readyCountFile, "utf8").trim()).toBe("3");
+      expectGatewayControlRecovery(dockerCalls);
+    } finally {
+      await stopForwardListeners();
+    }
   });
 
-  it("treats leading --probe-only as an implicit connect probe", () => {
+  it("treats leading --probe-only as an implicit connect probe", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-cli-connect-probe-leading-"));
     const localBin = path.join(home, "bin");
     const markerFile = path.join(home, "openshell-calls");
@@ -306,37 +438,47 @@ describe("CLI dispatch", () => {
         'if [ "$1" = "sandbox" ] && [ "$2" = "exec" ] && [ "$3" = "--name" ] && [ "$4" = "alpha" ]; then',
         '  cmd="$8"',
         '  if [[ "$cmd" == *"curl -so"* ]]; then echo "__NEMOCLAW_SANDBOX_EXEC_STARTED__"; echo RUNNING; exit 0; fi',
-        '  if [[ "$cmd" == *"OPENCLAW="* ]]; then echo "__NEMOCLAW_SANDBOX_EXEC_STARTED__"; echo UNEXPECTED_RECOVERY; exit 1; fi',
         "fi",
         'if [ "$1" = "forward" ] && [ "$2" = "list" ]; then echo "alpha 127.0.0.1 18789 12345 running"; exit 0; fi',
+        'if [ "$1" = "forward" ]; then exit 99; fi',
         "exit 0",
       ].join("\n"),
       { mode: 0o755 },
     );
     writeRecordingCommand(localBin, "ssh", sshMarkerFile, 98);
+    const stopForwardListeners = await startForwardListeners([18789]);
 
-    const r = runWithEnv("alpha --probe-only", {
-      HOME: home,
-      PATH: `${localBin}:${process.env.PATH || ""}`,
-    });
+    try {
+      const r = runWithEnv("alpha --probe-only", {
+        HOME: home,
+        PATH: `${localBin}:${process.env.PATH || ""}`,
+      });
 
-    expect(r.code).toBe(0);
-    expect(r.out).toContain("Probe complete: OpenClaw gateway is running");
-    const calls = fs.readFileSync(markerFile, "utf8").trim().split("\n").filter(Boolean);
-    expect(calls).toContain("sandbox get alpha");
-    expect(calls.some((call) => call.startsWith("sandbox exec --name alpha -- sh -c"))).toBe(true);
-    expect(calls).not.toContain("sandbox ssh-config alpha");
-    expect(calls).not.toContain("sandbox connect alpha");
-    expect(fs.existsSync(sshMarkerFile)).toBe(false);
+      expect(r.code).toBe(0);
+      expect(r.out).toContain("Probe complete: OpenClaw gateway is running");
+      const calls = fs.readFileSync(markerFile, "utf8").trim().split("\n").filter(Boolean);
+      expect(calls).toContain("sandbox get alpha");
+      expect(calls.some((call) => call.startsWith("sandbox exec --name alpha -- sh -c"))).toBe(
+        true,
+      );
+      expect(calls).not.toContain("sandbox ssh-config alpha");
+      expect(calls).not.toContain("sandbox connect alpha");
+      expect(fs.existsSync(sshMarkerFile)).toBe(false);
+    } finally {
+      await stopForwardListeners();
+    }
   });
 
-  it("connect --probe-only does not retry a failed sandbox exec recovery over SSH", () => {
+  it("connect --probe-only does not retry failed privileged recovery over SSH", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-cli-connect-probe-no-ssh-"));
     const localBin = path.join(home, "bin");
     const markerFile = path.join(home, "openshell-calls");
+    const dockerCalls = path.join(home, "docker-calls");
     const sshMarkerFile = path.join(home, "ssh-calls");
+    const stateFile = path.join(home, "probe-state");
     fs.mkdirSync(localBin, { recursive: true });
     writeSandboxRegistry(home);
+    fs.writeFileSync(stateFile, "stopped");
     fs.writeFileSync(
       path.join(localBin, "openshell"),
       [
@@ -354,7 +496,6 @@ describe("CLI dispatch", () => {
         "fi",
         'if [ "$1" = "sandbox" ] && [ "$2" = "exec" ] && [ "$3" = "--name" ] && [ "$4" = "alpha" ]; then',
         '  cmd="$8"',
-        '  if [[ "$cmd" == *"OPENCLAW="* ]]; then echo "__NEMOCLAW_SANDBOX_EXEC_STARTED__"; echo RECOVERY_FAILED >&2; exit 42; fi',
         '  if [[ "$cmd" == *"curl -so"* ]]; then echo "__NEMOCLAW_SANDBOX_EXEC_STARTED__"; echo STOPPED; exit 0; fi',
         "fi",
         'if [ "$1" = "sandbox" ] && [ "$2" = "ssh-config" ]; then',
@@ -365,6 +506,11 @@ describe("CLI dispatch", () => {
       ].join("\n"),
       { mode: 0o755 },
     );
+    writeGatewayControlDockerStub(localBin, {
+      callsFile: dockerCalls,
+      stateFile,
+      recoveryStatus: 42,
+    });
     writeRecordingCommand(localBin, "ssh", sshMarkerFile, 98);
 
     const r = runWithEnv("alpha connect --probe-only", {
@@ -378,10 +524,11 @@ describe("CLI dispatch", () => {
     expect(calls.some((call) => call.startsWith("sandbox exec --name alpha -- sh -c"))).toBe(true);
     expect(calls).not.toContain("sandbox ssh-config alpha");
     expect(fs.existsSync(sshMarkerFile)).toBe(false);
+    expectGatewayControlRecovery(dockerCalls);
   });
 
   it(
-    "connect --probe-only falls back to SSH when sandbox exec never starts",
+    "connect --probe-only does not fall back to SSH when sandbox exec never starts",
     testTimeoutOptions(15_000),
     () => {
       const home = fs.mkdtempSync(
@@ -389,6 +536,7 @@ describe("CLI dispatch", () => {
       );
       const localBin = path.join(home, "bin");
       const openshellCalls = path.join(home, "openshell-calls");
+      const dockerCalls = path.join(home, "docker-calls");
       const sshCalls = path.join(home, "ssh-calls");
       const stateFile = path.join(home, "probe-state");
       fs.mkdirSync(localBin, { recursive: true });
@@ -413,59 +561,36 @@ describe("CLI dispatch", () => {
           "  echo 'error: sandbox exec transport failed before command start' >&2",
           "  exit 2",
           "fi",
-          'if [ "$1" = "sandbox" ] && [ "$2" = "ssh-config" ] && [ "$3" = "alpha" ]; then',
-          "  echo 'Host openshell-alpha'",
-          "  echo '  HostName 127.0.0.1'",
-          "  echo '  User sandbox'",
-          "  exit 0",
-          "fi",
           'if [ "$1" = "forward" ] && [ "$2" = "list" ]; then echo "alpha 127.0.0.1 18789 12345 running"; exit 0; fi',
+          'if [ "$1" = "forward" ]; then exit 99; fi',
           "exit 0",
         ].join("\n"),
         { mode: 0o755 },
       );
-      fs.writeFileSync(
-        path.join(localBin, "ssh"),
-        [
-          "#!/usr/bin/env bash",
-          `calls=${JSON.stringify(sshCalls)}`,
-          `state_file=${JSON.stringify(stateFile)}`,
-          'cmd="${@: -1}"',
-          'printf \'ARGS %s\\n\' "$*" >> "$calls"',
-          'printf \'CMD %s\\n\' "$cmd" >> "$calls"',
-          'if [[ "$cmd" == *"OPENCLAW="* ]]; then',
-          '  echo recovered > "$state_file"',
-          "  echo 'GATEWAY_PID=456'",
-          "  exit 0",
-          "fi",
-          'if [[ "$cmd" == *"curl -so"* ]]; then',
-          '  if [ "$(cat "$state_file")" = recovered ]; then echo RUNNING; else echo STOPPED; fi',
-          "  exit 0",
-          "fi",
-          "exit 1",
-        ].join("\n"),
-        { mode: 0o755 },
-      );
+      writeGatewayControlDockerStub(localBin, {
+        callsFile: dockerCalls,
+        stateFile,
+        recoveryStatus: 42,
+      });
+      writeRecordingCommand(localBin, "ssh", sshCalls, 98);
 
       const r = runWithEnv("alpha connect --probe-only", {
         HOME: home,
         PATH: `${localBin}:${process.env.PATH || ""}`,
       });
 
-      expect(r.code).toBe(0);
-      expect(r.out).toContain("Probe complete: recovered OpenClaw gateway");
+      expect(r.code).toBe(1);
       const openshellLog = fs.readFileSync(openshellCalls, "utf8");
-      const sshLog = fs.readFileSync(sshCalls, "utf8");
       expect(openshellLog).toContain("sandbox exec --name alpha -- sh -c");
-      expect(openshellLog).toContain("sandbox ssh-config alpha");
+      expect(openshellLog).not.toContain("sandbox ssh-config alpha");
       expect(openshellLog).not.toContain("sandbox connect");
-      expect(sshLog).toContain('OPENCLAW="$(command -v openclaw)"');
-      expect(sshLog).not.toMatch(/(^|\s)-tt?(\s|$)/);
+      expect(fs.existsSync(sshCalls)).toBe(false);
+      expectGatewayControlRecovery(dockerCalls);
     },
   );
 
   it(
-    "connect --probe-only falls back to SSH when sandbox exec times out after starting",
+    "connect --probe-only does not fall back to SSH when sandbox exec times out after starting",
     testTimeoutOptions(15_000),
     () => {
       const home = fs.mkdtempSync(
@@ -473,6 +598,7 @@ describe("CLI dispatch", () => {
       );
       const localBin = path.join(home, "bin");
       const openshellCalls = path.join(home, "openshell-calls");
+      const dockerCalls = path.join(home, "docker-calls");
       const sshCalls = path.join(home, "ssh-calls");
       const stateFile = path.join(home, "probe-state");
       fs.mkdirSync(localBin, { recursive: true });
@@ -498,38 +624,18 @@ describe("CLI dispatch", () => {
           "  sleep 1",
           "  exit 0",
           "fi",
-          'if [ "$1" = "sandbox" ] && [ "$2" = "ssh-config" ] && [ "$3" = "alpha" ]; then',
-          "  echo 'Host openshell-alpha'",
-          "  echo '  HostName 127.0.0.1'",
-          "  echo '  User sandbox'",
-          "  exit 0",
-          "fi",
           'if [ "$1" = "forward" ] && [ "$2" = "list" ]; then echo "alpha 127.0.0.1 18789 12345 running"; exit 0; fi',
+          'if [ "$1" = "forward" ]; then exit 99; fi',
           "exit 0",
         ].join("\n"),
         { mode: 0o755 },
       );
-      fs.writeFileSync(
-        path.join(localBin, "ssh"),
-        [
-          "#!/usr/bin/env bash",
-          `calls=${JSON.stringify(sshCalls)}`,
-          `state_file=${JSON.stringify(stateFile)}`,
-          'cmd="${@: -1}"',
-          'printf \'CMD %s\\n\' "$cmd" >> "$calls"',
-          'if [[ "$cmd" == *"OPENCLAW="* ]]; then',
-          '  echo recovered > "$state_file"',
-          "  echo 'GATEWAY_PID=789'",
-          "  exit 0",
-          "fi",
-          'if [[ "$cmd" == *"curl -so"* ]]; then',
-          '  if [ "$(cat "$state_file")" = recovered ]; then echo RUNNING; else echo STOPPED; fi',
-          "  exit 0",
-          "fi",
-          "exit 1",
-        ].join("\n"),
-        { mode: 0o755 },
-      );
+      writeGatewayControlDockerStub(localBin, {
+        callsFile: dockerCalls,
+        stateFile,
+        recoveryStatus: 42,
+      });
+      writeRecordingCommand(localBin, "ssh", sshCalls, 98);
 
       const r = runWithEnv("alpha connect --probe-only", {
         HOME: home,
@@ -537,20 +643,20 @@ describe("CLI dispatch", () => {
         NEMOCLAW_SANDBOX_EXEC_TIMEOUT_MS: "50",
       });
 
-      expect(r.code).toBe(0);
-      expect(r.out).toContain("Probe complete: recovered OpenClaw gateway");
+      expect(r.code).toBe(1);
       const openshellLog = fs.readFileSync(openshellCalls, "utf8");
-      const sshLog = fs.readFileSync(sshCalls, "utf8");
       expect(openshellLog).toContain("sandbox exec --name alpha -- sh -c");
-      expect(openshellLog).toContain("sandbox ssh-config alpha");
-      expect(sshLog).toContain('OPENCLAW="$(command -v openclaw)"');
+      expect(openshellLog).not.toContain("sandbox ssh-config alpha");
+      expect(fs.existsSync(sshCalls)).toBe(false);
+      expectGatewayControlRecovery(dockerCalls);
     },
   );
 
-  it("recovers stopped Hermes agents through root sandbox exec instead of SSH", () => {
+  it("recovers stopped Hermes agents through privileged Docker control instead of SSH", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-cli-connect-probe-agent-"));
     const localBin = path.join(home, "bin");
     const openshellCalls = path.join(home, "openshell-calls");
+    const dockerCalls = path.join(home, "docker-calls");
     const sshCalls = path.join(home, "ssh-calls");
     const stateFile = path.join(home, "probe-state");
     fs.mkdirSync(localBin, { recursive: true });
@@ -579,13 +685,6 @@ describe("CLI dispatch", () => {
         '    if [ "$(cat "$state_file")" = recovered ]; then echo RUNNING; else echo STOPPED; fi',
         "    exit 0",
         "  fi",
-        '  if [[ "$cmd" == *"base64 -d | sh"* ]]; then',
-        '    echo recovered > "$state_file"',
-        '    echo ROOT_EXEC_RECOVERY >> "$calls"',
-        "    echo '__NEMOCLAW_SANDBOX_EXEC_STARTED__'",
-        "    echo 'GATEWAY_PID=789'",
-        "    exit 0",
-        "  fi",
         "fi",
         'if [ "$1" = "sandbox" ] && [ "$2" = "ssh-config" ] && [ "$3" = "alpha" ]; then',
         '  echo UNEXPECTED_SSH_CONFIG >> "$calls"',
@@ -597,277 +696,27 @@ describe("CLI dispatch", () => {
       ].join("\n"),
       { mode: 0o755 },
     );
-    fs.writeFileSync(sshCalls, "");
-    fs.writeFileSync(
-      path.join(localBin, "ssh"),
-      [
-        "#!/usr/bin/env bash",
-        `calls=${JSON.stringify(sshCalls)}`,
-        `state_file=${JSON.stringify(stateFile)}`,
-        'cmd="${@: -1}"',
-        'printf \'ARGS %s\\n\' "$*" >> "$calls"',
-        'printf \'CMD %s\\n\' "$cmd" >> "$calls"',
-        'if [[ "$cmd" == *"AGENT_BIN=\'/usr/local/bin/hermes\'"* ]]; then',
-        '  echo recovered > "$state_file"',
-        "  echo 'GATEWAY_PID=789'",
-        "  exit 0",
-        "fi",
-        "exit 1",
-      ].join("\n"),
-      { mode: 0o755 },
-    );
+    writeGatewayControlDockerStub(localBin, { callsFile: dockerCalls, stateFile });
+    writeRecordingCommand(localBin, "ssh", sshCalls, 98);
+    const stopForwardListeners = await startForwardListeners([18789, 8642]);
 
-    const r = runWithEnv("alpha connect --probe-only", {
-      HOME: home,
-      PATH: `${localBin}:${process.env.PATH || ""}`,
-    });
-
-    expect(r.code).toBe(0);
-    expect(r.out).toContain("Probe complete: recovered Hermes Agent gateway");
-    const openshellLog = fs.readFileSync(openshellCalls, "utf8");
-    const sshLog = fs.readFileSync(sshCalls, "utf8");
-    expect(openshellLog).toContain("sandbox exec --name alpha -- sh -c");
-    expect(openshellLog).toContain("ROOT_EXEC_RECOVERY");
-    expect(openshellLog).not.toContain("sandbox ssh-config alpha");
-    expect(openshellLog).not.toContain("sandbox connect");
-    expect(sshLog).toBe("");
-  });
-
-  it("waits for sandbox readiness before connecting", testTimeoutOptions(15_000), () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-cli-connect-wait-"));
-    const localBin = path.join(home, "bin");
-    const registryDir = path.join(home, ".nemoclaw");
-    const markerFile = path.join(home, "openshell-calls");
-    const stateFile = path.join(home, "sandbox-list-count");
-    fs.mkdirSync(localBin, { recursive: true });
-    fs.mkdirSync(registryDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(registryDir, "sandboxes.json"),
-      JSON.stringify({
-        sandboxes: {
-          alpha: {
-            name: "alpha",
-            model: "test-model",
-            provider: "nvidia-prod",
-            gpuEnabled: false,
-            policies: [],
-          },
-        },
-        defaultSandbox: "alpha",
-      }),
-      { mode: 0o600 },
-    );
-    fs.writeFileSync(
-      path.join(localBin, "openshell"),
-      [
-        "#!/usr/bin/env bash",
-        `marker_file=${JSON.stringify(markerFile)}`,
-        `state_file=${JSON.stringify(stateFile)}`,
-        'printf \'%s\\n\' "$*" >> "$marker_file"',
-        'if [ "$1" = "sandbox" ] && [ "$2" = "get" ] && [ "$3" = "alpha" ]; then',
-        "  echo 'Sandbox:'",
-        "  echo",
-        "  echo '  Id: abc'",
-        "  echo '  Name: alpha'",
-        "  echo '  Namespace: openshell'",
-        "  echo '  Phase: Pending'",
-        "  exit 0",
-        "fi",
-        'if [ "$1" = "sandbox" ] && [ "$2" = "list" ]; then',
-        '  count=$(cat "$state_file" 2>/dev/null || echo 0)',
-        "  count=$((count + 1))",
-        '  echo "$count" > "$state_file"',
-        '  if [ "$count" -eq 1 ]; then',
-        "    echo 'alpha   ContainerCreating   10s ago'",
-        "  else",
-        "    echo 'alpha   Ready   20s ago'",
-        "  fi",
-        "  exit 0",
-        "fi",
-        'if [ "$1" = "sandbox" ] && [ "$2" = "connect" ] && [ "$3" = "alpha" ]; then',
-        "  exit 0",
-        "fi",
-        "exit 0",
-      ].join("\n"),
-      { mode: 0o755 },
-    );
-    fs.writeFileSync(path.join(localBin, "sleep"), ["#!/usr/bin/env bash", "exit 0"].join("\n"), {
-      mode: 0o755,
-    });
-    // Healthy Docker so the connect readiness wait is not short-circuited by
-    // the #4428 docker-down fast-fail.
-    writeHealthyDockerStub(localBin);
-
-    const r = runWithEnv(
-      "alpha connect",
-      {
+    try {
+      const r = runWithEnv("alpha connect --probe-only", {
         HOME: home,
         PATH: `${localBin}:${process.env.PATH || ""}`,
-      },
-      execTimeout(30_000),
-    );
+      });
 
-    expect(r.code).toBe(0);
-    expect(r.out.includes("Waiting for sandbox 'alpha' to be ready")).toBeTruthy();
-    expect(r.out.includes("Sandbox is ready. Connecting")).toBeTruthy();
-    const calls = fs.readFileSync(markerFile, "utf8").trim().split("\n").filter(Boolean);
-    expect(calls).toContain("sandbox get alpha");
-    expect(calls.filter((call) => call === "sandbox list").length).toBeGreaterThanOrEqual(2);
-    expect(calls).toContain("sandbox connect alpha");
-  });
-
-  it(
-    "fails fast with gateway recovery guidance when connect readiness sees a disconnected gateway",
-    () => {
-      const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-cli-connect-gateway-down-"));
-      const localBin = path.join(home, "bin");
-      const registryDir = path.join(home, ".nemoclaw");
-      const markerFile = path.join(home, "openshell-calls");
-      fs.mkdirSync(localBin, { recursive: true });
-      fs.mkdirSync(registryDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(registryDir, "sandboxes.json"),
-        JSON.stringify({
-          sandboxes: {
-            alpha: {
-              name: "alpha",
-              model: "test-model",
-              provider: "nvidia-prod",
-              gpuEnabled: false,
-              policies: [],
-            },
-          },
-          defaultSandbox: "alpha",
-        }),
-        { mode: 0o600 },
-      );
-      writeHealthyDockerStub(localBin);
-      fs.writeFileSync(
-        path.join(localBin, "openshell"),
-        [
-          "#!/usr/bin/env bash",
-          `marker_file=${JSON.stringify(markerFile)}`,
-          'printf \'%s\\n\' "$*" >> "$marker_file"',
-          'if [ "$1" = "sandbox" ] && [ "$2" = "get" ] && [ "$3" = "alpha" ]; then',
-          "  echo 'Sandbox:'",
-          "  echo",
-          "  echo '  Id: abc'",
-          "  echo '  Name: alpha'",
-          "  echo '  Namespace: openshell'",
-          "  echo '  Phase: Pending'",
-          "  exit 0",
-          "fi",
-          'if [ "$1" = "sandbox" ] && [ "$2" = "list" ]; then',
-          "  echo 'alpha   unknown   103s ago'",
-          "  exit 0",
-          "fi",
-          'if [ "$1" = "status" ]; then',
-          "  echo 'Server Status'",
-          "  echo",
-          "  echo '  Gateway: nemoclaw'",
-          "  echo '  Status: Disconnected'",
-          "  exit 0",
-          "fi",
-          'if [ "$1" = "gateway" ] && [ "$2" = "info" ] && [ "$3" = "-g" ] && [ "$4" = "nemoclaw" ]; then',
-          "  echo 'Gateway Info'",
-          "  echo",
-          "  echo '  Gateway: nemoclaw'",
-          "  exit 0",
-          "fi",
-          'if [ "$1" = "sandbox" ] && [ "$2" = "connect" ] && [ "$3" = "alpha" ]; then',
-          "  echo 'should-not-connect' >> \"$marker_file\"",
-          "  exit 0",
-          "fi",
-          "exit 0",
-        ].join("\n"),
-        { mode: 0o755 },
-      );
-
-      const r = runWithEnv(
-        "alpha connect",
-        {
-          HOME: home,
-          NEMOCLAW_CONNECT_TIMEOUT: "1",
-          PATH: `${localBin}:${process.env.PATH || ""}`,
-        },
-        execTimeout(10_000),
-      );
-
-      expect(r.code).toBe(1);
-      expect(r.out).toContain("OpenShell gateway is not running or unreachable");
-      expect(r.out).toContain("nemoclaw onboard");
-      expect(r.out).not.toContain("Timed out after 1s");
-      const calls = fs.readFileSync(markerFile, "utf8").trim().split("\n").filter(Boolean);
-      expect(calls).toContain("status");
-      expect(calls).not.toContain("should-not-connect");
-    },
-    testTimeout(15_000),
-  );
-
-  it("prints recovery guidance when readiness polling hits a terminal sandbox state", () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-cli-connect-failed-"));
-    const localBin = path.join(home, "bin");
-    const registryDir = path.join(home, ".nemoclaw");
-    const markerFile = path.join(home, "openshell-calls");
-    fs.mkdirSync(localBin, { recursive: true });
-    fs.mkdirSync(registryDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(registryDir, "sandboxes.json"),
-      JSON.stringify({
-        sandboxes: {
-          alpha: {
-            name: "alpha",
-            model: "test-model",
-            provider: "nvidia-prod",
-            gpuEnabled: false,
-            policies: [],
-          },
-        },
-        defaultSandbox: "alpha",
-      }),
-      { mode: 0o600 },
-    );
-    fs.writeFileSync(
-      path.join(localBin, "openshell"),
-      [
-        "#!/usr/bin/env bash",
-        `marker_file=${JSON.stringify(markerFile)}`,
-        'printf \'%s\\n\' "$*" >> "$marker_file"',
-        'if [ "$1" = "sandbox" ] && [ "$2" = "get" ] && [ "$3" = "alpha" ]; then',
-        "  echo 'Sandbox:'",
-        "  echo",
-        "  echo '  Id: abc'",
-        "  echo '  Name: alpha'",
-        "  echo '  Namespace: openshell'",
-        "  echo '  Phase: Failed'",
-        "  exit 0",
-        "fi",
-        'if [ "$1" = "sandbox" ] && [ "$2" = "list" ]; then',
-        "  echo 'alpha   Failed   1m ago'",
-        "  exit 0",
-        "fi",
-        'if [ "$1" = "sandbox" ] && [ "$2" = "connect" ] && [ "$3" = "alpha" ]; then',
-        "  echo 'should-not-connect' >> \"$marker_file\"",
-        "  exit 0",
-        "fi",
-        "exit 0",
-      ].join("\n"),
-      { mode: 0o755 },
-    );
-
-    const r = runWithEnv("alpha connect", {
-      HOME: home,
-      PATH: `${localBin}:${process.env.PATH || ""}`,
-    });
-
-    expect(r.code).toBe(1);
-    expect(r.out.includes("Sandbox 'alpha' is in 'Failed' state")).toBeTruthy();
-    expect(r.out.includes("nemoclaw alpha logs --follow")).toBeTruthy();
-    expect(r.out.includes("nemoclaw alpha status")).toBeTruthy();
-    const calls = fs.readFileSync(markerFile, "utf8").trim().split("\n").filter(Boolean);
-    expect(calls).toContain("sandbox get alpha");
-    expect(calls).toContain("sandbox list");
-    expect(calls).not.toContain("should-not-connect");
+      expect(r.code).toBe(0);
+      expect(r.out).toContain("Probe complete: recovered Hermes Agent gateway");
+      const openshellLog = fs.readFileSync(openshellCalls, "utf8");
+      expect(openshellLog).toContain("sandbox exec --name alpha -- sh -c");
+      expect(openshellLog).not.toContain("sandbox ssh-config alpha");
+      expect(openshellLog).not.toContain("sandbox connect");
+      expect(fs.existsSync(sshCalls)).toBe(false);
+      expectGatewayControlRecovery(dockerCalls);
+    } finally {
+      await stopForwardListeners();
+    }
   });
 
   it("preserves the registry entry when connect targets a missing live sandbox (#4497)", () => {

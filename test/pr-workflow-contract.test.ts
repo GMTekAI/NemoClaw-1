@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
+import { describe, expect, it } from "vitest";
 
 import {
-  readYaml,
   type CompositeAction,
+  readYaml,
   type WorkflowJob,
   type WorkflowStep,
 } from "./helpers/e2e-workflow-contract";

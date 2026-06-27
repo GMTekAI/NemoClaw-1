@@ -3,6 +3,7 @@
 
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { dockerSpawnSync } from "../../adapters/docker";
 import {
   captureOpenshellForStatus,
@@ -11,24 +12,19 @@ import {
   isCommandTimeout,
 } from "../../adapters/openshell/runtime";
 import { OPENSHELL_PROBE_TIMEOUT_MS } from "../../adapters/openshell/timeouts";
-import {
-  buildHermesEnvFileBoundaryStandaloneCheck,
-  SECRET_BOUNDARY_OK_MARKER,
-  SECRET_BOUNDARY_REFUSED_MARKER,
-  SECRET_BOUNDARY_VALIDATOR_MISSING_MARKER,
-} from "../../agent/hermes-recovery-boundary";
 import * as agentRuntime from "../../agent/runtime";
 import { G, R } from "../../cli/terminal-style";
 import { sleepSeconds, waitUntil } from "../../core/wait";
 import { ROOT, shellQuote } from "../../runner";
+import { privilegedSandboxExecArgv } from "../../sandbox/privileged-exec";
 import { createTempSshConfig } from "../../sandbox/temp-ssh-config";
+import { withTimerBoundShieldsMutationLock } from "../../shields/timer-bound-lock";
 import * as registry from "../../state/registry";
 import {
   ensureHermesDashboardPortForwardIfEnabled,
   ensureSandboxPortForward,
   isSandboxForwardHealthy,
   recoverDeclaredAgentForwardPorts,
-  recoverHermesDashboardProcessIfEnabled,
   recoverMessagingHostForward,
   resolveSandboxDashboardPort,
 } from "./forward-recovery";
@@ -42,7 +38,6 @@ import {
   sandboxAgentName,
 } from "./gateway-restart";
 import { printGatewayWedgeDiagnostics } from "./gateway-wedge-diagnostics";
-import { getHermesDashboardRecoveryConfig } from "./hermes-dashboard-recovery";
 
 export type { SandboxForwardHealth, SandboxForwardListEntry } from "./forward-health";
 export {
@@ -137,10 +132,6 @@ function extractSandboxExecCommandStdout(output: string): string | null {
   }
 
   return null;
-}
-
-function isValidPort(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 65535;
 }
 
 function getSandboxHealthProbeUrl(sandboxName: string): string {
@@ -278,29 +269,46 @@ export function executeSandboxExecCommand(
   }
 }
 
-function executeSandboxRootExecCommand(
+export function executeGatewaySupervisorAction(
   sandboxName: string,
-  command: string,
-  timeout = DEFAULT_SANDBOX_EXEC_TIMEOUT_MS,
+  action: "restart" | "recover",
+  timeout = 210000,
 ): SandboxCommandResult | null {
-  const markedCommand = buildSandboxExecMarkedCommand(command);
-  const effectiveTimeout = resolveSandboxExecTimeout(timeout);
+  const nonce = randomBytes(32).toString("hex");
+  let argv: string[];
   try {
-    const result = spawnSync(
-      getOpenshellBinary(),
-      ["sandbox", "exec", "--name", sandboxName, "--", "sh", "-c", markedCommand],
-      {
-        cwd: ROOT,
-        encoding: "utf-8",
-        env: process.env,
-        stdio: ["ignore", "pipe", "pipe"],
-        timeout: effectiveTimeout,
-      },
-    );
-    return parseSandboxCommandResult(result);
-  } catch {
-    return null;
+    argv = privilegedSandboxExecArgv(sandboxName, [
+      "/usr/local/bin/nemoclaw-gateway-control",
+      action,
+      nonce,
+    ]);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "privileged container unavailable";
+    return {
+      status: 1,
+      stdout: "",
+      stderr: `PRIVILEGED_CONTROL_UNAVAILABLE: ${detail}`,
+    };
   }
+
+  const result = dockerSpawnSync(argv, {
+    cwd: ROOT,
+    encoding: "utf-8",
+    env: process.env,
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout,
+  });
+  if (result.error) return null;
+  const status = result.status ?? 1;
+  const stdout = String(result.stdout || "").trim();
+  let stderr = String(result.stderr || "").trim();
+  if (
+    (status === 126 || status === 127) &&
+    /(?:not found|no such file|executable file)/i.test(`${stdout}\n${stderr}`)
+  ) {
+    stderr = ["SUPERVISOR_REBUILD_REQUIRED", stderr].filter(Boolean).join("\n");
+  }
+  return { status, stdout, stderr };
 }
 
 async function executeSandboxExecCommandForStatus(
@@ -347,6 +355,15 @@ function isSandboxGatewayRunning(sandboxName: string): boolean | null {
   const command = `HTTP_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 3 ${shellQuote(probeUrl)} 2>/dev/null || echo 000); case "$HTTP_CODE" in 200|401) echo RUNNING ;; *) echo STOPPED ;; esac`;
   const execProbe = parseSandboxGatewayProbe(executeSandboxExecCommand(sandboxName, command));
   if (execProbe !== null) return execProbe;
+
+  // Built-in OpenClaw and Hermes lifecycle control is host-mediated through
+  // their root-owned PID 1 supervisors. If the trusted sandbox-exec path is
+  // unavailable or times out, do not silently cross back into the sandbox over
+  // SSH just to classify the gateway and then make a privileged recovery
+  // decision. Legacy custom gateway agents are the sole compatibility case:
+  // their recovery contract is explicitly SSH-owned until manifests can
+  // declare a trusted runtime user/supervisor.
+  if (!agent || agent.name === "openclaw" || agent.name === "hermes") return null;
   return parseSandboxGatewayProbe(executeSandboxCommand(sandboxName, command));
 }
 
@@ -411,7 +428,13 @@ export async function probeSandboxInferenceGatewayHealth(
  */
 function recoverSandboxProcesses(
   sandboxName: string,
-  { quiet = false }: { quiet?: boolean } = {},
+  {
+    quiet = false,
+    requestGatewaySupervisorAction = executeGatewaySupervisorAction,
+  }: {
+    quiet?: boolean;
+    requestGatewaySupervisorAction?: typeof executeGatewaySupervisorAction;
+  } = {},
 ): boolean {
   const agent = agentRuntime.getSessionAgent(sandboxName);
   const dashboardPort = resolveSandboxDashboardPort(sandboxName);
@@ -429,6 +452,7 @@ function recoverSandboxProcesses(
   const hasRecoveryMarker = (result: SandboxCommandResult | null) =>
     !!(
       result &&
+      result.status === 0 &&
       (result.stdout.includes("GATEWAY_PID=") || result.stdout.includes("ALREADY_RUNNING"))
     );
   const recoveredSsh = (result: SandboxCommandResult | null) =>
@@ -440,20 +464,33 @@ function recoverSandboxProcesses(
       if (!quiet) printGatewayRestartFailure(sandboxName, "unsupported agent", detail);
       return false;
     }
-    const restartPort = isValidPort(agent.healthProbe?.port)
-      ? agent.healthProbe.port
-      : dashboardPort;
-    const script = agentRuntime.buildHermesGatewayRecoveryScript(agent, restartPort);
-    const execResult = executeSandboxRootExecCommand(sandboxName, script, 30000);
+    const execResult = requestGatewaySupervisorAction(sandboxName, "recover");
     if (hasRecoveryMarker(execResult)) return true;
     const failure = classifyGatewayRestartFailure(execResult);
     if (!quiet) printGatewayRestartFailure(sandboxName, failure.layer, failure.detail);
     return false;
   }
 
-  const agentScript = agentRuntime.buildRecoveryScript(agent, dashboardPort, {
-    hermesDashboard: getHermesDashboardRecoveryConfig(sandboxName),
-  });
+  // A persisted non-OpenClaw runtime whose manifest cannot be loaded is not
+  // evidence that the sandbox is OpenClaw. Falling through here would run the
+  // OpenClaw recovery script against an unknown custom or terminal runtime.
+  // Keep legacy registry entries with no agent name on the OpenClaw fallback,
+  // but fail closed for an explicit non-OpenClaw agent.
+  if (persistedAgent && persistedAgent !== "openclaw" && !agent) {
+    const detail = `${persistedAgent} agent definition could not be loaded.`;
+    if (!quiet) printGatewayRestartFailure(sandboxName, "unsupported agent", detail);
+    return false;
+  }
+
+  if ((!persistedAgent || persistedAgent === "openclaw") && (!agent || agent.name === "openclaw")) {
+    const execResult = requestGatewaySupervisorAction(sandboxName, "recover");
+    if (hasRecoveryMarker(execResult)) return true;
+    const failure = classifyGatewayRestartFailure(execResult);
+    if (!quiet) printGatewayRestartFailure(sandboxName, failure.layer, failure.detail);
+    return false;
+  }
+
+  const agentScript = agentRuntime.buildRecoveryScript(agent, dashboardPort);
   if (agentRuntime.isTerminalAgentRecoveryScript(agentScript)) return false;
   if (agentScript) {
     // Non-Hermes custom manifests do not yet declare a supported host-side
@@ -462,37 +499,36 @@ function recoverSandboxProcesses(
     return recoveredSsh(executeSandboxCommand(sandboxName, agentScript));
   }
 
-  const script = agentRuntime.buildOpenClawRecoveryScript(dashboardPort);
-  const execResult = executeSandboxExecCommand(sandboxName, script, 30000);
-  if (hasRecoveryMarker(execResult)) return true;
-  if (execResult !== null) return false;
-  return recoveredSsh(executeSandboxCommand(sandboxName, script));
+  return false;
 }
 
 export function restartSandboxGateway(
   sandboxName: string,
   { quiet = false, deps = {} }: RestartSandboxGatewayOptions = {},
 ): GatewayRestartResult {
-  return restartSandboxGatewayWithDeps(sandboxName, {
-    quiet,
-    deps: {
-      getSessionAgent: agentRuntime.getSessionAgent,
-      getSandbox: registry.getSandbox,
-      resolveSandboxDashboardPort,
-      buildOpenClawGatewayRestartScript: agentRuntime.buildOpenClawGatewayRestartScript,
-      buildHermesGatewayRestartScript: agentRuntime.buildHermesGatewayRestartScript,
-      executeSandboxExecCommand: executeSandboxRootExecCommand,
-      waitForRecoveredSandboxGateway,
-      ensureSandboxPortForward,
-      ensureHermesDashboardPortForwardIfEnabled,
-      recoverHermesDashboardProcessIfEnabled: (name) =>
-        recoverHermesDashboardProcessIfEnabled(name, executeSandboxCommand),
-      recoverMessagingHostForward,
-      recoverDeclaredAgentForwardPorts,
-      printGatewayWedgeDiagnostics,
-      ...deps,
-    },
-  });
+  return withTimerBoundShieldsMutationLock(sandboxName, "gateway restart", () =>
+    restartSandboxGatewayWithDeps(sandboxName, {
+      quiet,
+      deps: {
+        getSessionAgent: agentRuntime.getSessionAgent,
+        getSandbox: registry.getSandbox,
+        resolveSandboxDashboardPort,
+        requestGatewaySupervisorAction: executeGatewaySupervisorAction,
+        executeSandboxExecCommand,
+        waitForRecoveredSandboxGateway: (name, options) =>
+          waitForRecoveredSandboxGateway(name, {
+            ...options,
+            timeoutSeconds: gatewayRecoveryTimeoutSeconds(agentRuntime.getSessionAgent(name)),
+          }),
+        ensureSandboxPortForward,
+        ensureHermesDashboardPortForwardIfEnabled,
+        recoverMessagingHostForward,
+        recoverDeclaredAgentForwardPorts,
+        printGatewayWedgeDiagnostics,
+        ...deps,
+      },
+    }),
+  );
 }
 
 function readNonNegativeNumberEnv(name: string, fallback: number): number {
@@ -502,17 +538,78 @@ function readNonNegativeNumberEnv(name: string, fallback: number): number {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
+function gatewayRecoveryTimeoutSeconds(
+  agent: ReturnType<typeof agentRuntime.getSessionAgent>,
+): number {
+  const timeoutSeconds = agent?.healthProbe?.timeout_seconds;
+  return typeof timeoutSeconds === "number" &&
+    Number.isFinite(timeoutSeconds) &&
+    timeoutSeconds >= 0
+    ? timeoutSeconds
+    : 30;
+}
+
+function printHostManagedGatewayRecoveryHints(
+  sandboxName: string,
+  agent: ReturnType<typeof agentRuntime.getSessionAgent>,
+): void {
+  const quotedSandboxName = shellQuote(sandboxName);
+  let agentName = agent?.name ?? null;
+  if (!agentName) {
+    try {
+      agentName = registry.getSandbox(sandboxName)?.agent ?? null;
+    } catch {
+      // Preserve the legacy OpenClaw hint when registry lookup itself failed.
+    }
+  }
+  if (!agentName || agentName === "openclaw" || agentName === "hermes") {
+    console.error("  Retry the managed restart from the host:");
+    console.error(`    nemoclaw ${quotedSandboxName} gateway restart`);
+  } else {
+    console.error("  This custom agent does not support the managed gateway restart command.");
+    console.error("  After addressing its gateway log, retry agent-aware recovery from the host:");
+    console.error(`    nemoclaw ${quotedSandboxName} recover`);
+  }
+  console.error("  If the sandbox image is incompatible or restart still fails, rebuild it:");
+  console.error(`    nemoclaw ${quotedSandboxName} rebuild --yes`);
+}
+
+function recoveryAgentDisplayName(
+  sandboxName: string,
+  agent: ReturnType<typeof agentRuntime.getSessionAgent>,
+): string {
+  if (agent) return agentRuntime.getAgentDisplayName(agent);
+  try {
+    const persistedAgent = registry.getSandbox(sandboxName)?.agent;
+    if (persistedAgent && persistedAgent !== "openclaw") return persistedAgent;
+  } catch {
+    // The recovery path below reports registry lookup failures with the
+    // structured unsupported-agent diagnostic.
+  }
+  return agentRuntime.getAgentDisplayName(null);
+}
+
 export function waitForRecoveredSandboxGateway(
   sandboxName: string,
   options: {
     probeImpl?: (sandboxName: string) => boolean | null;
     sleepImpl?: (seconds: number) => void;
     quiet?: boolean;
+    timeoutSeconds?: number;
   } = {},
 ): boolean {
   const probe = options.probeImpl ?? isSandboxGatewayRunning;
   const sleep = options.sleepImpl ?? sleepSeconds;
-  const timeoutSeconds = readNonNegativeNumberEnv("NEMOCLAW_GATEWAY_RECOVERY_WAIT_SECONDS", 30);
+  const requestedTimeoutSeconds =
+    typeof options.timeoutSeconds === "number" &&
+    Number.isFinite(options.timeoutSeconds) &&
+    options.timeoutSeconds >= 0
+      ? options.timeoutSeconds
+      : 30;
+  const timeoutSeconds = readNonNegativeNumberEnv(
+    "NEMOCLAW_GATEWAY_RECOVERY_WAIT_SECONDS",
+    requestedTimeoutSeconds,
+  );
   const intervalSeconds = readNonNegativeNumberEnv(
     "NEMOCLAW_GATEWAY_RECOVERY_POLL_INTERVAL_SECONDS",
     3,
@@ -570,34 +667,17 @@ function printValidatorStderr(stderr: string): void {
 }
 
 /**
- * Re-run the Hermes env-file secret-boundary validator against a running
- * gateway, before the probe path returns control to the caller. The
- * relaunch path already runs the same validator inline as part of
- * `buildRecoveryScript`, but the probe path returns early as soon as the
- * gateway is reported healthy, so a poisoned `.env` injected after cold
- * start would otherwise never be re-evaluated. The check is invoked via
- * `openshell sandbox exec` (root) so the validator's kill snippet can
- * actually signal the gateway-user process when refusing — a sandbox-user
- * SSH shell cannot (test/e2e-gateway-isolation.sh test 13). Every
- * refusal diagnostic — validator `[SECURITY]` stderr, the helper's own
- * context line, and the remediation hint — is written to `console.error`
- * unconditionally, so the offending key (e.g. `TELEGRAM_BOT_TOKEN (line
- * N)`) and the reason for refusal always reach the operator, including
- * on the quiet probe/recover path. Returns `null` only when the persisted
- * sandbox registry entry is not Hermes (no boundary to enforce). When
- * the registry says Hermes but the in-memory agent definition failed to
- * load (`getSessionAgent()` returned `null` from its catch path), the
- * helper fails safe with an inconclusive refusal rather than silently
- * skipping the boundary. A running Hermes gateway whose root exec
- * channel is unreachable is also treated as a fail-safe inconclusive
- * refusal rather than a healthy path. Non-zero validator status without
- * a `SECRET_BOUNDARY_REFUSED` marker is reported as inconclusive, not as
- * a raw-secret refusal, so a shell or validator crash does not
- * masquerade as a poisoned env file.
+ * Re-run the Hermes env-file secret boundary through the authenticated PID 1
+ * control path before a healthy recover returns. PID 1 owns the exact gateway
+ * child, so a raw-secret refusal can stop the listener without regex matching
+ * or a second process racing the supervisor. Missing helpers and transport
+ * failures remain fail-closed but leave an otherwise healthy legacy gateway
+ * untouched so the operator can rebuild it deliberately.
  */
 function enforceHermesSecretBoundaryOnRunningGateway(
   sandboxName: string,
   agent: ReturnType<typeof agentRuntime.getSessionAgent>,
+  requestGatewaySupervisorAction: typeof executeGatewaySupervisorAction,
 ): HermesSecretBoundaryEnforcement | null {
   const persistedAgent = registry.getSandbox(sandboxName)?.agent;
   if (persistedAgent !== "hermes") return null;
@@ -609,8 +689,7 @@ function enforceHermesSecretBoundaryOnRunningGateway(
     console.error("  Refusing recovery to keep the validator-enforced boundary intact.");
     return { refused: true, reason: "inconclusive", stderr: "" };
   }
-  const script = buildHermesEnvFileBoundaryStandaloneCheck();
-  const result = executeSandboxRootExecCommand(sandboxName, script, 30000);
+  const result = requestGatewaySupervisorAction(sandboxName, "recover");
   if (!result) {
     console.error("");
     console.error(
@@ -619,11 +698,11 @@ function enforceHermesSecretBoundaryOnRunningGateway(
     console.error("  Refusing recovery to keep the validator-enforced boundary intact.");
     return { refused: true, reason: "inconclusive", stderr: "" };
   }
-  const stdoutMarker = result.stdout
-    .split(/\r?\n/)
-    .reverse()
-    .find((line) => line.trim().startsWith("SECRET_BOUNDARY_"));
-  if (stdoutMarker === SECRET_BOUNDARY_REFUSED_MARKER) {
+  const output = `${result.stdout}\n${result.stderr}`;
+  if (result.status === 0 && result.stdout.includes("GATEWAY_PID=")) {
+    return { refused: false };
+  }
+  if (output.includes("SECRET_BOUNDARY_REFUSED")) {
     printValidatorStderr(result.stderr);
     console.error("");
     console.error(
@@ -635,10 +714,7 @@ function enforceHermesSecretBoundaryOnRunningGateway(
     );
     return { refused: true, reason: "raw-secret", stderr: result.stderr };
   }
-  if (stdoutMarker === SECRET_BOUNDARY_OK_MARKER) {
-    return { refused: false };
-  }
-  if (stdoutMarker === SECRET_BOUNDARY_VALIDATOR_MISSING_MARKER) {
+  if (output.includes("SECRET_BOUNDARY_VALIDATOR_MISSING")) {
     printValidatorStderr(result.stderr);
     console.error("");
     console.error(
@@ -666,11 +742,18 @@ function enforceHermesSecretBoundaryOnRunningGateway(
  * of the gateway. Returns an object describing the outcome:
  * `{ checked, wasRunning, recovered, forwardRecovered, forwardRecoveryFailed?, secretBoundaryRefused?, secretBoundaryReason? }`.
  */
-export function checkAndRecoverSandboxProcesses(
+function checkAndRecoverSandboxProcessesWithoutHostLock(
   sandboxName: string,
-  { quiet = false }: { quiet?: boolean } = {},
+  {
+    quiet = false,
+    requestGatewaySupervisorAction = executeGatewaySupervisorAction,
+  }: {
+    quiet?: boolean;
+    requestGatewaySupervisorAction?: typeof executeGatewaySupervisorAction;
+  } = {},
 ) {
   const recoveryAgent = agentRuntime.getSessionAgent(sandboxName);
+  const recoveryDisplayName = recoveryAgentDisplayName(sandboxName, recoveryAgent);
   if (recoveryAgent && !agentRuntime.hasGatewayRuntime(recoveryAgent)) {
     return {
       checked: true,
@@ -686,7 +769,11 @@ export function checkAndRecoverSandboxProcesses(
   }
   const recoveryPort = resolveSandboxDashboardPort(sandboxName);
   if (running) {
-    const enforcement = enforceHermesSecretBoundaryOnRunningGateway(sandboxName, recoveryAgent);
+    const enforcement = enforceHermesSecretBoundaryOnRunningGateway(
+      sandboxName,
+      recoveryAgent,
+      requestGatewaySupervisorAction,
+    );
     if (enforcement?.refused) {
       return {
         checked: true,
@@ -702,10 +789,6 @@ export function checkAndRecoverSandboxProcesses(
     // Gateway is alive but the host-side forward can still be dead or
     // owned by another sandbox. Probe and re-establish only when
     // necessary so the live-and-healthy path stays a no-op.
-    const dashboardProcessRecovered = recoverHermesDashboardProcessIfEnabled(
-      sandboxName,
-      executeSandboxCommand,
-    );
     const forwardHealthy = isSandboxForwardHealthy(sandboxName);
     if (forwardHealthy === false) {
       if (!quiet) {
@@ -724,7 +807,6 @@ export function checkAndRecoverSandboxProcesses(
         },
       );
       const auxiliaryResults = [
-        { label: "the Hermes dashboard process", recovered: dashboardProcessRecovered },
         { label: "the Hermes dashboard host forward", recovered: dashboardForwardRecovered },
         { label: "the messaging webhook host forward", recovered: messagingForwardRecovered },
         {
@@ -794,7 +876,6 @@ export function checkAndRecoverSandboxProcesses(
       quiet,
     });
     const auxiliaryResults = [
-      { label: "the Hermes dashboard process", recovered: dashboardProcessRecovered },
       { label: "the Hermes dashboard host forward", recovered: dashboardForwardRecovered },
       { label: "the messaging webhook host forward", recovered: messagingForwardRecovered },
       { label: "one or more agent-declared host forwards", recovered: declaredForwardsRecovered },
@@ -823,24 +904,29 @@ export function checkAndRecoverSandboxProcesses(
   if (!quiet) {
     console.log("");
     console.log(
-      `  ${agentRuntime.getAgentDisplayName(recoveryAgent)} gateway is not running inside the sandbox (sandbox likely restarted).`,
+      `  ${recoveryDisplayName} gateway is not running inside the sandbox (sandbox likely restarted).`,
     );
     console.log("  Recovering...");
   }
 
-  const recovered = recoverSandboxProcesses(sandboxName, { quiet });
+  const recovered = recoverSandboxProcesses(sandboxName, {
+    quiet,
+    requestGatewaySupervisorAction,
+  });
   if (recovered) {
     // Wait for gateway to bind its HTTP port before declaring success. The
     // recovered process can be alive before the OpenAI-compatible API is ready.
-    if (!waitForRecoveredSandboxGateway(sandboxName, { quiet })) {
+    if (
+      !waitForRecoveredSandboxGateway(sandboxName, {
+        quiet,
+        timeoutSeconds: gatewayRecoveryTimeoutSeconds(recoveryAgent),
+      })
+    ) {
       if (!quiet) {
         console.error("  Gateway process started but is not responding.");
         printGatewayWedgeDiagnostics(sandboxName, executeSandboxExecCommand);
         console.error("  Check /tmp/gateway.log inside the sandbox for details.");
-        console.error("  Connect to the sandbox and run manually:");
-        console.error(
-          `    ${agentRuntime.buildManualRecoveryCommand(recoveryAgent, recoveryPort)}`,
-        );
+        printHostManagedGatewayRecoveryHints(sandboxName, recoveryAgent);
       }
       return { checked: true, wasRunning: false, recovered: false, forwardRecovered: false };
     }
@@ -857,9 +943,7 @@ export function checkAndRecoverSandboxProcesses(
     ];
     const auxiliaryFailureDetail = auxiliaryRecoveryFailureDetail(auxiliaryResults);
     if (!quiet) {
-      console.log(
-        `  ${G}✓${R} ${agentRuntime.getAgentDisplayName(recoveryAgent)} gateway restarted inside sandbox.`,
-      );
+      console.log(`  ${G}✓${R} ${recoveryDisplayName} gateway restarted inside sandbox.`);
       if (forwardRecovered) {
         console.log(`  ${G}✓${R} Dashboard port forward re-established.`);
       } else {
@@ -899,12 +983,21 @@ export function checkAndRecoverSandboxProcesses(
     };
   }
   if (!quiet) {
-    console.error(
-      `  Could not restart ${agentRuntime.getAgentDisplayName(recoveryAgent)} gateway automatically.`,
-    );
-    console.error("  Connect to the sandbox and run manually:");
-    console.error(`    ${agentRuntime.buildManualRecoveryCommand(recoveryAgent, recoveryPort)}`);
+    console.error(`  Could not restart ${recoveryDisplayName} gateway automatically.`);
+    printHostManagedGatewayRecoveryHints(sandboxName, recoveryAgent);
   }
 
   return { checked: true, wasRunning: false, recovered, forwardRecovered: false };
+}
+
+export function checkAndRecoverSandboxProcesses(
+  sandboxName: string,
+  options: {
+    quiet?: boolean;
+    requestGatewaySupervisorAction?: typeof executeGatewaySupervisorAction;
+  } = {},
+) {
+  return withTimerBoundShieldsMutationLock(sandboxName, "gateway process recovery", () =>
+    checkAndRecoverSandboxProcessesWithoutHostLock(sandboxName, options),
+  );
 }

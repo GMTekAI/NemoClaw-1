@@ -11,26 +11,31 @@ export type SandboxForwardListEntry = {
 
 export type SandboxForwardHealth = boolean | "occupied" | null;
 
+function liveEntriesForPort(
+  entries: SandboxForwardListEntry[],
+  port: string,
+): SandboxForwardListEntry[] {
+  return entries.filter((entry) => entry.port === port && entry.status === "running");
+}
+
 export function classifySandboxForwardHealth(
   entries: SandboxForwardListEntry[],
   sandboxName: string,
   port: string,
 ): Exclude<SandboxForwardHealth, null> {
-  const match = entries.find((entry) => entry.port === port);
-  if (!match) return false;
-  if (match.sandboxName !== sandboxName) return "occupied";
-  return match.status === "running";
+  const liveEntries = liveEntriesForPort(entries, port);
+  if (liveEntries.some((entry) => entry.sandboxName !== sandboxName)) return "occupied";
+  return liveEntries.some((entry) => entry.sandboxName === sandboxName);
 }
 
 /**
  * Like {@link classifySandboxForwardHealth} but accepts a reachability
  * callback that probes whether the local forwarded port actually answers.
- * Reachability only overrides a non-running entry owned by the target
- * sandbox. A missing entry still returns false so recovery recreates the
- * OpenShell-owned forward instead of trusting an arbitrary local listener.
- * The "occupied" verdict is preserved — we never silently take over a
- * forward owned by another sandbox, even if that forward happens to be
- * reachable.
+ * OpenShell's exact live owner metadata remains authoritative: reachability
+ * cannot prove which process owns a local listener, so it must never upgrade a
+ * missing or non-running entry. A target-owned running row is necessary but not
+ * sufficient; it must also answer the local transport probe so stale list data
+ * cannot make recovery report a dead forward as healthy.
  */
 export function classifyForwardHealthWithReachability(
   entries: SandboxForwardListEntry[],
@@ -38,17 +43,15 @@ export function classifyForwardHealthWithReachability(
   port: string,
   isReachable: () => boolean,
 ): Exclude<SandboxForwardHealth, null> {
-  const match = entries.find((entry) => entry.port === port);
-  if (!match) return false;
-  if (match.sandboxName !== sandboxName) return "occupied";
-  if (match.status === "running") return true;
-  return isReachable() ? true : false;
+  const ownership = classifySandboxForwardHealth(entries, sandboxName, port);
+  if (ownership !== true) return ownership;
+  return isReachable();
 }
 
 /**
- * Synchronous reachability check for a local port. Used to override a
- * negative `openshell forward list` verdict when the forward is actually
- * still serving traffic.
+ * Synchronous reachability check for a local port. Reachability is transport
+ * evidence only; callers must pair it with authoritative OpenShell owner
+ * metadata and must not treat an arbitrary local listener as an owned forward.
  */
 export function isLocalForwardReachable(port: number): boolean {
   const script =

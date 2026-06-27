@@ -7,8 +7,8 @@ import path from "node:path";
 import { buildAvailabilityProbeEnv } from "../fixtures/availability-env.ts";
 import { trustedSandboxShellScript, validateSandboxName } from "../fixtures/clients/sandbox.ts";
 import { expect, test } from "../fixtures/e2e-test.ts";
-import { shouldRunLiveE2EScenarios } from "../fixtures/live-project-gate.ts";
 import { requireHostedInferenceConfig } from "../fixtures/hosted-inference.ts";
+import { shouldRunLiveE2EScenarios } from "../fixtures/live-project-gate.ts";
 import { ubuntuRepoDocker } from "../scenarios/matrix.ts";
 
 // Migrated from test/e2e/test-issue-4434-tui-unreachable-inference.sh.

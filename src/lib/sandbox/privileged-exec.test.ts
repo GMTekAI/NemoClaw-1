@@ -86,6 +86,12 @@ describe("privileged sandbox exec routing", () => {
     expect(selected).toBe("openshell-demo-abc123");
   });
 
+  it("fails closed when multiple suffix containers match without an exact identity", () => {
+    expect(() =>
+      selectDirectSandboxContainer("demo", "openshell-demo-old\nopenshell-demo-new\n", ["demo"]),
+    ).toThrow(/Multiple running direct OpenShell containers.*demo.*old.*new/);
+  });
+
   it("uses the longest registered sandbox-name match to avoid prefix collisions", () => {
     const containerNames = [
       "openshell-alpha-child",
@@ -148,6 +154,26 @@ describe("privileged sandbox exec routing", () => {
       },
       ({ privilegedSandboxExecArgv }) => {
         expect(() => privilegedSandboxExecArgv("alpha", ["id"])).toThrow("registry corrupt");
+      },
+    );
+    expect(dockerPsCalls).toBe(0);
+  });
+
+  it("rejects a Kubernetes registry owner before stale local-container discovery", () => {
+    let dockerPsCalls = 0;
+    withPrivilegedExecMocks(
+      {
+        getSandbox: () => ({ name: "alpha", openshellDriver: "kubernetes" }),
+        listSandboxes: () => ({ sandboxes: [{ name: "alpha" }], defaultSandbox: "alpha" }),
+        dockerCapture: () => {
+          dockerPsCalls += 1;
+          return "openshell-alpha-stale\n";
+        },
+      },
+      ({ privilegedSandboxExecArgv }) => {
+        expect(() => privilegedSandboxExecArgv("alpha", ["id"])).toThrow(
+          /driver: kubernetes.*refusing local Docker discovery/i,
+        );
       },
     );
     expect(dockerPsCalls).toBe(0);

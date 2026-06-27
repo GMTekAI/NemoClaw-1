@@ -31,14 +31,19 @@ Use this path when the plugin adds Python code, runtime hooks, or dependencies t
 `nemohermes <name> skill install <path>` is only for `SKILL.md` agent skills.
 It uploads skill instructions and refreshes skill discovery, but it does not install Hermes runtime plugins.
 
-When you change a Hermes plugin or a startup-only setting that already exists in the running sandbox, restart the Hermes gateway from the host:
+When you change plugin code or dependencies, update the custom image and rebuild the sandbox so the plugin remains reproducible.
+When you change a supported startup-only setting with a NemoClaw host command, restart the Hermes gateway from the host:
 
 ```bash
 nemohermes <name> gateway restart
 ```
 
-The restart command keeps the gateway process under the `gateway` user, validates `/sandbox/.hermes/.env` before relaunch, and checks or recovers the Hermes API, dashboard, and declared forwards after health passes.
-`recover` re-evaluates the Hermes secret boundary on every run, including healthy gateways, and repairs stopped gateways or forwards.
+The restart command sends an authenticated lifecycle request to the root-owned PID 1 supervisor through registry-scoped privileged direct-container control.
+The supervisor validates `/sandbox/.hermes/.env`, the runtime environment, and the strict root-owned config hash before it relaunches the gateway under the `gateway` user.
+It does not recompute that strict hash or adopt direct edits made inside the sandbox.
+Use `nemohermes <name> config set` or `nemohermes inference set` for supported configuration changes so NemoClaw updates the config and trust anchors together.
+PID 1 owns the Hermes gateway, dashboard, and internal API and dashboard relays; the host only checks or recovers the host-side OpenShell forwards after health passes.
+`recover` re-evaluates the Hermes secret boundary on every run, including healthy gateways, and repairs stopped supervised processes or host forwards.
 Use `gateway restart` when you need a forced runtime reload.
 
 ## Prepare a Build Directory
@@ -57,13 +62,19 @@ my-hermes-plugin-sandbox/
 ```
 
 If you start from the stock NemoClaw Hermes Dockerfile, keep the NemoClaw Hermes image contract intact.
-The image must still include the generated Hermes config, NemoClaw Hermes plugin, blueprint files, and `nemoclaw-start` entrypoint.
+The image must still include the generated Hermes config, NemoClaw Hermes plugin, blueprint files, `nemoclaw-start` entrypoint, root-only gateway control helper, and shared supervisor library.
 
 <Warning>
   A custom `--from` Dockerfile replaces the normal NemoClaw Hermes Dockerfile.
   Starting from `ghcr.io/nvidia/nemoclaw/hermes-sandbox-base:latest` alone is not enough.
   Your Dockerfile must also preserve the NemoClaw Hermes layers from `agents/hermes/Dockerfile`.
 </Warning>
+
+If `gateway restart` or `recover` reports `privileged control unavailable` for an older custom image, update the Dockerfile to the current Hermes image contract and rebuild it with `nemohermes <name> rebuild --yes`.
+Supervisor control requires a direct sandbox container whose PID 1 is the built-in NemoClaw entrypoint, or a custom image that preserves that entrypoint, running as root.
+A VM host is supported only when its direct sandbox container uses that root entrypoint.
+Non-root direct-container entrypoints, including VM deployments that launch the image as non-root, cannot use supervisor control; rebuild or recreate the sandbox with the current image contract in a supported root-entrypoint deployment.
+Kubernetes and other deployments without a direct container fail closed and do not fall back to ordinary `openshell sandbox exec` or an in-sandbox manual relaunch.
 
 ## Install the Plugin in the Image
 
