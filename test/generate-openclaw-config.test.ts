@@ -1785,37 +1785,39 @@ describe("generate-openclaw-config.mts: config generation", () => {
     expect(config.gateway.auth.token).toBe("");
   });
 
-  it("disables bundled acpx runtime staging by default", () => {
+  it("disables bundled bonjour in sandbox config by default", () => {
     const config = runConfigScript();
-    expect(config.plugins.entries.acpx.enabled).toBe(false);
-    expect(config.plugins.entries.acpx.config).toBeUndefined();
+    expect(config.plugins.entries.bonjour.enabled).toBe(false);
+    expect(config.plugins.entries.bonjour.config).toBeUndefined();
   });
 
-  it("disables unused bundled provider plugins with staged runtime deps", () => {
+  it("omits stale disabled entries for optional bundled plugins", () => {
     const config = runConfigScript({ NEMOCLAW_PROVIDER_KEY: "inference" });
-    expect(config.plugins.entries["amazon-bedrock"].enabled).toBe(false);
-    expect(config.plugins.entries["amazon-bedrock-mantle"].enabled).toBe(false);
-    expect(config.plugins.entries.anthropic.enabled).toBe(false);
-    expect(config.plugins.entries["anthropic-vertex"].enabled).toBe(false);
-    expect(config.plugins.entries.fireworks.enabled).toBe(false);
-    expect(config.plugins.entries.google.enabled).toBe(false);
-    expect(config.plugins.entries.kimi.enabled).toBe(false);
-    expect(config.plugins.entries.lmstudio.enabled).toBe(false);
-    expect(config.plugins.entries.ollama.enabled).toBe(false);
-    expect(config.plugins.entries.openai.enabled).toBe(false);
-    expect(config.plugins.entries.xai.enabled).toBe(false);
+    expect(config.plugins.entries.acpx).toBeUndefined();
+    expect(config.plugins.entries.qqbot).toBeUndefined();
+    expect(config.plugins.entries["amazon-bedrock"]).toBeUndefined();
+    expect(config.plugins.entries["amazon-bedrock-mantle"]).toBeUndefined();
+    expect(config.plugins.entries.anthropic).toBeUndefined();
+    expect(config.plugins.entries["anthropic-vertex"]).toBeUndefined();
+    expect(config.plugins.entries.fireworks).toBeUndefined();
+    expect(config.plugins.entries.google).toBeUndefined();
+    expect(config.plugins.entries.kimi).toBeUndefined();
+    expect(config.plugins.entries.lmstudio).toBeUndefined();
+    expect(config.plugins.entries.ollama).toBeUndefined();
+    expect(config.plugins.entries.openai).toBeUndefined();
+    expect(config.plugins.entries.xai).toBeUndefined();
   });
 
   it("keeps the selected bundled provider plugin available", () => {
     const config = runConfigScript({ NEMOCLAW_PROVIDER_KEY: "anthropic" });
     expect(config.plugins.entries.anthropic).toBeUndefined();
-    expect(config.plugins.entries.google.enabled).toBe(false);
+    expect(config.plugins.entries.google).toBeUndefined();
   });
 
   it("keeps the selected OpenAI bundled provider plugin available", () => {
     const config = runConfigScript({ NEMOCLAW_PROVIDER_KEY: "openai" });
     expect(config.plugins.entries.openai).toBeUndefined();
-    expect(config.plugins.entries.xai.enabled).toBe(false);
+    expect(config.plugins.entries.xai).toBeUndefined();
   });
 
   it("#4246: enables the discord plugin entry when Discord channel is configured", () => {
