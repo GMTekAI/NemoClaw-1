@@ -1154,7 +1154,7 @@ hermes-box  127.0.0.1  8642  12346  running`;
     expect(secretBoundaryCalls).toBe(1);
   });
 
-  it("falls through when the Hermes secret-boundary validator is absent on an older sandbox image", () => {
+  it("refuses recovery when the Hermes secret-boundary validator is absent on an older sandbox image", () => {
     const openshellRuntime = requireDist("../dist/lib/adapters/openshell/runtime.js");
     const agentRuntime = requireDist("../dist/lib/agent/runtime.js");
     const registry = requireDist("../dist/lib/state/registry.js");
@@ -1207,12 +1207,14 @@ hermes-box  127.0.0.1  8642  12346  running`;
       wasRunning: true,
       recovered: false,
       forwardRecovered: false,
+      secretBoundaryRefused: true,
+      secretBoundaryReason: "inconclusive",
     });
     const errorOutput = errorSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
     expect(errorOutput).toContain(
-      "[boundary] Hermes secret-boundary validator missing in sandbox 'hermes-box'",
+      "Hermes secret-boundary validator missing in sandbox 'hermes-box'",
     );
-    expect(errorOutput).toContain("Re-image the sandbox to enable per-run enforcement.");
+    expect(errorOutput).toContain("Re-image the sandbox with a current Hermes build.");
   });
 
   it("does not invoke the Hermes secret-boundary check for an OpenClaw sandbox", () => {
