@@ -79,12 +79,12 @@ function commandOutput(result: SpawnResult): string {
 
 function resolveGatewayBin(): string | null {
   for (const candidate of [
-    process.env.NEMOCLAW_OPENSHELL_GATEWAY_BIN,
-    process.env.OPENSHELL_GATEWAY_BIN,
+    path.join(os.homedir(), ".local", "bin", "openshell-gateway"),
+    "/opt/homebrew/bin/openshell-gateway",
     "/usr/local/bin/openshell-gateway",
     "/usr/bin/openshell-gateway",
   ]) {
-    if (candidate && fs.existsSync(candidate)) return candidate;
+    if (fs.existsSync(candidate)) return candidate;
   }
   const which = run("sh", ["-c", "command -v openshell-gateway"]);
   return which.status === 0 && which.stdout.trim() ? which.stdout.trim() : null;
@@ -92,12 +92,11 @@ function resolveGatewayBin(): string | null {
 
 function resolveDockerBin(): string | null {
   for (const candidate of [
-    process.env.DOCKER_BIN,
     "/opt/homebrew/bin/docker",
     "/usr/local/bin/docker",
     "/usr/bin/docker",
   ]) {
-    if (candidate && fs.existsSync(candidate)) return candidate;
+    if (fs.existsSync(candidate)) return candidate;
   }
   const which = run("sh", ["-c", "command -v docker"]);
   return which.status === 0 && which.stdout.trim() ? which.stdout.trim() : null;
