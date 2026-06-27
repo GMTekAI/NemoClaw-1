@@ -111,6 +111,10 @@ describe("docker-driver-gateway-launch", () => {
           "nemoclaw-openshell-gateway",
           "--network",
           "host",
+          "--cap-drop",
+          "ALL",
+          "--security-opt",
+          "no-new-privileges",
           "--volume",
           `${gatewayBin}:/opt/nemoclaw/openshell-gateway:ro`,
           "--volume",
@@ -118,7 +122,7 @@ describe("docker-driver-gateway-launch", () => {
           "--volume",
           `${dir}:${dir}:ro`,
           "--volume",
-          `${dockerSocket}:${dockerSocket}:rw`,
+          `${dockerSocket}:${dockerSocket}:ro`,
           "--env",
           "OPENSHELL_DRIVERS",
           "--env",
@@ -203,6 +207,9 @@ describe("docker-driver-gateway-launch", () => {
 
     expect(messages).toContain(
       "  Compatibility gateway bind: 127.0.0.1 main listener plus OpenShell Docker-driver bridge reachability.",
+    );
+    expect(messages).toContain(
+      "  Compatibility container trust boundary: host networking plus Docker API access; disable with NEMOCLAW_OPENSHELL_GATEWAY_CONTAINER_PATCH=0 on untrusted hosts.",
     );
     expect(messages).toContain(
       "  Gateway auth boundary: host-side OpenShell CLI uses local mTLS; sandbox callbacks use mTLS plus OpenShell gateway JWT.",

@@ -306,8 +306,20 @@ export function buildDockerDriverGatewayLaunch(
   // callback addresses exactly as a host gateway would; the main listener is
   // still forced to loopback by compatGatewayBindAddress(). Docker socket access
   // is needed only so that gateway process can continue driving the Docker
-  // compute driver from inside the shim container.
-  const args = ["run", "--rm", "--name", containerName, "--network", "host"];
+  // compute driver from inside the shim container; the socket is still a
+  // privileged host API even with a read-only bind mount.
+  const args = [
+    "run",
+    "--rm",
+    "--name",
+    containerName,
+    "--network",
+    "host",
+    "--cap-drop",
+    "ALL",
+    "--security-opt",
+    "no-new-privileges",
+  ];
   addVolume(args, path.resolve(options.gatewayBin), GATEWAY_MOUNT_PATH, "ro");
   addVolume(args, path.resolve(options.stateDir), path.resolve(options.stateDir), "rw");
   addVolume(
@@ -316,7 +328,7 @@ export function buildDockerDriverGatewayLaunch(
     path.resolve(path.dirname(sandboxBin)),
     "ro",
   );
-  if (fs.existsSync(dockerSocket)) addVolume(args, dockerSocket, dockerSocket, "rw");
+  if (fs.existsSync(dockerSocket)) addVolume(args, dockerSocket, dockerSocket, "ro");
   for (const key of Object.keys(gatewayEnv).sort()) {
     addEnv(args, key, gatewayEnv[key]);
   }
@@ -402,6 +414,9 @@ export function prepareAndLogDockerDriverGatewayLaunch(
   if (launch.mode !== "container") return;
   log(`  OpenShell gateway compatibility patch active (${launch.reason}).`);
   log("  Running openshell-gateway inside a Docker compatibility container.");
+  log(
+    "  Compatibility container trust boundary: host networking plus Docker API access; disable with NEMOCLAW_OPENSHELL_GATEWAY_CONTAINER_PATCH=0 on untrusted hosts.",
+  );
   log(
     "  Compatibility gateway bind: 127.0.0.1 main listener plus OpenShell Docker-driver bridge reachability.",
   );

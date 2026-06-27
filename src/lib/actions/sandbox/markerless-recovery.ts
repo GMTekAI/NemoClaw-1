@@ -7,6 +7,18 @@ type MarkerlessSandboxCommandResult = {
   stderr: string;
 } | null;
 
+export type SandboxProcessRecoveryAttempt = {
+  recovered: boolean;
+  mayHaveStarted: boolean;
+};
+
+export function sandboxRecoveryAttempt(
+  recovered: boolean,
+  mayHaveStarted = false,
+): SandboxProcessRecoveryAttempt {
+  return { recovered, mayHaveStarted };
+}
+
 export function outputLooksLikeMarkerlessGatewayLaunch(
   result: MarkerlessSandboxCommandResult,
 ): boolean {
@@ -22,4 +34,13 @@ export function outputLooksLikeMarkerlessGatewayLaunch(
   // Remove this shim when OpenShell exposes a stable machine-readable recovery
   // marker for sandbox exec relaunch output.
   return /\b(gateway|openclaw|launcher|started|nohup)\b/i.test(output);
+}
+
+export function sandboxRecoveryAttemptFromExecResult(
+  result: MarkerlessSandboxCommandResult,
+  hasRecoveryMarker: boolean,
+): SandboxProcessRecoveryAttempt | null {
+  if (hasRecoveryMarker) return sandboxRecoveryAttempt(true);
+  if (result === null) return null;
+  return sandboxRecoveryAttempt(false, outputLooksLikeMarkerlessGatewayLaunch(result));
 }

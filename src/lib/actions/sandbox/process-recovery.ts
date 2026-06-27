@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
 import { dockerSpawnSync } from "../../adapters/docker";
 import {
@@ -38,7 +37,15 @@ import {
   getHermesDashboardRecoveryConfig,
   recoverHermesDashboardProcessIfEnabled as recoverHermesDashboardProcess,
 } from "./hermes-dashboard-recovery";
-import { outputLooksLikeMarkerlessGatewayLaunch } from "./markerless-recovery";
+import {
+  type SandboxProcessRecoveryAttempt,
+  sandboxRecoveryAttempt,
+  sandboxRecoveryAttemptFromExecResult,
+} from "./markerless-recovery";
+import {
+  buildSandboxExecMarkedCommand,
+  extractSandboxExecCommandStdout,
+} from "./sandbox-exec-output";
 
 export {
   classifyForwardHealthWithReachability,
@@ -49,11 +56,6 @@ export type SandboxCommandResult = {
   status: number;
   stdout: string;
   stderr: string;
-};
-
-type SandboxProcessRecoveryAttempt = {
-  recovered: boolean;
-  mayHaveStarted: boolean;
 };
 
 type SandboxPortAgent = { forwardPort?: unknown; runtime?: { kind?: unknown } } | null;
@@ -70,59 +72,6 @@ export type SandboxForwardListEntry = {
 };
 
 export type SandboxForwardHealth = boolean | "occupied" | null;
-
-const SANDBOX_EXEC_STARTED_MARKER = "__NEMOCLAW_SANDBOX_EXEC_STARTED__";
-
-function buildSandboxExecMarkedCommand(command: string): string {
-  if (!command.includes("validate-hermes-env-secret-boundary.py")) {
-    return `printf '%s\n' '${SANDBOX_EXEC_STARTED_MARKER}'; ${command}`;
-  }
-  const encodedCommand = Buffer.from(command, "utf8").toString("base64");
-  return [
-    `printf '%s\\n' '${SANDBOX_EXEC_STARTED_MARKER}'`,
-    "command -v base64 >/dev/null 2>&1 || { echo NEMOCLAW_BASE64_MISSING >&2; exit 127; }",
-    `printf '%s' '${encodedCommand}' | base64 -d | sh`,
-  ].join("; ");
-}
-
-function parseSandboxExecStdoutFrame(line: string): { text: string; framed: boolean } {
-  const trimmed = line.trimStart();
-  const stdoutPrefix = trimmed.match(/^(?:\[stdout\]|stdout:)\s*/i);
-  if (!stdoutPrefix) return { text: line, framed: false };
-  return { text: trimmed.slice(stdoutPrefix[0].length), framed: true };
-}
-
-/**
- * Extract child-command stdout from `openshell sandbox exec` output after the
- * sentinel printed by `markedCommand`. Some OpenShell versions frame child
- * stdout for humans, e.g. `stdout: __NEMOCLAW_SANDBOX_EXEC_STARTED__`, while
- * older versions pass raw stdout through unchanged. Normalize only recognized
- * stdout frame prefixes at this transport boundary so recovery, status, and
- * Hermes boundary callers keep consuming plain command stdout.
- *
- * Security boundary: the sentinel must occupy its own stdout line after optional
- * frame-prefix stripping. A preamble that merely contains the sentinel string is
- * rejected so sandbox output cannot move the parser boundary forward. Remove
- * this compatibility shim once OpenShell exposes a stable machine-readable exec
- * output mode that preserves child stdout/stderr without human framing.
- */
-function extractSandboxExecCommandStdout(output: string): string | null {
-  const stdout = output.trim();
-  if (!stdout) return null;
-  const lines = stdout.split(/\r?\n/).map(parseSandboxExecStdoutFrame);
-  const exactMarkerIndex = lines.findIndex(
-    (line) => line.text.trim() === SANDBOX_EXEC_STARTED_MARKER,
-  );
-  if (exactMarkerIndex >= 0) {
-    return lines
-      .slice(exactMarkerIndex + 1)
-      .map((line) => line.text)
-      .join("\n")
-      .trim();
-  }
-
-  return null;
-}
 
 function isValidPort(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 65535;
@@ -386,13 +335,6 @@ export async function probeSandboxInferenceGatewayHealth(
  * Cleans stale lock/temp files, sources proxy config, and launches the gateway
  * in the background. Returns true on success.
  */
-function sandboxRecoveryAttempt(
-  recovered: boolean,
-  mayHaveStarted = false,
-): SandboxProcessRecoveryAttempt {
-  return { recovered, mayHaveStarted };
-}
-
 function recoverSandboxProcesses(sandboxName: string): SandboxProcessRecoveryAttempt {
   const agent = agentRuntime.getSessionAgent(sandboxName);
   const dashboardPort = resolveSandboxDashboardPort(sandboxName);
@@ -417,10 +359,11 @@ function recoverSandboxProcesses(sandboxName: string): SandboxProcessRecoveryAtt
 
   const script = agentRuntime.buildOpenClawRecoveryScript(dashboardPort);
   const execResult = executeSandboxExecCommand(sandboxName, script, 30000);
-  if (hasRecoveryMarker(execResult)) return sandboxRecoveryAttempt(true);
-  if (execResult !== null) {
-    return sandboxRecoveryAttempt(false, outputLooksLikeMarkerlessGatewayLaunch(execResult));
-  }
+  const execAttempt = sandboxRecoveryAttemptFromExecResult(
+    execResult,
+    hasRecoveryMarker(execResult),
+  );
+  if (execAttempt) return execAttempt;
   return sandboxRecoveryAttempt(recoveredSsh(executeSandboxCommand(sandboxName, script)));
 }
 

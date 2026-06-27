@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it } from "vitest";
-
-import { outputLooksLikeMarkerlessGatewayLaunch } from "./markerless-recovery";
+import {
+  outputLooksLikeMarkerlessGatewayLaunch,
+  sandboxRecoveryAttemptFromExecResult,
+} from "./markerless-recovery";
 
 describe("markerless recovery output", () => {
   it("treats launcher-started output as provisional recovery only", () => {
@@ -38,5 +40,29 @@ describe("markerless recovery output", () => {
         stderr: "",
       }),
     ).toBe(false);
+  });
+
+  it("keeps markerless recovery provisional until health is verified by the caller", () => {
+    expect(
+      sandboxRecoveryAttemptFromExecResult(
+        {
+          status: 0,
+          stdout: "launcher started without legacy recovery marker",
+          stderr: "",
+        },
+        false,
+      ),
+    ).toEqual({ recovered: false, mayHaveStarted: true });
+    expect(sandboxRecoveryAttemptFromExecResult(null, false)).toBeNull();
+    expect(
+      sandboxRecoveryAttemptFromExecResult(
+        {
+          status: 0,
+          stdout: "GATEWAY_PID=123",
+          stderr: "",
+        },
+        true,
+      ),
+    ).toEqual({ recovered: true, mayHaveStarted: false });
   });
 });

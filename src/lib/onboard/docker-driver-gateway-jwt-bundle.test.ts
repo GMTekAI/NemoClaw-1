@@ -121,4 +121,24 @@ describe("docker-driver-gateway JWT bundle", () => {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });
+
+  it("treats the gateway config file as the final atomic commitment record", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-config-"));
+    try {
+      const staleTmpConfig = path.join(stateDir, ".openshell-gateway.toml.tmp-crashed");
+      fs.writeFileSync(staleTmpConfig, "partial config\n", { mode: 0o600 });
+
+      writeGatewayConfig(stateDir);
+
+      const configPath = path.join(stateDir, "openshell-gateway.toml");
+      const toml = fs.readFileSync(configPath, "utf-8");
+      expect(fs.existsSync(staleTmpConfig)).toBe(false);
+      expect(fs.statSync(configPath).mode & 0o777).toBe(0o600);
+      expect(toml).toContain("[openshell.gateway.gateway_jwt]");
+      expect(toml).toContain("allow_unauthenticated_users = false");
+      expectEd25519BundleSignsAndVerifies(jwtBundlePaths(stateDir));
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
 });

@@ -36,6 +36,35 @@ function writeRestrictedFile(filePath: string, value: string, mode = 0o600): voi
   fs.chmodSync(filePath, mode);
 }
 
+function writeRestrictedFileAtomic(filePath: string, value: string, mode = 0o600): void {
+  const dir = path.dirname(filePath);
+  const basename = path.basename(filePath);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  cleanupStaleAtomicFileTemps(dir, basename);
+  const tmpPath = path.join(
+    dir,
+    `.${basename}.tmp-${process.pid}-${randomBytes(6).toString("hex")}`,
+  );
+  let committed = false;
+  try {
+    writeRestrictedFile(tmpPath, value, mode);
+    fs.renameSync(tmpPath, filePath);
+    fs.chmodSync(filePath, mode);
+    committed = true;
+  } finally {
+    if (!committed) fs.rmSync(tmpPath, { force: true });
+  }
+}
+
+function cleanupStaleAtomicFileTemps(dir: string, basename: string): void {
+  const prefix = `.${basename}.tmp-`;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isFile() && entry.name.startsWith(prefix)) {
+      fs.rmSync(path.join(dir, entry.name), { force: true });
+    }
+  }
+}
+
 function dockerDriverGatewayJwtBundleForDir(jwtDir: string): DockerDriverGatewayJwtBundle {
   return {
     signingKeyPath: path.join(jwtDir, "signing.pem"),
@@ -234,7 +263,7 @@ export function writeDockerDriverGatewayConfig(
 ): string {
   const configPath = path.join(stateDir, DOCKER_DRIVER_GATEWAY_CONFIG_NAME);
   const jwtBundle = ensureDockerDriverGatewayJwtBundle(stateDir);
-  fs.writeFileSync(
+  writeRestrictedFileAtomic(
     configPath,
     buildDockerDriverGatewayConfigToml(
       gatewayEnv,
@@ -242,12 +271,8 @@ export function writeDockerDriverGatewayConfig(
       jwtBundle,
       gatewayIdForStateDir(stateDir),
     ),
-    {
-      encoding: "utf-8",
-      mode: 0o600,
-    },
+    0o600,
   );
-  fs.chmodSync(configPath, 0o600);
   return configPath;
 }
 
