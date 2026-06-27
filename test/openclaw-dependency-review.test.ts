@@ -127,7 +127,7 @@ describe("OpenClaw 2026.6.9 dependency review contract", () => {
     expect(review).toContain("MSTEAMS_E2E=1");
     expect(review).toContain("MSTEAMS_PUBLIC_WEBHOOK_URL");
     expect(review).toContain("MSTEAMS_E2E_ACTIVITY_JSON");
-    expect(review).toContain("teams-message-round-trip-driver.mjs");
+    expect(review).toContain("teams-message-round-trip-driver.ts");
     expect(review).toContain("allowlisted environment");
     expect(review).toContain("test/e2e-scenario/live/teams-message-round-trip.test.ts");
 
@@ -228,7 +228,8 @@ grep -Fq -- '--phase post-agent-install' Dockerfile
     expect(teamsLiveTest).toContain("MSTEAMS_ALLOWED_USERS");
     expect(teamsLiveTest).toContain("MSTEAMS_PUBLIC_WEBHOOK_URL");
     expect(teamsLiveTest).toContain("MSTEAMS_E2E_ACTIVITY_JSON");
-    expect(teamsLiveTest).toContain("teams-message-round-trip-driver.mjs");
+    expect(teamsLiveTest).toContain("teams-message-round-trip-driver.ts");
+    expect(teamsLiveTest).toContain("--experimental-strip-types");
     expect(teamsLiveTest).toContain("buildTeamsDriverEnv");
     expect(teamsLiveTest).not.toContain('host.command("bash", ["-lc"');
     expect(teamsLiveTest).not.toContain("env: process.env");

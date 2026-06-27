@@ -9,9 +9,11 @@ const REQUIRED_ENV_KEYS = [
   "MSTEAMS_ALLOWED_USERS",
   "MSTEAMS_PUBLIC_WEBHOOK_URL",
   "MSTEAMS_E2E_ACTIVITY_JSON",
-];
+] as const;
 
-function requiredEnv(name) {
+type RequiredEnvKey = (typeof REQUIRED_ENV_KEYS)[number];
+
+function requiredEnv(name: RequiredEnvKey): string {
   const value = process.env[name]?.trim();
   if (!value) {
     throw new Error(`missing required environment variable ${name}`);
@@ -19,38 +21,42 @@ function requiredEnv(name) {
   return value;
 }
 
-function parseJson(name, value) {
+function parseJson(name: string, value: string): unknown {
   try {
     return JSON.parse(value);
   } catch (error) {
-    throw new Error(`${name} must be valid JSON: ${error instanceof Error ? error.message : error}`);
+    throw new Error(
+      `${name} must be valid JSON: ${error instanceof Error ? error.message : error}`,
+    );
   }
 }
 
-function readPath(value, path) {
+function readPath(value: unknown, path: readonly string[]): unknown {
   return path.reduce((current, key) => {
     if (!current || typeof current !== "object") return undefined;
-    return current[key];
+    return (current as Record<string, unknown>)[key];
   }, value);
 }
 
-function stringAt(value, path) {
+function stringAt(value: unknown, path: readonly string[]): string | null {
   const candidate = readPath(value, path);
   return typeof candidate === "string" && candidate.trim() ? candidate.trim() : null;
 }
 
-function collectStrings(value, paths) {
-  return paths.map((path) => stringAt(value, path)).filter(Boolean);
+function collectStrings(value: unknown, paths: readonly (readonly string[])[]): string[] {
+  return paths
+    .map((path) => stringAt(value, path))
+    .filter((entry): entry is string => Boolean(entry));
 }
 
-function ensureIncludes(label, candidates, expected) {
+function ensureIncludes(label: string, candidates: readonly string[], expected: string): void {
   if (candidates.some((candidate) => candidate === expected || candidate.includes(expected))) {
     return;
   }
   throw new Error(`${label} did not include expected value`);
 }
 
-function ensureAnyAllowedUser(activity, allowedUsers) {
+function ensureAnyAllowedUser(activity: unknown, allowedUsers: readonly string[]): void {
   const candidates = collectStrings(activity, [
     ["from", "aadObjectId"],
     ["from", "id"],
@@ -61,7 +67,10 @@ function ensureAnyAllowedUser(activity, allowedUsers) {
   throw new Error("activity sender did not match MSTEAMS_ALLOWED_USERS");
 }
 
-async function postActivity(webhookUrl, activity) {
+async function postActivity(
+  webhookUrl: URL,
+  activity: unknown,
+): Promise<{ status: number; bodyLength: number }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 60_000);
   try {
@@ -84,8 +93,11 @@ async function postActivity(webhookUrl, activity) {
   }
 }
 
-async function main() {
-  const env = Object.fromEntries(REQUIRED_ENV_KEYS.map((key) => [key, requiredEnv(key)]));
+async function main(): Promise<void> {
+  const env = Object.fromEntries(REQUIRED_ENV_KEYS.map((key) => [key, requiredEnv(key)])) as Record<
+    RequiredEnvKey,
+    string
+  >;
   const webhookUrl = new URL(env.MSTEAMS_PUBLIC_WEBHOOK_URL);
   if (webhookUrl.protocol !== "https:") {
     throw new Error("MSTEAMS_PUBLIC_WEBHOOK_URL must use https");

@@ -19,7 +19,7 @@ const REQUIRED_ENV_KEYS = [
 ] as const;
 
 const TEAMS_ROUND_TRIP_DRIVER = fileURLToPath(
-  new URL("./teams-message-round-trip-driver.mjs", import.meta.url),
+  new URL("./teams-message-round-trip-driver.ts", import.meta.url),
 );
 
 function missingTeamsEnv(): string[] {
@@ -54,15 +54,19 @@ runTeamsE2E(
         "real Microsoft tenant, Bot Framework credentials, tenant-captured Bot Framework activity, public HTTPS webhook, sandbox /api/messages receive path",
       requiredEnv: REQUIRED_ENV_KEYS,
       webhookHost: new URL(webhookUrl).host,
-      driver: "teams-message-round-trip-driver.mjs",
+      driver: "teams-message-round-trip-driver.ts",
     });
 
-    const result = await host.command(process.execPath, [TEAMS_ROUND_TRIP_DRIVER], {
-      artifactName: "teams-message-round-trip-driver",
-      env: driverEnv,
-      redactionValues: redactions,
-      timeoutMs: 20 * 60_000,
-    });
+    const result = await host.command(
+      process.execPath,
+      ["--experimental-strip-types", TEAMS_ROUND_TRIP_DRIVER],
+      {
+        artifactName: "teams-message-round-trip-driver",
+        env: driverEnv,
+        redactionValues: redactions,
+        timeoutMs: 20 * 60_000,
+      },
+    );
 
     expect(result.exitCode, secrets.redact(`${result.stdout}\n${result.stderr}`, redactions)).toBe(
       0,
