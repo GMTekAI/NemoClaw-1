@@ -198,10 +198,14 @@ describe("OpenClaw #4434 diagnostics compatibility patch", () => {
   it("rejects malformed command lines", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-openclaw-4434-usage-"));
     try {
-      const result = spawnSync(process.execPath, ["--experimental-strip-types", PATCH_SCRIPT, tmp, tmp], {
-        encoding: "utf-8",
-        timeout: 10000,
-      });
+      const result = spawnSync(
+        process.execPath,
+        ["--experimental-strip-types", PATCH_SCRIPT, tmp, tmp],
+        {
+          encoding: "utf-8",
+          timeout: 10000,
+        },
+      );
       expect(result.status, `${result.stdout}${result.stderr}`).toBe(2);
       expect(result.stderr).toContain("Usage: patch-openclaw-issue-4434-diagnostics.ts");
     } finally {
