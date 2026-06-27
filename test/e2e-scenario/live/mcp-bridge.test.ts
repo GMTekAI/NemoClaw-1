@@ -7,35 +7,21 @@ import path from "node:path";
 
 import { buildAvailabilityProbeEnv } from "../fixtures/availability-env.ts";
 import type { HostCliClient } from "../fixtures/clients/host.ts";
-import {
-  trustedSandboxShellScript,
-  type SandboxClient,
-} from "../fixtures/clients/sandbox.ts";
+import { trustedSandboxShellScript, type SandboxClient } from "../fixtures/clients/sandbox.ts";
 import { expect, test } from "../fixtures/e2e-test.ts";
 import type { CleanupRegistry } from "../fixtures/cleanup.ts";
 import type { ShellProbeResult } from "../fixtures/shell-probe.ts";
-import {
-  startCompatibleMock,
-  startFakeMcpHttpServer,
-} from "./mcp-bridge-servers.ts";
+import { startCompatibleMock, startFakeMcpHttpServer } from "./mcp-bridge-servers.ts";
 
-const OPENCLAW_SANDBOX_NAME =
-  process.env.NEMOCLAW_SANDBOX_NAME ?? "e2e-mcp-bridge";
-const HERMES_SANDBOX_NAME =
-  process.env.NEMOCLAW_MCP_HERMES_SANDBOX_NAME ?? "e2e-mcp-hermes";
-const DEEPAGENTS_SANDBOX_NAME =
-  process.env.NEMOCLAW_MCP_DEEPAGENTS_SANDBOX_NAME ?? "e2e-mcp-dcode";
+const OPENCLAW_SANDBOX_NAME = process.env.NEMOCLAW_SANDBOX_NAME ?? "e2e-mcp-bridge";
+const HERMES_SANDBOX_NAME = process.env.NEMOCLAW_MCP_HERMES_SANDBOX_NAME ?? "e2e-mcp-hermes";
+const DEEPAGENTS_SANDBOX_NAME = process.env.NEMOCLAW_MCP_DEEPAGENTS_SANDBOX_NAME ?? "e2e-mcp-dcode";
 const SERVER_NAME = "fake";
 const HOST_SECRET = "fake-host-mcp-secret-value";
 const COMPATIBLE_KEY = "fake-compatible-mcp-bridge-key";
 const COMPATIBLE_MODEL = "mock/mcp-bridge";
-const REGISTRY_FILE = path.join(
-  process.env.HOME ?? os.homedir(),
-  ".nemoclaw",
-  "sandboxes.json",
-);
-const liveTest =
-  process.env.NEMOCLAW_RUN_E2E_SCENARIOS === "1" ? test : test.skip;
+const REGISTRY_FILE = path.join(process.env.HOME ?? os.homedir(), ".nemoclaw", "sandboxes.json");
+const liveTest = process.env.NEMOCLAW_RUN_E2E_SCENARIOS === "1" ? test : test.skip;
 const liveAgentMatrixTest =
   process.env.NEMOCLAW_RUN_E2E_SCENARIOS === "1" &&
   process.env.NEMOCLAW_MCP_BRIDGE_AGENT_MATRIX === "1"
@@ -50,10 +36,7 @@ function resultText(result: ShellProbeResult): string {
 }
 
 function expectExitZero(result: ShellProbeResult, label: string): void {
-  expect(
-    result.exitCode,
-    `${label}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
-  ).toBe(0);
+  expect(result.exitCode, `${label}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`).toBe(0);
 }
 
 async function hostAddressForSandbox(host: HostCliClient): Promise<string> {
@@ -78,10 +61,7 @@ async function hostAddressForSandbox(host: HostCliClient): Promise<string> {
   return probe.stdout.trim().split(/\s+/)[0] || "127.0.0.1";
 }
 
-async function bestEffortRemoveBridge(
-  host: HostCliClient,
-  sandboxName: string,
-): Promise<void> {
+async function bestEffortRemoveBridge(host: HostCliClient, sandboxName: string): Promise<void> {
   await host.nemoclaw([sandboxName, "mcp", "remove", SERVER_NAME, "--force"], {
     artifactName: "cleanup-mcp-remove",
     env: buildAvailabilityProbeEnv(),
@@ -89,10 +69,7 @@ async function bestEffortRemoveBridge(
   });
 }
 
-async function cleanupSandbox(
-  host: HostCliClient,
-  sandboxName: string,
-): Promise<void> {
+async function cleanupSandbox(host: HostCliClient, sandboxName: string): Promise<void> {
   await host.bestEffortCleanupSandbox(sandboxName, {
     artifactName: "cleanup-destroy-sandbox",
     timeoutMs: 15 * 60_000,
@@ -113,12 +90,7 @@ async function onboardAgent(
     timeoutMs: 15 * 60_000,
   });
   const result = await host.nemoclaw(
-    [
-      "onboard",
-      "--non-interactive",
-      "--yes",
-      "--yes-i-accept-third-party-software",
-    ],
+    ["onboard", "--non-interactive", "--yes", "--yes-i-accept-third-party-software"],
     {
       artifactName: options.artifactName,
       env: {
@@ -149,10 +121,9 @@ async function assertSecretAbsentFromSandbox(
   const result = await sandbox.execShell(
     sandboxName,
     trustedSandboxShellScript(
-      [
-        "set -eu",
-        `! grep -R ${JSON.stringify(HOST_SECRET)} ${paths.join(" ")} 2>/dev/null`,
-      ].join("\n"),
+      ["set -eu", `! grep -R ${JSON.stringify(HOST_SECRET)} ${paths.join(" ")} 2>/dev/null`].join(
+        "\n",
+      ),
     ),
     {
       artifactName: "assert-secret-absent-from-sandbox",
@@ -241,18 +212,12 @@ async function assertBridgeInfrastructure(
   sandbox: SandboxClient,
   options: { sandboxName: string; artifactPrefix: string },
 ): Promise<void> {
-  const policy = await sandbox.openshell(
-    ["policy", "get", "--full", options.sandboxName],
-    {
-      artifactName: `${options.artifactPrefix}-openshell-policy-get-mcp`,
-      env: buildAvailabilityProbeEnv(),
-      timeoutMs: 60_000,
-    },
-  );
-  expectExitZero(
-    policy,
-    `${options.artifactPrefix} openshell policy get --full`,
-  );
+  const policy = await sandbox.openshell(["policy", "get", "--full", options.sandboxName], {
+    artifactName: `${options.artifactPrefix}-openshell-policy-get-mcp`,
+    env: buildAvailabilityProbeEnv(),
+    timeoutMs: 60_000,
+  });
+  expectExitZero(policy, `${options.artifactPrefix} openshell policy get --full`);
   expect(resultText(policy)).toContain("mcp-bridge-fake");
   expect(resultText(policy)).toContain("protocol: mcp");
   expect(resultText(policy)).toContain("tools/list");
@@ -268,10 +233,7 @@ async function assertBridgeInfrastructure(
       timeoutMs: 60_000,
     },
   );
-  expectExitZero(
-    provider,
-    `${options.artifactPrefix} openshell provider get mcp provider`,
-  );
+  expectExitZero(provider, `${options.artifactPrefix} openshell provider get mcp provider`);
   expect(resultText(provider)).toContain("FAKE_MCP_SECRET");
   expect(resultText(provider)).not.toContain(HOST_SECRET);
 }
@@ -280,24 +242,18 @@ async function removeBridgeAndAssertEmpty(
   host: HostCliClient,
   options: { sandboxName: string; artifactPrefix: string },
 ): Promise<void> {
-  const remove = await host.nemoclaw(
-    [options.sandboxName, "mcp", "remove", SERVER_NAME],
-    {
-      artifactName: `${options.artifactPrefix}-mcp-remove-fake-server`,
-      env: buildAvailabilityProbeEnv(),
-      timeoutMs: 60_000,
-    },
-  );
+  const remove = await host.nemoclaw([options.sandboxName, "mcp", "remove", SERVER_NAME], {
+    artifactName: `${options.artifactPrefix}-mcp-remove-fake-server`,
+    env: buildAvailabilityProbeEnv(),
+    timeoutMs: 60_000,
+  });
   expectExitZero(remove, `${options.artifactPrefix} mcp remove fake server`);
 
-  const list = await host.nemoclaw(
-    [options.sandboxName, "mcp", "list", "--json"],
-    {
-      artifactName: `${options.artifactPrefix}-mcp-list-after-remove`,
-      env: buildAvailabilityProbeEnv(),
-      timeoutMs: 60_000,
-    },
-  );
+  const list = await host.nemoclaw([options.sandboxName, "mcp", "list", "--json"], {
+    artifactName: `${options.artifactPrefix}-mcp-list-after-remove`,
+    env: buildAvailabilityProbeEnv(),
+    timeoutMs: 60_000,
+  });
   expectExitZero(list, `${options.artifactPrefix} mcp list after remove`);
   expect(JSON.parse(list.stdout).bridges).toEqual([]);
 }
@@ -330,10 +286,7 @@ async function assertHermesConfig(
       timeoutMs: 60_000,
     },
   );
-  expectExitZero(
-    result,
-    "Hermes MCP config contains placeholder and no raw host secret",
-  );
+  expectExitZero(result, "Hermes MCP config contains placeholder and no raw host secret");
 }
 
 async function assertDeepAgentsConfig(
@@ -365,110 +318,89 @@ async function assertDeepAgentsConfig(
       timeoutMs: 60_000,
     },
   );
-  expectExitZero(
-    result,
-    "Deep Agents MCP config contains placeholder and no raw host secret",
-  );
+  expectExitZero(result, "Deep Agents MCP config contains placeholder and no raw host secret");
 }
 
-liveTest(
-  "mcp-bridge",
-  { timeout: 45 * 60_000 },
-  async ({ artifacts, cleanup, host, sandbox }) => {
-    await artifacts.writeJson("scenario.json", {
-      id: "mcp-bridge",
-      sandbox: OPENCLAW_SANDBOX_NAME,
-      server: SERVER_NAME,
-    });
-    const compatibleMock = await startCompatibleMock({
-      apiKey: COMPATIBLE_KEY,
-      model: COMPATIBLE_MODEL,
-    });
-    cleanup.add("stop MCP bridge compatible endpoint mock", () =>
-      compatibleMock.close(),
-    );
-    const fakeMcp = await startFakeMcpHttpServer({ secret: HOST_SECRET });
-    cleanup.add("stop fake MCP HTTP server", () => fakeMcp.close());
-    const hostAddress = await hostAddressForSandbox(host);
-    const endpointUrl = `http://${hostAddress}:${compatibleMock.port}/v1`;
-    const mcpUrl = `http://host.openshell.internal:${fakeMcp.port}/mcp`;
-    await onboardAgent(host, cleanup, endpointUrl, {
-      agent: "openclaw",
-      sandboxName: OPENCLAW_SANDBOX_NAME,
-      artifactName: "onboard-openclaw-mcp-bridge",
-    });
-    cleanup.add("remove MCP bridge", () =>
-      bestEffortRemoveBridge(host, OPENCLAW_SANDBOX_NAME),
-    );
+liveTest("mcp-bridge", { timeout: 45 * 60_000 }, async ({ artifacts, cleanup, host, sandbox }) => {
+  await artifacts.writeJson("scenario.json", {
+    id: "mcp-bridge",
+    sandbox: OPENCLAW_SANDBOX_NAME,
+    server: SERVER_NAME,
+  });
+  const compatibleMock = await startCompatibleMock({
+    apiKey: COMPATIBLE_KEY,
+    model: COMPATIBLE_MODEL,
+  });
+  cleanup.add("stop MCP bridge compatible endpoint mock", () => compatibleMock.close());
+  const fakeMcp = await startFakeMcpHttpServer({ secret: HOST_SECRET });
+  cleanup.add("stop fake MCP HTTP server", () => fakeMcp.close());
+  const hostAddress = await hostAddressForSandbox(host);
+  const endpointUrl = `http://${hostAddress}:${compatibleMock.port}/v1`;
+  const mcpUrl = `http://host.openshell.internal:${fakeMcp.port}/mcp`;
+  await onboardAgent(host, cleanup, endpointUrl, {
+    agent: "openclaw",
+    sandboxName: OPENCLAW_SANDBOX_NAME,
+    artifactName: "onboard-openclaw-mcp-bridge",
+  });
+  cleanup.add("remove MCP bridge", () => bestEffortRemoveBridge(host, OPENCLAW_SANDBOX_NAME));
 
-    await addBridgeAndReadStatus(host, {
-      sandboxName: OPENCLAW_SANDBOX_NAME,
-      mcpUrl,
-      expectedAdapter: "mcporter",
-      artifactPrefix: "openclaw",
-    });
-    await assertBridgeInfrastructure(host, sandbox, {
-      sandboxName: OPENCLAW_SANDBOX_NAME,
-      artifactPrefix: "openclaw",
-    });
+  await addBridgeAndReadStatus(host, {
+    sandboxName: OPENCLAW_SANDBOX_NAME,
+    mcpUrl,
+    expectedAdapter: "mcporter",
+    artifactPrefix: "openclaw",
+  });
+  await assertBridgeInfrastructure(host, sandbox, {
+    sandboxName: OPENCLAW_SANDBOX_NAME,
+    artifactPrefix: "openclaw",
+  });
 
-    const mcporterList = await sandbox.execShell(
-      OPENCLAW_SANDBOX_NAME,
-      trustedSandboxShellScript(
-        ["set -eu", `nemoclaw-start mcporter list ${SERVER_NAME} --json`].join(
-          "\n",
-        ),
-      ),
-      {
-        artifactName: "mcp-mcporter-list-tools",
-        env: buildAvailabilityProbeEnv(),
-        timeoutMs: 90_000,
-      },
-    );
-    expectExitZero(
-      mcporterList,
-      "mcporter lists tools through OpenShell MCP policy",
-    );
-    expect(resultText(mcporterList)).toContain("fake_echo");
-    expect(
-      fakeMcp.requests.some(
-        (request) => request.auth === `Bearer ${HOST_SECRET}`,
-      ),
-    ).toBe(true);
-    expect(
-      fakeMcp.requests.every(
-        (request) => !request.auth.includes("openshell:resolve:env"),
-      ),
-    ).toBe(true);
+  const mcporterList = await sandbox.execShell(
+    OPENCLAW_SANDBOX_NAME,
+    trustedSandboxShellScript(
+      ["set -eu", `nemoclaw-start mcporter list ${SERVER_NAME} --json`].join("\n"),
+    ),
+    {
+      artifactName: "mcp-mcporter-list-tools",
+      env: buildAvailabilityProbeEnv(),
+      timeoutMs: 90_000,
+    },
+  );
+  expectExitZero(mcporterList, "mcporter lists tools through OpenShell MCP policy");
+  expect(resultText(mcporterList)).toContain("fake_echo");
+  expect(fakeMcp.requests.some((request) => request.auth === `Bearer ${HOST_SECRET}`)).toBe(true);
+  expect(fakeMcp.requests.every((request) => !request.auth.includes("openshell:resolve:env"))).toBe(
+    true,
+  );
 
-    const requestCountAfterAdapterProof = fakeMcp.requests.length;
-    const deniedCurl = await sandbox.execShell(
-      OPENCLAW_SANDBOX_NAME,
-      trustedSandboxShellScript(
-        [
-          "set -eu",
-          `body='{"jsonrpc":"2.0","id":1,"method":"tools/list"}'`,
-          "set +e",
-          `curl -sS -X POST ${JSON.stringify(mcpUrl)} -H 'content-type: application/json' -H 'authorization: Bearer openshell:resolve:env:FAKE_MCP_SECRET' --data "$body" > /tmp/nemoclaw-mcp-denied.out`,
-          "rc=$?",
-          "set -e",
-          'if [ "$rc" -eq 0 ] && grep -q fake_echo /tmp/nemoclaw-mcp-denied.out; then',
-          "  cat /tmp/nemoclaw-mcp-denied.out",
-          "  exit 1",
-          "fi",
-          "cat /tmp/nemoclaw-mcp-denied.out 2>/dev/null || true",
-        ].join("\n"),
-      ),
-      {
-        artifactName: "mcp-non-allowlisted-curl-denied",
-        env: buildAvailabilityProbeEnv(),
-        timeoutMs: 60_000,
-      },
-    );
-    expectExitZero(deniedCurl, "non-allowlisted curl cannot call MCP endpoint");
-    expect(fakeMcp.requests.length).toBe(requestCountAfterAdapterProof);
+  const requestCountAfterAdapterProof = fakeMcp.requests.length;
+  const deniedCurl = await sandbox.execShell(
+    OPENCLAW_SANDBOX_NAME,
+    trustedSandboxShellScript(
+      [
+        "set -eu",
+        `body='{"jsonrpc":"2.0","id":1,"method":"tools/list"}'`,
+        "set +e",
+        `curl -sS -X POST ${JSON.stringify(mcpUrl)} -H 'content-type: application/json' -H 'authorization: Bearer openshell:resolve:env:FAKE_MCP_SECRET' --data "$body" > /tmp/nemoclaw-mcp-denied.out`,
+        "rc=$?",
+        "set -e",
+        'if [ "$rc" -eq 0 ] && grep -q fake_echo /tmp/nemoclaw-mcp-denied.out; then',
+        "  cat /tmp/nemoclaw-mcp-denied.out",
+        "  exit 1",
+        "fi",
+        "cat /tmp/nemoclaw-mcp-denied.out 2>/dev/null || true",
+      ].join("\n"),
+    ),
+    {
+      artifactName: "mcp-non-allowlisted-curl-denied",
+      env: buildAvailabilityProbeEnv(),
+      timeoutMs: 60_000,
+    },
+  );
+  expectExitZero(deniedCurl, "non-allowlisted curl cannot call MCP endpoint");
+  expect(fakeMcp.requests.length).toBe(requestCountAfterAdapterProof);
 
-    const mcpCallScript = `const http = require("node:http");
+  const mcpCallScript = `const http = require("node:http");
 const url = new URL(process.argv[2]);
 const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" });
 const req = http.request({
@@ -496,59 +428,45 @@ req.on("error", (error) => {
 });
 req.end(body);
 `;
-    await artifacts.writeText("mcp-provider-rewrite-proof.mjs", mcpCallScript);
-    const mcpCallScriptB64 = Buffer.from(mcpCallScript, "utf8").toString(
-      "base64",
-    );
-    const mcpCall = await sandbox.execShell(
-      OPENCLAW_SANDBOX_NAME,
-      trustedSandboxShellScript(
-        [
-          "set -eu",
-          `printf '%s' ${JSON.stringify(mcpCallScriptB64)} | base64 -d > /tmp/nemoclaw-mcp-provider-rewrite-proof.mjs`,
-          `nemoclaw-start node /tmp/nemoclaw-mcp-provider-rewrite-proof.mjs ${JSON.stringify(mcpUrl)}`,
-        ].join("\n"),
-      ),
-      {
-        artifactName: "mcp-provider-rewrite-tools-list",
-        env: buildAvailabilityProbeEnv(),
-        timeoutMs: 90_000,
-      },
-    );
-    expectExitZero(
-      mcpCall,
-      "OpenShell provider rewrites MCP authorization placeholder",
-    );
-    expect(
-      fakeMcp.requests.some(
-        (request) => request.auth === `Bearer ${HOST_SECRET}`,
-      ),
-    ).toBe(true);
-    expect(
-      fakeMcp.requests.every(
-        (request) => !request.auth.includes("openshell:resolve:env"),
-      ),
-    ).toBe(true);
+  await artifacts.writeText("mcp-provider-rewrite-proof.mjs", mcpCallScript);
+  const mcpCallScriptB64 = Buffer.from(mcpCallScript, "utf8").toString("base64");
+  const mcpCall = await sandbox.execShell(
+    OPENCLAW_SANDBOX_NAME,
+    trustedSandboxShellScript(
+      [
+        "set -eu",
+        `printf '%s' ${JSON.stringify(mcpCallScriptB64)} | base64 -d > /tmp/nemoclaw-mcp-provider-rewrite-proof.mjs`,
+        `nemoclaw-start node /tmp/nemoclaw-mcp-provider-rewrite-proof.mjs ${JSON.stringify(mcpUrl)}`,
+      ].join("\n"),
+    ),
+    {
+      artifactName: "mcp-provider-rewrite-tools-list",
+      env: buildAvailabilityProbeEnv(),
+      timeoutMs: 90_000,
+    },
+  );
+  expectExitZero(mcpCall, "OpenShell provider rewrites MCP authorization placeholder");
+  expect(fakeMcp.requests.some((request) => request.auth === `Bearer ${HOST_SECRET}`)).toBe(true);
+  expect(fakeMcp.requests.every((request) => !request.auth.includes("openshell:resolve:env"))).toBe(
+    true,
+  );
 
-    const registryRaw = fs.existsSync(REGISTRY_FILE)
-      ? fs.readFileSync(REGISTRY_FILE, "utf8")
-      : "";
-    expect(registryRaw).toContain(mcpUrl);
-    expect(registryRaw).toContain(`${OPENCLAW_SANDBOX_NAME}-mcp-fake`);
-    expect(registryRaw).not.toContain("enc:v1:");
-    expect(registryRaw).not.toContain("proxy.pid");
-    expect(registryRaw).not.toContain(HOST_SECRET);
-    await assertSecretAbsentFromSandbox(sandbox, OPENCLAW_SANDBOX_NAME, [
-      "/sandbox/.openclaw",
-      "/sandbox/.mcp.json",
-    ]);
+  const registryRaw = fs.existsSync(REGISTRY_FILE) ? fs.readFileSync(REGISTRY_FILE, "utf8") : "";
+  expect(registryRaw).toContain(mcpUrl);
+  expect(registryRaw).toContain(`${OPENCLAW_SANDBOX_NAME}-mcp-fake`);
+  expect(registryRaw).not.toContain("enc:v1:");
+  expect(registryRaw).not.toContain("proxy.pid");
+  expect(registryRaw).not.toContain(HOST_SECRET);
+  await assertSecretAbsentFromSandbox(sandbox, OPENCLAW_SANDBOX_NAME, [
+    "/sandbox/.openclaw",
+    "/sandbox/.mcp.json",
+  ]);
 
-    await removeBridgeAndAssertEmpty(host, {
-      sandboxName: OPENCLAW_SANDBOX_NAME,
-      artifactPrefix: "openclaw",
-    });
-  },
-);
+  await removeBridgeAndAssertEmpty(host, {
+    sandboxName: OPENCLAW_SANDBOX_NAME,
+    artifactPrefix: "openclaw",
+  });
+});
 
 liveAgentMatrixTest(
   "mcp-bridge-hermes",
@@ -563,9 +481,7 @@ liveAgentMatrixTest(
       apiKey: COMPATIBLE_KEY,
       model: COMPATIBLE_MODEL,
     });
-    cleanup.add("stop Hermes MCP bridge compatible endpoint mock", () =>
-      compatibleMock.close(),
-    );
+    cleanup.add("stop Hermes MCP bridge compatible endpoint mock", () => compatibleMock.close());
     const fakeMcp = await startFakeMcpHttpServer({ secret: HOST_SECRET });
     cleanup.add("stop fake Hermes MCP HTTP server", () => fakeMcp.close());
     const hostAddress = await hostAddressForSandbox(host);
@@ -591,9 +507,7 @@ liveAgentMatrixTest(
       artifactPrefix: "hermes",
     });
     await assertHermesConfig(sandbox, HERMES_SANDBOX_NAME, mcpUrl);
-    await assertSecretAbsentFromSandbox(sandbox, HERMES_SANDBOX_NAME, [
-      "/sandbox/.hermes",
-    ]);
+    await assertSecretAbsentFromSandbox(sandbox, HERMES_SANDBOX_NAME, ["/sandbox/.hermes"]);
     await removeBridgeAndAssertEmpty(host, {
       sandboxName: HERMES_SANDBOX_NAME,
       artifactPrefix: "hermes",

@@ -24,13 +24,10 @@ export function hasRequiredOpenshellMessagingFeatures(options: {
     options.gatewayBin,
     options.sandboxBin,
   ].filter(
-    (candidate): candidate is string =>
-      typeof candidate === "string" && candidate.length > 0,
+    (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
   );
 
-  const requiredMarkers = REQUIRED_OPENSHELL_MCP_FEATURES.map((marker) =>
-    Buffer.from(marker),
-  );
+  const requiredMarkers = REQUIRED_OPENSHELL_MCP_FEATURES.map((marker) => Buffer.from(marker));
   const foundMarkers = new Set<string>();
   const seen = new Set<string>();
   for (const candidate of candidates) {
@@ -48,11 +45,7 @@ export function hasRequiredOpenshellMessagingFeatures(options: {
         foundMarkers.add(REQUIRED_OPENSHELL_MCP_FEATURES[index]);
       }
     }
-    if (
-      REQUIRED_OPENSHELL_MCP_FEATURES.every((marker) =>
-        foundMarkers.has(marker),
-      )
-    ) {
+    if (REQUIRED_OPENSHELL_MCP_FEATURES.every((marker) => foundMarkers.has(marker))) {
       return true;
     }
   }

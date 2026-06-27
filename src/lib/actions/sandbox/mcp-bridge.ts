@@ -750,7 +750,9 @@ function commandOutput(
     typeof result.stdout === "string" ? result.stdout : (result.stdout?.toString() ?? "");
   const stderr =
     typeof result.stderr === "string" ? result.stderr : (result.stderr?.toString() ?? "");
-  return redactCredentialValuesForDisplay(`${stderr}${stdout}`, envValues).replace(/\r/g, "").trim();
+  return redactCredentialValuesForDisplay(`${stderr}${stdout}`, envValues)
+    .replace(/\r/g, "")
+    .trim();
 }
 
 const runProviderCleanupOpenshell: SandboxProviderRunOpenshell = (args, opts) =>
@@ -1372,10 +1374,7 @@ export async function dispatchMcpBridgeCommand(
         return;
       }
       case "restart": {
-        const server = requireAtMostOneArg(
-          rest,
-          "Usage: nemoclaw <sandbox> mcp restart [server]",
-        );
+        const server = requireAtMostOneArg(rest, "Usage: nemoclaw <sandbox> mcp restart [server]");
         await restartMcpBridge(sandboxName, server);
         return;
       }

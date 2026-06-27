@@ -13,17 +13,12 @@ import {
 
 describe("OpenShell MCP feature gate", () => {
   it("finds provider rewrite and MCP L7 markers across OpenShell binaries", () => {
-    const dir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "nemoclaw-openshell-features-"),
-    );
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-openshell-features-"));
     try {
       const openshell = path.join(dir, "openshell");
       const gateway = path.join(dir, "openshell-gateway");
       const sandbox = path.join(dir, "openshell-sandbox");
-      fs.writeFileSync(
-        openshell,
-        `binary ${REQUIRED_OPENSHELL_MCP_FEATURES[0]}`,
-      );
+      fs.writeFileSync(openshell, `binary ${REQUIRED_OPENSHELL_MCP_FEATURES[0]}`);
       fs.writeFileSync(gateway, `binary ${REQUIRED_OPENSHELL_MCP_FEATURES[1]}`);
       fs.writeFileSync(sandbox, `binary ${REQUIRED_OPENSHELL_MCP_FEATURES[2]}`);
 
@@ -40,15 +35,10 @@ describe("OpenShell MCP feature gate", () => {
   });
 
   it("fails closed when any required marker is absent", () => {
-    const dir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "nemoclaw-openshell-features-"),
-    );
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-openshell-features-"));
     try {
       const openshell = path.join(dir, "openshell");
-      fs.writeFileSync(
-        openshell,
-        `binary ${REQUIRED_OPENSHELL_MCP_FEATURES[0]}`,
-      );
+      fs.writeFileSync(openshell, `binary ${REQUIRED_OPENSHELL_MCP_FEATURES[0]}`);
 
       expect(
         hasRequiredOpenshellMessagingFeatures({

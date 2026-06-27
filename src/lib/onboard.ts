@@ -1153,7 +1153,12 @@ function getOpenShellInstallDeps(): OpenShellInstallDeps {
     shouldUseOpenshellDevChannel,
     isOpenshellDevVersion,
     versionGte,
-    hasRequiredOpenshellMessagingFeatures: () => openshellFeatureGate.hasRequiredOpenshellMessagingFeatures({ openshellBin: resolveOpenshell(), gatewayBin: resolveOpenShellGatewayBinary(), sandboxBin: resolveOpenShellSandboxBinary() }),
+    hasRequiredOpenshellMessagingFeatures: () =>
+      openshellFeatureGate.hasRequiredOpenshellMessagingFeatures({
+        openshellBin: resolveOpenshell(),
+        gatewayBin: resolveOpenShellGatewayBinary(),
+        sandboxBin: resolveOpenShellSandboxBinary(),
+      }),
     shouldAllowOpenshellAboveBlueprintMax,
     cliDisplayName,
     log: console.log,

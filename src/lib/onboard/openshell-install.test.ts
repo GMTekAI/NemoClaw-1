@@ -49,10 +49,7 @@ function makeDeps(overrides: Partial<OpenShellInstallDeps> = {}) {
 
 describe("ensureOpenshellForOnboard", () => {
   it("reinstalls when the installed OpenShell lacks messaging rewrite or MCP L7 support", () => {
-    const hasFeatures = vi
-      .fn()
-      .mockReturnValueOnce(false)
-      .mockReturnValue(true);
+    const hasFeatures = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
     const deps = makeDeps({
       hasRequiredOpenshellMessagingFeatures: hasFeatures,
     });
