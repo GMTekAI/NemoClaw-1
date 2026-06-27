@@ -94,6 +94,8 @@ describe("MCP CLI parsing", () => {
     expect(() => normalizeMcpServerUrl("http://[::1]:31337/mcp")).toThrow(
       /private, local, or special-use IP/,
     );
+    expect(normalizeMcpServerUrl("https://192.0.1.1/mcp")).toBe("https://192.0.1.1/mcp");
+    expect(normalizeMcpServerUrl("https://[2606:4700::1]/mcp")).toBe("https://[2606:4700::1]/mcp");
     expect(normalizeMcpServerUrl("http://host.openshell.internal:31337/mcp")).toBe(
       "http://host.openshell.internal:31337/mcp",
     );
