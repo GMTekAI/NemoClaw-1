@@ -404,7 +404,7 @@ Run `$$nemoclaw status` for a broader gateway health report.
 
 <AgentOnly variant="hermes">
 If `nemohermes <name> recover` reports that the Hermes secret-boundary validator is missing, the sandbox image predates the recovery-side validator that re-checks `/sandbox/.hermes/.env`.
-Current NemoClaw releases fail closed in this state: recovery stops Hermes gateway/dashboard processes, prints `SECRET_BOUNDARY_VALIDATOR_MISSING`, and refuses to claim the secret boundary was checked.
+Current NemoClaw releases fail closed in this state: recovery reports that the validator is missing, stops Hermes gateway/dashboard processes, refuses to claim the secret boundary was checked, and instructs you to re-image the sandbox with a current Hermes build.
 
 Re-image the sandbox with a current Hermes build before retrying recovery:
 

@@ -7628,6 +7628,13 @@ export function validateE2eVitestScenariosWorkflowBoundary(
       "workflow_dispatch jobs input description must say explicit-only jobs are skipped unless selected",
     );
   }
+  for (const excludedJob of FULL_SUITE_EXCLUDED_FREE_STANDING_JOBS) {
+    if (!jobsDescription.includes(excludedJob)) {
+      errors.push(
+        `workflow_dispatch jobs input description must name default-excluded job ${excludedJob}`,
+      );
+    }
+  }
   if (Object.hasOwn(dispatchInputs, "test_filter")) {
     errors.push("workflow_dispatch must not expose legacy test_filter input");
   }
@@ -8197,25 +8204,25 @@ export function validateE2eVitestScenariosWorkflowBoundary(
         "step 'Post Vitest scenario results to PR' run script must list explicit-only skipped jobs on default dispatch",
       );
     }
-    if (!reportScript.includes("jobs=${job}") || !reportScript.includes("jetson-nvmap-gpu-vitest")) {
+    if (!reportScript.includes("jobs=${job}") || !reportScript.includes("scenarios=${scenario}")) {
       errors.push(
-        "step 'Post Vitest scenario results to PR' run script must document the explicit Jetson jobs selector",
+        "step 'Post Vitest scenario results to PR' run script must document explicit job and scenario selectors",
       );
     }
-    if (!reportScript.includes("scenarios=${scenario}") || !reportScript.includes("jetson-nvmap-gpu")) {
-      errors.push(
-        "step 'Post Vitest scenario results to PR' run script must document the explicit Jetson scenario selector",
-      );
-    }
-    if (!reportScript.includes("sandbox-rlimits-connect-vitest")) {
-      errors.push(
-        "step 'Post Vitest scenario results to PR' run script must document the explicit rlimit jobs selector",
-      );
-    }
-    if (!reportScript.includes("sandbox-rlimits-connect")) {
-      errors.push(
-        "step 'Post Vitest scenario results to PR' run script must document the explicit rlimit scenario selector",
-      );
+    for (const excludedJob of FULL_SUITE_EXCLUDED_FREE_STANDING_JOBS) {
+      const excludedScenario = [...freeStandingInventory.scenarioToJob.entries()].find(
+        ([, job]) => job === excludedJob,
+      )?.[0];
+      if (!reportScript.includes(`job: '${excludedJob}'`)) {
+        errors.push(
+          `step 'Post Vitest scenario results to PR' run script must report default-excluded job ${excludedJob}`,
+        );
+      }
+      if (excludedScenario && !reportScript.includes(`scenario: '${excludedScenario}'`)) {
+        errors.push(
+          `step 'Post Vitest scenario results to PR' run script must report default-excluded scenario ${excludedScenario}`,
+        );
+      }
     }
     for (const forbidden of [
       "toJSON(inputs.pr_number)",

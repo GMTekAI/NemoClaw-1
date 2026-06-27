@@ -40,6 +40,28 @@ describe("OpenShell gateway auth contract workflow boundary", () => {
     }
   });
 
+  it("rejects a default-dispatch report that omits the auth-contract selector", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-openshell-workflow-"));
+    try {
+      const workflowPath = path.join(tmpDir, "e2e-vitest-scenarios.yaml");
+      const source = fs.readFileSync(".github/workflows/e2e-vitest-scenarios.yaml", "utf-8");
+      fs.writeFileSync(
+        workflowPath,
+        source.replace(
+          "job: 'openshell-gateway-auth-contract-vitest'",
+          "job: 'omitted-openshell-gateway-auth-contract-vitest'",
+        ),
+        "utf-8",
+      );
+
+      expect(validateE2eVitestScenariosWorkflowBoundary(workflowPath)).toContain(
+        "step 'Post Vitest scenario results to PR' run script must report default-excluded job openshell-gateway-auth-contract-vitest",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects automatic pull-request triggers for the dispatch-only workflow", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-openshell-workflow-"));
     try {
