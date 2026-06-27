@@ -65,6 +65,42 @@ describe("MCP CLI parsing", () => {
     ).toThrow(/process arguments and shell history/);
   });
 
+  it("rejects OpenShell child-environment compatibility keys as MCP credentials", () => {
+    const materializedKeys = [
+      "GCP_PROJECT_ID",
+      "GOOGLE_CLOUD_PROJECT",
+      "CLOUD_ML_REGION",
+      "GCP_LOCATION",
+      "GCP_SERVICE_ACCOUNT_EMAIL",
+      "GOOSE_PROVIDER",
+      "ANTHROPIC_VERTEX_PROJECT_ID",
+      "VERTEX_LOCATION",
+    ];
+    for (const name of materializedKeys) {
+      expect(() =>
+        parseMcpAddArgs(["github", "--url", "https://mcp.example.test/mcp", "--env", name]),
+      ).toThrow(/materialized as a raw child-process value/);
+      expect(() => resolveCredentialEnv([{ name, value: "host-only-secret" }])).toThrow(
+        /preserve the host-only credential boundary/,
+      );
+      expect(() =>
+        buildMcpBridgeProviderArgs("create", "provider", [{ name }], {
+          [name]: "host-only-secret",
+        }),
+      ).toThrow(/materialized as a raw child-process value/);
+    }
+
+    expect(() =>
+      parseMcpAddArgs([
+        "github",
+        "--url",
+        "https://mcp.example.test/mcp",
+        "--env",
+        "GCE_METADATA_HOST",
+      ]),
+    ).toThrow(/rewritten by OpenShell's Google Cloud metadata compatibility path/);
+  });
+
   it("rejects host stdio commands", () => {
     expect(() =>
       parseMcpAddArgs([
@@ -147,6 +183,13 @@ describe("MCP CLI parsing", () => {
         env: [],
       }),
     ).rejects.toThrow(/requires exactly one --env KEY/);
+    await expect(
+      addMcpBridge("missing-sandbox", {
+        server: "github",
+        url: "https://mcp.example.test/mcp",
+        env: [{ name: "GCP_PROJECT_ID", value: "host-only-secret" }],
+      }),
+    ).rejects.toThrow(/materialized as a raw child-process value/);
   });
 
   it("rejects local and private URL targets except OpenShell host aliases", () => {

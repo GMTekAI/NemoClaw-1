@@ -62,6 +62,14 @@ OpenShell's provider store. NemoClaw persists only the variable name, writes
 `openshell:resolve:env:KEY` into the sandbox-side MCP config, and relies on
 OpenShell to resolve the placeholder at egress.
 
+Do not reuse OpenShell's Google Cloud compatibility names as MCP bearer keys.
+NemoClaw rejects `GCP_PROJECT_ID`, `GOOGLE_CLOUD_PROJECT`, `CLOUD_ML_REGION`,
+`GCP_LOCATION`, `GCP_SERVICE_ACCOUNT_EMAIL`, `GOOSE_PROVIDER`,
+`ANTHROPIC_VERTEX_PROJECT_ID`, and `VERTEX_LOCATION` because OpenShell exposes
+those non-secret configuration names as child-process values. It also rejects
+`GCE_METADATA_HOST`, which OpenShell rewrites for its metadata emulator. Choose
+a dedicated name such as `MY_SERVICE_MCP_TOKEN`.
+
 V1 requires exactly one `--env` bearer credential per server. Remote endpoints
 must use HTTPS; plain HTTP is accepted only for OpenShell host aliases. URLs
 with query strings are rejected because the URL is persisted and displayed.

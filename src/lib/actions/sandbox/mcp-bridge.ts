@@ -63,6 +63,20 @@ export const MCP_BRIDGE_ALLOWED_METHODS = [
 const VALID_SERVER_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const VALID_ENV_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 const VALID_SANDBOX_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
+// Keep this synchronized with OpenShell google_cloud::STATIC_CONFIG_KEYS.
+// Those keys are intentionally de-placeholderized for child SDK startup and
+// therefore cannot be used for a host-only bearer credential.
+const OPENSHELL_RAW_CHILD_ENV_KEYS = new Set([
+  "GCP_PROJECT_ID",
+  "GOOGLE_CLOUD_PROJECT",
+  "CLOUD_ML_REGION",
+  "GCP_LOCATION",
+  "GCP_SERVICE_ACCOUNT_EMAIL",
+  "GOOSE_PROVIDER",
+  "ANTHROPIC_VERTEX_PROJECT_ID",
+  "VERTEX_LOCATION",
+]);
+const OPENSHELL_REWRITTEN_CHILD_ENV_KEYS = new Set(["GCE_METADATA_HOST"]);
 const DEFAULT_AUTH_HEADER = "Authorization";
 const DEFAULT_AUTH_SCHEME = "Bearer";
 const MCP_PROVIDER_HASH_BYTES = 8;
@@ -168,10 +182,22 @@ export function validateMcpServerName(name: string): void {
   }
 }
 
-function validateEnvName(name: string): void {
+export function validateMcpCredentialEnvName(name: string): void {
   if (!VALID_ENV_RE.test(name)) {
     throw new McpBridgeError(
       `Invalid environment variable name '${name}'. Names must match [A-Za-z_][A-Za-z0-9_]*.`,
+      2,
+    );
+  }
+  if (OPENSHELL_RAW_CHILD_ENV_KEYS.has(name)) {
+    throw new McpBridgeError(
+      `MCP credential environment name '${name}' is materialized as a raw child-process value by OpenShell's Google Cloud compatibility path. Use a distinct secret name to preserve the host-only credential boundary.`,
+      2,
+    );
+  }
+  if (OPENSHELL_REWRITTEN_CHILD_ENV_KEYS.has(name)) {
+    throw new McpBridgeError(
+      `MCP credential environment name '${name}' is rewritten by OpenShell's Google Cloud metadata compatibility path. Use a distinct secret name so credential attachment remains deterministic.`,
       2,
     );
   }
@@ -442,7 +468,7 @@ export function parseMcpAddArgs(argv: string[]): ParsedMcpAddArgs {
       const raw = argv[++i] ?? "";
       const eq = raw.indexOf("=");
       const name = eq >= 0 ? raw.slice(0, eq) : raw;
-      validateEnvName(name);
+      validateMcpCredentialEnvName(name);
       if (eq >= 0) {
         throw new McpBridgeError(
           "Inline --env KEY=VALUE is not accepted because it exposes the secret in the NemoClaw process arguments and shell history. Export KEY, then pass --env KEY.",
@@ -456,7 +482,7 @@ export function parseMcpAddArgs(argv: string[]): ParsedMcpAddArgs {
       const raw = token.slice("--env=".length);
       const eq = raw.indexOf("=");
       const name = eq >= 0 ? raw.slice(0, eq) : raw;
-      validateEnvName(name);
+      validateMcpCredentialEnvName(name);
       if (eq >= 0) {
         throw new McpBridgeError(
           "Inline --env KEY=VALUE is not accepted because it exposes the secret in the NemoClaw process arguments and shell history. Export KEY, then pass --env KEY.",
@@ -519,7 +545,7 @@ function assertAuthenticatedCredentialReference(env: readonly ParsedEnvReference
       2,
     );
   }
-  validateEnvName(env[0].name);
+  validateMcpCredentialEnvName(env[0].name);
 }
 
 function assertAuthenticatedBridgeEntry(entry: McpBridgeEntry): void {
@@ -529,13 +555,13 @@ function assertAuthenticatedBridgeEntry(entry: McpBridgeEntry): void {
       2,
     );
   }
-  validateEnvName(entry.env[0]);
+  validateMcpCredentialEnvName(entry.env[0]);
 }
 
 export function resolveCredentialEnv(env: readonly ParsedEnvReference[]): Record<string, string> {
   const resolved: Record<string, string> = {};
   for (const entry of env) {
-    validateEnvName(entry.name);
+    validateMcpCredentialEnvName(entry.name);
     const value = entry.value ?? process.env[entry.name];
     if (value !== undefined && value !== "") {
       resolved[entry.name] = value;
@@ -1411,6 +1437,7 @@ export function buildMcpBridgeProviderArgs(
       ? ["provider", "create", "--name", providerName, "--type", "generic"]
       : ["provider", "update", providerName];
   for (const entry of env) {
+    validateMcpCredentialEnvName(entry.name);
     const value = envValues[entry.name];
     if (value !== undefined && value !== "") {
       args.push("--credential", entry.name);
@@ -1489,7 +1516,7 @@ function validateMcpCredentialSnapshotPath(snapshotPath: string): void {
 }
 
 function mcpCredentialPlaceholderValidatorShell(envName: string): string[] {
-  validateEnvName(envName);
+  validateMcpCredentialEnvName(envName);
   const canonical = `openshell:resolve:env:${envName}`;
   const revisionPrefix = "openshell:resolve:env:v";
   const revisionSuffix = `_${envName}`;
