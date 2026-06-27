@@ -382,12 +382,13 @@ jobs:
     permissions:
       actions: read
       contents: read
-    timeout-minutes: 45
+    timeout-minutes: 120
     env:
       FREE_STANDING_VITEST_JOB: "1"
       FREE_STANDING_SCENARIO_ID: "mcp-bridge"
       E2E_ARTIFACT_DIR: ${{ github.workspace }}/e2e-artifacts/vitest/mcp-bridge
       NEMOCLAW_CLI_BIN: ${{ github.workspace }}/bin/nemoclaw.js
+      NEMOCLAW_MCP_BRIDGE_AGENT_MATRIX: "1"
       NEMOCLAW_RUN_E2E_SCENARIOS: "1"
       NEMOCLAW_OPENSHELL_CHANNEL: ${{ inputs.openshell_channel }}
       NEMOCLAW_OPENSHELL_ARTIFACT_RUN_ID: ${{ inputs.openshell_artifact_run_id }}

@@ -39,6 +39,7 @@ FROM ${BASE_IMAGE}
 ARG OPENCLAW_VERSION=2026.5.27
 ARG OPENCLAW_2026_5_27_INTEGRITY=sha512-2N93zhdAo88KAbHt6T7KvYXf4s7XIkYXBgv1npYpn7e1Y9FvrtgtpsA38my9rtFW+70uXEojRPX5/OqnuDqJPw==
 ARG MCPORTER_VERSION=0.7.3
+ARG MCPORTER_0_7_3_INTEGRITY=sha512-egoPVYqTnWb3NjRIxo+xc8OrAI0dlPrJm9pAiZx0pImuNIV5rKhGtTnIfH/Y1ldGPVu74ibj3KR5c9U/QSdQFA==
 
 # OpenClaw 2026.5.27 loads some generated source through jiti. Disable its
 # filesystem transform cache so source fragments that mention provider marker
@@ -149,6 +150,17 @@ RUN set -eu; \
     MCPORTER_CUR_VER=$(mcporter --version 2>/dev/null | awk '{print $NF}' || echo "0.0.0"); \
     if [ "$MCPORTER_CUR_VER" != "$MCPORTER_VERSION" ]; then \
         echo "INFO: Installing mcporter $MCPORTER_VERSION"; \
+        MCPORTER_EXPECTED_INTEGRITY=""; \
+        if [ "$MCPORTER_VERSION" = "0.7.3" ]; then MCPORTER_EXPECTED_INTEGRITY="$MCPORTER_0_7_3_INTEGRITY"; fi; \
+        if [ -n "$MCPORTER_EXPECTED_INTEGRITY" ]; then \
+            MCPORTER_REGISTRY_INTEGRITY=$(npm view "mcporter@${MCPORTER_VERSION}" dist.integrity); \
+            if [ "$MCPORTER_REGISTRY_INTEGRITY" != "$MCPORTER_EXPECTED_INTEGRITY" ]; then \
+                echo "ERROR: mcporter ${MCPORTER_VERSION} npm integrity mismatch" >&2; \
+                echo "Expected: ${MCPORTER_EXPECTED_INTEGRITY}" >&2; \
+                echo "Actual:   ${MCPORTER_REGISTRY_INTEGRITY}" >&2; exit 1; \
+            fi; \
+        fi; \
+        rm -rf /usr/local/lib/node_modules/mcporter /usr/local/bin/mcporter; \
         npm install -g --no-audit --no-fund --no-progress "mcporter@${MCPORTER_VERSION}"; \
     fi; \
     # Pre-install the codex-acp package so the embedded ACPx runtime can

@@ -530,16 +530,23 @@ export function buildDeepAgentsMcpRegisterCommand(entry: McpBridgeEntry): string
   };
   return [
     "python3 - <<'PY'",
-    "import json, os, pathlib",
+    "import json, os, pathlib, sys",
     `payload = json.loads(${pythonJsonLiteral(payload)})`,
     'config_path = pathlib.Path("/sandbox/.mcp.json")',
     "data = {}",
     "if config_path.exists():",
     "    try:",
     "        data = json.loads(config_path.read_text(encoding='utf-8') or '{}')",
-    "    except json.JSONDecodeError:",
-    "        data = {}",
+    "    except json.JSONDecodeError as exc:",
+    "        print(f'Invalid /sandbox/.mcp.json: {exc}', file=sys.stderr)",
+    "        raise SystemExit(2)",
+    "if not isinstance(data, dict):",
+    "    print('Invalid /sandbox/.mcp.json: expected a JSON object', file=sys.stderr)",
+    "    raise SystemExit(2)",
     "servers = data.setdefault('mcpServers', {})",
+    "if not isinstance(servers, dict):",
+    "    print('Invalid /sandbox/.mcp.json: mcpServers must be an object', file=sys.stderr)",
+    "    raise SystemExit(2)",
     "server = {'type': 'http', 'url': payload['url']}",
     "if payload['headers']:",
     "    server['headers'] = payload['headers']",
@@ -723,12 +730,27 @@ function unregisterAgentAdapter(
   }
 }
 
-function commandOutput(result: OpenShellCommandResult): string {
+export function redactCredentialValuesForDisplay(
+  value: string,
+  envValues: Record<string, string>,
+): string {
+  let redacted = redact(value);
+  for (const secret of Object.values(envValues)) {
+    if (!secret) continue;
+    redacted = redacted.split(secret).join("***REDACTED***");
+  }
+  return redacted;
+}
+
+function commandOutput(
+  result: OpenShellCommandResult,
+  envValues: Record<string, string> = {},
+): string {
   const stdout =
     typeof result.stdout === "string" ? result.stdout : (result.stdout?.toString() ?? "");
   const stderr =
     typeof result.stderr === "string" ? result.stderr : (result.stderr?.toString() ?? "");
-  return redact(`${stderr}${stdout}`).replace(/\r/g, "").trim();
+  return redactCredentialValuesForDisplay(`${stderr}${stdout}`, envValues).replace(/\r/g, "").trim();
 }
 
 const runProviderCleanupOpenshell: SandboxProviderRunOpenshell = (args, opts) =>
@@ -790,7 +812,7 @@ function upsertMcpProvider(
   ) as OpenShellCommandResult;
   if (result.status !== 0) {
     throw new McpBridgeError(
-      commandOutput(result) || `Failed to ${action} MCP provider '${providerName}'.`,
+      commandOutput(result, envValues) || `Failed to ${action} MCP provider '${providerName}'.`,
     );
   }
   return action === "create" ? "created" : "updated";
@@ -1237,6 +1259,15 @@ function parseJsonFlag(args: string[]): { json: boolean; rest: string[] } {
   };
 }
 
+function requireNoExtraArgs(args: string[], usage: string): void {
+  if (args.length > 0) throw new McpBridgeError(usage, 2);
+}
+
+function requireAtMostOneArg(args: string[], usage: string): string | undefined {
+  if (args.length > 1) throw new McpBridgeError(usage, 2);
+  return args[0];
+}
+
 function hasHelpFlag(args: readonly string[]): boolean {
   return args.includes("--help") || args.includes("-h");
 }
@@ -1310,7 +1341,8 @@ export async function dispatchMcpBridgeCommand(
         return;
       }
       case "list": {
-        const { json } = parseJsonFlag(rest);
+        const { json, rest: listRest } = parseJsonFlag(rest);
+        requireNoExtraArgs(listRest, "Usage: nemoclaw <sandbox> mcp list [--json]");
         const sandbox = getSandboxOrThrow(sandboxName);
         const agent = getSandboxAgent(sandbox);
         const statuses = statusMcpBridge(sandboxName);
@@ -1321,13 +1353,17 @@ export async function dispatchMcpBridgeCommand(
       }
       case "status": {
         const { json, rest: statusRest } = parseJsonFlag(rest);
+        const server = requireAtMostOneArg(
+          statusRest,
+          "Usage: nemoclaw <sandbox> mcp status [server] [--json]",
+        );
         const sandbox = getSandboxOrThrow(sandboxName);
         const agent = getSandboxAgent(sandbox);
-        const statuses = statusMcpBridge(sandboxName, statusRest[0]);
+        const statuses = statusMcpBridge(sandboxName, server);
         if (json) {
           console.log(
             JSON.stringify(
-              statusRest[0] ? statuses[0] : buildJsonSummary(sandboxName, agent, statuses),
+              server ? statuses[0] : buildJsonSummary(sandboxName, agent, statuses),
               null,
               2,
             ),
@@ -1336,14 +1372,18 @@ export async function dispatchMcpBridgeCommand(
         return;
       }
       case "restart": {
-        await restartMcpBridge(sandboxName, rest[0]);
+        const server = requireAtMostOneArg(
+          rest,
+          "Usage: nemoclaw <sandbox> mcp restart [server]",
+        );
+        await restartMcpBridge(sandboxName, server);
         return;
       }
       case "remove": {
         const force = rest.includes("--force");
         const names = rest.filter((arg) => arg !== "--force");
         const server = names[0];
-        if (!server)
+        if (!server || names.length > 1)
           throw new McpBridgeError("Usage: nemoclaw <sandbox> mcp remove <server> [--force]", 2);
         removeMcpBridge(sandboxName, server, { force });
         return;

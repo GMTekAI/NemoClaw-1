@@ -1352,6 +1352,8 @@ describe("Hermes sandbox provisioning", () => {
         "web",
         "--extra",
         "pty",
+        "--extra",
+        "mcp",
       ]);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });

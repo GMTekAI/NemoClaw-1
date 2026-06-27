@@ -365,6 +365,68 @@ describe("sandbox-policy.schema.json", () => {
     expectValid(validate, valid, "rest body rewrite policy");
   });
 
+  it("accepts sandbox-policy JSON-RPC and MCP endpoints with explicit L7 matchers", () => {
+    const valid = {
+      version: 1,
+      network_policies: {
+        mcp_bridge: {
+          name: "MCP Bridge",
+          binaries: [{ path: "/usr/local/bin/mcporter" }],
+          endpoints: [
+            {
+              host: "host.openshell.internal",
+              port: 31337,
+              protocol: "json-rpc",
+              enforcement: "enforce",
+              json_rpc: { max_body_bytes: 131072 },
+              rules: [{ allow: { method: "tools/list", path: "/mcp" } }],
+            },
+            {
+              host: "host.openshell.internal",
+              port: 31337,
+              protocol: "mcp",
+              enforcement: "enforce",
+              mcp: { max_body_bytes: 131072, strict_tool_names: true },
+              rules: [
+                {
+                  allow: {
+                    method: "tools/call",
+                    path: "/mcp",
+                    tool: { any: ["search", "read"] },
+                    params: { query: { any: ["safe", "readonly"] } },
+                  },
+                },
+              ],
+              deny_rules: [{ tool: "admin" }],
+            },
+          ],
+        },
+      },
+    };
+    expectValid(validate, valid, "json-rpc and mcp policy");
+  });
+
+  it("rejects sandbox-policy MCP endpoints without rules or explicit full access", () => {
+    const bad = {
+      version: 1,
+      network_policies: {
+        mcp_bridge: {
+          name: "MCP Bridge",
+          binaries: [{ path: "/usr/local/bin/mcporter" }],
+          endpoints: [
+            {
+              host: "host.openshell.internal",
+              port: 31337,
+              protocol: "mcp",
+              mcp: { max_body_bytes: 131072 },
+            },
+          ],
+        },
+      },
+    };
+    expect(validate(bad)).toBe(false);
+  });
+
   it("rejects sandbox-policy endpoint with protocol websocket but no rules or access", () => {
     const bad = {
       version: 1,
@@ -491,6 +553,80 @@ describe("policy-preset.schema.json", () => {
       },
     };
     expectValid(validate, valid, "rest body rewrite preset");
+  });
+
+  it("accepts preset JSON-RPC and MCP endpoints with focused option objects", () => {
+    const valid = {
+      preset: { name: "mcp", description: "MCP" },
+      network_policies: {
+        mcp_bridge: {
+          name: "MCP Bridge",
+          binaries: [{ path: "/usr/local/bin/mcporter" }],
+          endpoints: [
+            {
+              host: "mcp.example.com",
+              port: 443,
+              protocol: "json-rpc",
+              json_rpc: { max_body_bytes: 131072 },
+              rules: [{ allow: { method: "initialize", path: "/mcp" } }],
+            },
+            {
+              host: "mcp.example.com",
+              port: 443,
+              protocol: "mcp",
+              mcp: { max_body_bytes: 131072, allow_all_known_mcp_methods: false },
+              rules: [{ allow: { method: "tools/call", path: "/mcp", tool: "search" } }],
+              deny_rules: [{ params: { mode: "admin" } }],
+            },
+          ],
+        },
+      },
+    };
+    expectValid(validate, valid, "json-rpc and mcp preset");
+  });
+
+  it("rejects preset MCP endpoints with missing rules, invalid options, or invalid matchers", () => {
+    const base = {
+      preset: { name: "mcp", description: "MCP" },
+      network_policies: {
+        mcp_bridge: {
+          name: "MCP Bridge",
+          binaries: [{ path: "/usr/local/bin/mcporter" }],
+          endpoints: [
+            {
+              host: "mcp.example.com",
+              port: 443,
+              protocol: "mcp",
+              mcp: { max_body_bytes: 131072 },
+              rules: [{ allow: { method: "tools/list", path: "/mcp" } }],
+            },
+          ],
+        },
+      },
+    };
+    type McpPresetFixture = {
+      network_policies: {
+        mcp_bridge: {
+          endpoints: Array<{
+            rules?: unknown[];
+            deny_rules?: unknown[];
+            mcp: { allow_all_known_mcp_methods?: unknown };
+          }>;
+        };
+      };
+    };
+    const missingRules = cloneObject(base) as McpPresetFixture;
+    delete missingRules.network_policies.mcp_bridge.endpoints[0]!.rules;
+    expect(validate(missingRules)).toBe(false);
+
+    const invalidOptions = cloneObject(base) as McpPresetFixture;
+    invalidOptions.network_policies.mcp_bridge.endpoints[0]!.mcp.allow_all_known_mcp_methods =
+      "yes";
+    expect(validate(invalidOptions)).toBe(false);
+
+    const invalidMatcher = cloneObject(base) as McpPresetFixture;
+    invalidMatcher.network_policies.mcp_bridge.endpoints[0]!.deny_rules = [{ tool: { any: [] } }];
+    expect(validate(invalidMatcher)).toBe(false);
   });
 
   it("rejects preset endpoint with protocol websocket but no rules", () => {

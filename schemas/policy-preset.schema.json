@@ -73,7 +73,7 @@
         }
       },
       "if": {
-        "properties": { "protocol": { "enum": ["rest", "websocket"] } },
+        "properties": { "protocol": { "enum": ["rest", "websocket", "json-rpc", "mcp"] } },
         "required": ["protocol"]
       },
       "then": { "required": ["rules"] }

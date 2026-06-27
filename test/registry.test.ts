@@ -163,6 +163,31 @@ describe("registry", () => {
     expect(entry.port).toBeUndefined();
   });
 
+  it("normalizes MCP bridge maps by the recovered server name", () => {
+    registry.registerSandbox({
+      name: "alpha",
+      agent: "openclaw",
+      mcp: {
+        bridges: {
+          stale_key: {
+            server: "github",
+            agent: "openclaw",
+            adapter: "mcporter",
+            url: "https://api.githubcopilot.com/mcp/",
+            env: ["GITHUB_TOKEN"],
+            providerName: "alpha-mcp-github",
+            policyName: "mcp-bridge-github",
+            addedAt: new Date(0).toISOString(),
+          },
+        },
+      },
+    });
+
+    const raw = JSON.parse(fs.readFileSync(regFile, "utf-8"));
+    expect(raw.sandboxes.alpha.mcp.bridges.github.server).toBe("github");
+    expect(raw.sandboxes.alpha.mcp.bridges.stale_key).toBeUndefined();
+  });
+
   it("normalizes configured inference fields into a discriminated view", () => {
     const configured = { name: "alpha", provider: "nvidia-prod", model: "nvidia/test" };
     const missingProvider = { name: "beta", provider: null, model: "nvidia/test" };

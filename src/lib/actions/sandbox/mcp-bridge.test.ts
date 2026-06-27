@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import YAML from "yaml";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   buildDeepAgentsMcpRegisterCommand,
@@ -15,11 +15,13 @@ import {
   buildMcpBridgePolicyYaml,
   buildMcpBridgeProviderName,
   buildOpenClawMcporterRegisterCommand,
+  dispatchMcpBridgeCommand,
   MCP_BRIDGE_POLICY_MAX_BODY_BYTES,
   MCPORTER_VERSION,
   normalizeMcpServerUrl,
   parseMcpAddArgs,
   redactBridgeSecretsForDisplay,
+  redactCredentialValuesForDisplay,
   resolveCredentialEnv,
 } from "../../../../dist/lib/actions/sandbox/mcp-bridge";
 import type { McpBridgeEntry } from "../../../../dist/lib/state/registry";
@@ -91,6 +93,38 @@ describe("MCP CLI parsing", () => {
         : (process.env.MCP_BRIDGE_TEST_TOKEN = prior);
     }
     expect(resolveCredentialEnv([{ name: "MCP_BRIDGE_TEST_TOKEN_NOT_SET" }])).toEqual({});
+  });
+
+  it("redacts inline credential values from provider failure output", () => {
+    const output = redactCredentialValuesForDisplay(
+      "provider failed for --credential TOKEN=inline-secret-value",
+      { TOKEN: "inline-secret-value" },
+    );
+    expect(output).toContain("provider failed for --credential");
+    expect(output).not.toContain("inline-secret-value");
+  });
+
+  it("rejects surplus positional arguments before sandbox side effects", async () => {
+    const priorExitCode = process.exitCode;
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      process.exitCode = undefined;
+      await dispatchMcpBridgeCommand("missing-sandbox", ["list", "extra"]);
+      expect(process.exitCode).toBe(2);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Usage: nemoclaw <sandbox> mcp list [--json]"),
+      );
+
+      process.exitCode = undefined;
+      await dispatchMcpBridgeCommand("missing-sandbox", ["remove", "one", "two"]);
+      expect(process.exitCode).toBe(2);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Usage: nemoclaw <sandbox> mcp remove <server> [--force]"),
+      );
+    } finally {
+      errorSpy.mockRestore();
+      process.exitCode = priorExitCode;
+    }
   });
 });
 
@@ -238,6 +272,8 @@ describe("MCP adapters", () => {
     expect(command).toContain("'type': 'http'");
     expect(command).toContain("https://api.githubcopilot.com/mcp/");
     expect(command).toContain("openshell:resolve:env:GITHUB_TOKEN");
+    expect(command).toContain("Invalid /sandbox/.mcp.json");
+    expect(command).toContain("mcpServers must be an object");
   });
 
   it("keeps unauthenticated servers free of Authorization headers", () => {

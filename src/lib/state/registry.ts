@@ -434,7 +434,7 @@ function normalizeSandboxMcpState(value: unknown): SandboxMcpState | undefined {
   const bridges: Record<string, McpBridgeEntry> = {};
   for (const [name, rawEntry] of Object.entries(bridgesValue)) {
     const entry = normalizeMcpBridgeEntry(name, rawEntry);
-    if (entry) bridges[name] = entry;
+    if (entry) bridges[entry.server] = entry;
   }
   return Object.keys(bridges).length > 0 ? { bridges } : undefined;
 }

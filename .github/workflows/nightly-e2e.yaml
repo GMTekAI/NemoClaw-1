@@ -85,8 +85,9 @@
 #   credential-migration-e2e Validates legacy ~/.nemoclaw/credentials.json migration to the
 #                            OpenShell gateway, secure zero-fill on unlink, allowlist filter
 #                            on non-credential env keys, and symlink-safe deletion.
-#   mcp-bridge-e2e           Live MCP server add/status/policy/remove proof, including
-#                            OpenShell provider credential rewrite and MCP L7 policy enforcement.
+#   mcp-bridge-e2e           Live MCP server add/status/policy/remove proof across OpenClaw,
+#                            Hermes, and Deep Agents Code, including OpenShell provider
+#                            credential rewrite and MCP L7 policy enforcement.
 #   launchable-smoke-e2e     Community install path (brev-launchable-ci-cpu.sh) on ubuntu-latest.
 #   gpu-e2e                  Local Ollama inference on an NVKS ephemeral GPU runner.
 #   gpu-double-onboard-e2e   Ollama proxy token consistency after re-onboard (#2553).
@@ -1666,7 +1667,7 @@ jobs:
     permissions:
       actions: read
       contents: read
-    timeout-minutes: 50
+    timeout-minutes: 120
     steps:
       - *target-ref-checkout
 
@@ -1695,6 +1696,7 @@ jobs:
         env:
           E2E_ARTIFACT_DIR: ${{ github.workspace }}/e2e-artifacts/vitest/mcp-bridge
           NEMOCLAW_CLI_BIN: ${{ github.workspace }}/bin/nemoclaw.js
+          NEMOCLAW_MCP_BRIDGE_AGENT_MATRIX: "1"
           NEMOCLAW_RUN_E2E_SCENARIOS: "1"
           NEMOCLAW_OPENSHELL_CHANNEL: ${{ github.event_name == 'workflow_dispatch' && inputs.openshell_channel || 'stable' }}
           NEMOCLAW_OPENSHELL_ARTIFACT_RUN_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.openshell_artifact_run_id || '' }}
