@@ -322,13 +322,15 @@ runIssue4434LiveTest(
       model: hosted.model,
       publicHost: "host.openshell.internal",
     });
-    let fakeOpen = true;
-    cleanup.add("close issue #4434 fake OpenAI-compatible endpoint", async () => {
-      if (!fakeOpen) return;
-      await artifacts.writeJson("issue4434-fake-openai-requests-cleanup.json", fake.requests());
-      await fake.close();
-      fakeOpen = false;
-    });
+    let fakeClosePromise: Promise<void> | undefined;
+    const closeFake = (): Promise<void> => {
+      fakeClosePromise ??= (async () => {
+        await artifacts.writeJson("issue4434-fake-openai-requests-cleanup.json", fake.requests());
+        await fake.close();
+      })();
+      return fakeClosePromise;
+    };
+    cleanup.add("close issue #4434 fake OpenAI-compatible endpoint", closeFake);
     cleanup.add("restore issue #4434 hosted provider endpoint", async () => {
       const restore = await host.command(
         "openshell",
@@ -347,9 +349,10 @@ runIssue4434LiveTest(
           timeoutMs: 30_000,
         },
       );
-      if (restore.exitCode !== 0) {
-        throw new Error(`failed to restore hosted provider endpoint\n${resultText(restore)}`);
-      }
+      expect(
+        restore.exitCode,
+        `failed to restore hosted provider endpoint\n${resultText(restore)}`,
+      ).toBe(0);
     });
     await artifacts.writeJson("issue4434-fake-openai-endpoint.json", { baseUrl: fake.baseUrl });
 
@@ -419,8 +422,7 @@ runIssue4434LiveTest(
       `managed inference did not send a chat completion to the fake endpoint: ${JSON.stringify(fakeRequests)}`,
     ).toBe(true);
 
-    await fake.close();
-    fakeOpen = false;
+    await closeFake();
 
     const failedManagedRouteProbe = await sandbox.execShell(
       instance.sandboxName,
