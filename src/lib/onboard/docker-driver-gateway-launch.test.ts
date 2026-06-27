@@ -135,6 +135,8 @@ describe("docker-driver-gateway-launch", () => {
       const config = fs.readFileSync(configPath, "utf-8");
       expect(fs.statSync(configPath).mode & 0o777).toBe(0o600);
       expect(config).toContain("[openshell.gateway.gateway_jwt]");
+      expect(config).toContain("[openshell.gateway.auth]");
+      expect(config).toContain("allow_unauthenticated_users = true");
       expect(config).toContain(`signing_key_path = "${path.join(stateDir, "jwt", "signing.pem")}"`);
       expect(config).toContain('gateway_id = "nemoclaw"');
       expect(config).toContain("ttl_secs = 0");
@@ -200,6 +202,8 @@ describe("docker-driver-gateway-launch", () => {
     );
 
     expect(toml).toContain('compute_drivers = ["docker"]');
+    expect(toml).toContain("[openshell.gateway.auth]");
+    expect(toml).toContain("allow_unauthenticated_users = true");
     expect(toml).toContain("[openshell.gateway.gateway_jwt]");
     expect(toml).toContain('signing_key_path = "/tmp/jwt/signing.pem"');
     expect(toml).toContain('public_key_path = "/tmp/jwt/public.pem"');
