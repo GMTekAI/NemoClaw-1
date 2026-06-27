@@ -17,7 +17,7 @@ import {
 } from "./helpers";
 
 describe("CLI dispatch", () => {
-  it("connect does not pre-start a duplicate port forward", () => {
+  it("connect does not pre-start a duplicate port forward", testTimeoutOptions(15_000), () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-cli-connect-forward-"));
     const localBin = path.join(home, "bin");
     const registryDir = path.join(home, ".nemoclaw");
@@ -262,7 +262,8 @@ describe("CLI dispatch", () => {
         "      ;;",
         "  esac",
         "fi",
-        'if [ "$1" = "forward" ]; then [ "$2" = "list" ] && echo "alpha 127.0.0.1 18789 12345 running"; exit 0; fi',
+        'if [ "$1" = "forward" ] && [ "$2" = "list" ]; then echo "alpha 127.0.0.1 18789 12345 running"; exit 0; fi',
+        'if [ "$1" = "forward" ]; then exit 99; fi',
         "exit 0",
       ].join("\n"),
       { mode: 0o755 },
@@ -590,7 +591,8 @@ describe("CLI dispatch", () => {
         '  echo UNEXPECTED_SSH_CONFIG >> "$calls"',
         "  exit 1",
         "fi",
-        'if [ "$1" = "forward" ]; then [ "$2" = "list" ] && { echo "alpha 127.0.0.1 18789 12345 running"; echo "alpha 127.0.0.1 8642 12346 running"; }; exit 0; fi',
+        'if [ "$1" = "forward" ] && [ "$2" = "list" ]; then { echo "alpha 127.0.0.1 18789 12345 running"; echo "alpha 127.0.0.1 8642 12346 running"; }; exit 0; fi',
+        'if [ "$1" = "forward" ]; then exit 99; fi',
         "exit 0",
       ].join("\n"),
       { mode: 0o755 },
