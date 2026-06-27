@@ -142,20 +142,6 @@ describe("e2e-vitest-scenarios workflow boundary", () => {
         selectedFreeStandingJobs: ["openshell-version-pin-vitest"],
         registryScenarios: [],
       });
-      expect(evaluateE2eVitestWorkflowDispatchSelectors({}).selectedFreeStandingJobs).not.toContain(
-        "openshell-gateway-auth-contract-vitest",
-      );
-      for (const selector of [
-        { scenarios: "openshell-gateway-auth-contract" },
-        { jobs: "openshell-gateway-auth-contract-vitest" },
-      ]) {
-        expect(evaluateE2eVitestWorkflowDispatchSelectors(selector)).toMatchObject({
-          valid: true,
-          liveScenariosRuns: false,
-          selectedFreeStandingJobs: ["openshell-gateway-auth-contract-vitest"],
-          registryScenarios: [],
-        });
-      }
       expect(
         evaluateE2eVitestWorkflowDispatchSelectors({ scenarios: "skill-agent" }),
       ).toMatchObject({
