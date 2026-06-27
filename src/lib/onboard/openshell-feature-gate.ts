@@ -34,11 +34,15 @@ export function hasRequiredOpenshellMessagingFeatures(options: {
     if (seen.has(candidate)) continue;
     seen.add(candidate);
     let content: Buffer;
+    let fd: number | null = null;
     try {
-      if (!fs.statSync(candidate).isFile()) continue;
-      content = fs.readFileSync(candidate);
+      fd = fs.openSync(candidate, "r");
+      if (!fs.fstatSync(fd).isFile()) continue;
+      content = fs.readFileSync(fd);
     } catch {
       continue;
+    } finally {
+      if (fd !== null) fs.closeSync(fd);
     }
     for (let index = 0; index < requiredMarkers.length; index += 1) {
       if (content.includes(requiredMarkers[index])) {
