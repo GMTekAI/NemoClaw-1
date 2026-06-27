@@ -17,6 +17,19 @@ const EXIT_USAGE = 2;
 const EXIT_AUDIT_FAILURE = 3;
 const PATCH_MARKER = "nemoclaw: #4434 structured unreachable-inference diagnostic";
 
+type DirentLike = {
+  isFile(): boolean;
+  name: string;
+};
+
+type PatchStatus = "already-applied" | "would-apply" | "no-match" | "selector-failed";
+
+type PatchResult = {
+  nextSource: string;
+  status: Exclude<PatchStatus, "selector-failed">;
+  error?: string;
+};
+
 const args = process.argv.slice(2);
 const auditMode = args.includes(AUDIT_FLAG);
 const positional = args.filter((value) => value !== AUDIT_FLAG);
@@ -27,14 +40,13 @@ if (!distDir || positional.length > 1) {
   process.exit(EXIT_USAGE);
 }
 
-function fail(message) {
+function fail(message: string): never {
   console.error(`ERROR: ${message}`);
   process.exit(EXIT_APPLY_FAILURE);
 }
 
-function listJsFiles(dir) {
-  return fs
-    .readdirSync(dir, { withFileTypes: true })
+function listJsFiles(dir: string): string[] {
+  return (fs.readdirSync(dir, { withFileTypes: true }) as DirentLike[])
     .filter((entry) => entry.isFile() && entry.name.endsWith(".js"))
     .map((entry) => path.join(dir, entry.name));
 }
@@ -56,14 +68,14 @@ const helperSource = [
   "}",
 ].join("\n");
 
-function patchAssistantErrorFormat(source, file) {
+function patchAssistantErrorFormat(source: string, file: string): PatchResult {
   if (source.includes(PATCH_MARKER)) {
     return { nextSource: source, status: "already-applied" };
   }
 
   const pattern =
     /function formatRawAssistantErrorForUi\(raw\) \{\n(\s*)const trimmed = \(raw \?\? ""\)\.trim\(\);\n\1if \(!trimmed\) return "LLM request failed with an unknown error\.";/;
-  const nextSource = source.replace(pattern, (_match, indent) => {
+  const nextSource = source.replace(pattern, (_match: string, indent: string) => {
     return [
       helperSource,
       "function formatRawAssistantErrorForUi(raw) {",
@@ -87,7 +99,7 @@ function patchAssistantErrorFormat(source, file) {
 const FILE_SPEC = {
   id: "assistant-error-format",
   label: "assistant error formatter",
-  selector(source) {
+  selector(source: string) {
     return (
       source.includes("function formatRawAssistantErrorForUi(raw)") &&
       source.includes("MALFORMED_STREAMING_FRAGMENT_USER_MESSAGE") &&
@@ -102,7 +114,7 @@ const FILE_SPEC = {
   },
 };
 
-function resolveFile({ dryRun }) {
+function resolveFile({ dryRun }: { dryRun: boolean }): { file: string | null; error?: string } {
   const candidates = listJsFiles(distDir).filter((file) =>
     FILE_SPEC.selector(fs.readFileSync(file, "utf8")),
   );
@@ -114,11 +126,11 @@ function resolveFile({ dryRun }) {
   return { file: candidates[0] };
 }
 
-function processFile(file, { dryRun }) {
+function processFile(file: string, { dryRun }: { dryRun: boolean }): PatchResult {
   const source = fs.readFileSync(file, "utf8");
   const result = FILE_SPEC.recognizer.patch(source, file);
   if (result.status === "no-match") {
-    if (!dryRun) fail(result.error);
+    if (!dryRun) fail(result.error ?? FILE_SPEC.recognizer.postVerifyError);
     return result;
   }
 
@@ -136,7 +148,7 @@ function processFile(file, { dryRun }) {
   return result;
 }
 
-function statusBadge(status) {
+function statusBadge(status: PatchStatus): string {
   switch (status) {
     case "already-applied":
     case "would-apply":
@@ -150,7 +162,8 @@ function statusBadge(status) {
 }
 
 function runApplyMode() {
-  const { file } = resolveFile({ dryRun: false });
+  const { file, error } = resolveFile({ dryRun: false });
+  if (!file) fail(error ?? `expected exactly one OpenClaw ${FILE_SPEC.label} file`);
   processFile(file, { dryRun: false });
   console.log(`INFO: patched OpenClaw #4434 diagnostics in ${path.basename(file)}`);
 }
