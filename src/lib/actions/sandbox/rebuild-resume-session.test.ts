@@ -23,7 +23,6 @@ function createResumeConfig(): RebuildResumeConfig {
 
 function markStep(session: Session, name: string, status: "complete" | "failed"): void {
   const step = session.steps[name];
-  if (!step) return;
   step.status = status;
   step.startedAt = "2026-06-01T00:00:00.000Z";
   step.completedAt = status === "complete" ? "2026-06-01T00:01:00.000Z" : null;
