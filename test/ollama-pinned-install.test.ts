@@ -321,7 +321,9 @@ describe("Phase 7 Ollama pinned install script wiring", () => {
       'fail "Ollama install requires NEMOCLAW_CLI_SCOPE_OLLAMA_SHA256 when NEMOCLAW_CLI_SCOPE_OLLAMA_VERSION overrides the pinned default',
     );
     expect(script).toContain('if [ "$computed_sha" != "$OLLAMA_PINNED_SHA256" ]; then');
-    expect(script).toContain('sudo tar -C /usr/local -xzf "${install_tmp}/ollama.tgz"');
+    expect(script).toMatch(
+      /sudo tar -C \/usr\/local (?:.* )?--no-overwrite-dir(?: .*)? --no-same-owner(?: .*)? --no-same-permissions(?: .*)? -xzf "\$\{install_tmp\}\/ollama\.tgz"/,
+    );
     expect(script).not.toContain("Skipping Ollama tarball sha256 verification");
   });
 

@@ -2272,6 +2272,16 @@ DEADLINE = time.time() + _env_seconds('NEMOCLAW_AUTO_PAIR_DEADLINE_SECS', 28800)
 # as `operator.admin` are still rejected by the device approval policy, and
 # requests that need them must be approved through a separate operator path.
 SLOW_INTERVAL = _env_seconds('NEMOCLAW_AUTO_PAIR_SLOW_INTERVAL_SECS', 5)
+# SLOW_INTERVAL is the steady-state inter-poll wait for the in-sandbox
+# auto-pair watcher once browser pairing has converged. The 5-second
+# default is a 6x-tighter cadence than the previous 30-second value; the
+# trade is bounded — at most one extra `openclaw devices list --json` per
+# 5s per sandbox versus per 30s — and the inverse is severe (late
+# allowlisted scope upgrades from sibling sandboxes sit pending past the
+# OpenClaw client's tolerance, both sandboxes fall back to embedded mode,
+# which is exactly #5343). Operators who want the old cadence back can
+# set NEMOCLAW_AUTO_PAIR_SLOW_INTERVAL_SECS=30 in the sandbox env; #5343
+# Phase 5 + unit test/nemoclaw-start.test.ts cover the new default.
 FAST_REENTRY_POLLS = int(_env_seconds('NEMOCLAW_AUTO_PAIR_FAST_REENTRY_POLLS', 5))
 FAST_REENTRY_INTERVAL = _env_seconds('NEMOCLAW_AUTO_PAIR_FAST_REENTRY_INTERVAL_SECS', 1)
 FAST_REENTRY_REMAINING = 0

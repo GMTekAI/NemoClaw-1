@@ -1462,7 +1462,14 @@ if ! command -v ollama >/dev/null 2>&1; then
     rm -rf "$install_tmp"
     exit 1
   fi
-  tar_out=$(sudo tar -C /usr/local -xzf "${install_tmp}/ollama.tgz" 2>&1)
+  # --no-overwrite-dir refuses to convert an existing directory under
+  # /usr/local into a symlink mid-extract, closing the residual attack
+  # where a later archive member would silently replace `lib/` with a
+  # symbolic ancestor pointing outside the extraction root.
+  # --no-same-owner and --no-same-permissions keep the ownership/mode of
+  # extracted files anchored to the running user (root) and the umask,
+  # not whatever the archive declares.
+  tar_out=$(sudo tar -C /usr/local --no-overwrite-dir --no-same-owner --no-same-permissions -xzf "${install_tmp}/ollama.tgz" 2>&1)
   tar_rc=$?
   printf '%s\n' "$tar_out" >>"$INSTALL_LOG"
   if [ "$tar_rc" -ne 0 ]; then
