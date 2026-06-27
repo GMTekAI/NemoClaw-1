@@ -647,7 +647,7 @@ function enforceHermesSecretBoundaryOnRunningGateway(
  * whose OpenClaw processes are not running. Also re-establishes the
  * host-side dashboard port-forward when it has gone dead independently
  * of the gateway. Returns an object describing the outcome:
- * `{ checked, wasRunning, recovered, forwardRecovered, secretBoundaryRefused?, secretBoundaryReason? }`.
+ * `{ checked, wasRunning, recovered, forwardRecovered, forwardRecoveryFailed?, secretBoundaryRefused?, secretBoundaryReason? }`.
  */
 export function checkAndRecoverSandboxProcesses(
   sandboxName: string,
@@ -716,6 +716,15 @@ export function checkAndRecoverSandboxProcesses(
           );
         }
       }
+      if (!forwardRecovered) {
+        return {
+          checked: true,
+          wasRunning: true,
+          recovered: false,
+          forwardRecovered: false,
+          forwardRecoveryFailed: true,
+        };
+      }
       return {
         checked: true,
         wasRunning: true,
@@ -734,7 +743,13 @@ export function checkAndRecoverSandboxProcesses(
         console.error(`  Dashboard port forward for '${sandboxName}' is owned by another sandbox.`);
         console.error("  Leaving the existing port forward unchanged.");
       }
-      return { checked: true, wasRunning: true, recovered: false, forwardRecovered: false };
+      return {
+        checked: true,
+        wasRunning: true,
+        recovered: false,
+        forwardRecovered: false,
+        forwardRecoveryFailed: true,
+      };
     }
     const dashboardForwardRecovered = ensureHermesDashboardPortForwardIfEnabled(sandboxName);
     const messagingForwardRecovered = recoverMessagingHostForward(sandboxName, { quiet });
@@ -796,6 +811,15 @@ export function checkAndRecoverSandboxProcesses(
           `  Run \`openshell forward start --background <port> ${sandboxName}\` manually.`,
         );
       }
+    }
+    if (!forwardRecovered) {
+      return {
+        checked: true,
+        wasRunning: false,
+        recovered,
+        forwardRecovered: false,
+        forwardRecoveryFailed: true,
+      };
     }
     return {
       checked: true,

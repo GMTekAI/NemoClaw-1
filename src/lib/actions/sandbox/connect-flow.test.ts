@@ -32,6 +32,7 @@ type ConnectHarnessOptions = {
     wasRunning?: boolean;
     recovered?: boolean;
     forwardRecovered?: boolean;
+    forwardRecoveryFailed?: boolean;
     secretBoundaryRefused?: boolean;
     secretBoundaryReason?: "raw-secret" | "inconclusive";
   };
@@ -422,6 +423,37 @@ describe("connectSandbox flow", () => {
       ["sandbox", "connect", "alpha"],
       expect.any(Object),
     );
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it("probe-only mode exits when primary dashboard/API forward recovery fails", async () => {
+    const harness = createConnectHarness({
+      processCheck: {
+        checked: true,
+        wasRunning: true,
+        recovered: false,
+        forwardRecovered: false,
+        forwardRecoveryFailed: true,
+      },
+    });
+
+    await expect(harness.connectSandbox("alpha", { probeOnly: true })).rejects.toThrow(
+      "process.exit(1)",
+    );
+
+    expect(harness.runAutoPairSpy).not.toHaveBeenCalled();
+    expect(harness.spawnSyncSpy).not.toHaveBeenCalledWith(
+      "openshell",
+      ["sandbox", "connect", "alpha"],
+      expect.any(Object),
+    );
+    const errorOutput = harness.errorSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
+    expect(errorOutput).toContain(
+      "Probe failed: OpenClaw gateway is running in 'alpha', but the dashboard/API host forward could not be restored.",
+    );
+    expect(errorOutput).toContain("openshell forward start --background <port> alpha");
+    const logOutput = harness.logSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
+    expect(logOutput).not.toContain("Probe complete");
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 

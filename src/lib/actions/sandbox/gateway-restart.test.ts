@@ -277,6 +277,36 @@ describe("restartSandboxGateway — host-mediated gateway restart", () => {
     }
   });
 
+  it("fails when the primary dashboard/API forward cannot be restored", () => {
+    const restore = silenceConsole();
+    try {
+      const deps = baseDeps({
+        ensureSandboxPortForward: vi.fn(() => false),
+        recoverMessagingHostForward: vi.fn(() => true),
+        recoverDeclaredAgentForwardPorts: vi.fn(() => true),
+      });
+      const result = restartSandboxGateway("alpha", { deps });
+
+      expect(result).toMatchObject({
+        ok: false,
+        failureLayer: "forward recovery failure",
+        detail: expect.stringContaining("primary dashboard/API host forward"),
+      });
+      expect(deps.recoverMessagingHostForward).toHaveBeenCalledWith("alpha", { quiet: false });
+      expect(deps.recoverDeclaredAgentForwardPorts).toHaveBeenCalledWith("alpha", 18789, {
+        quiet: false,
+      });
+      const errorOutput = vi.mocked(console.error).mock.calls.join("\n");
+      expect(errorOutput).toContain("Failure layer: forward recovery failure");
+      expect(errorOutput).toContain("primary dashboard/API host forward");
+      expect(console.log).not.toHaveBeenCalledWith(
+        expect.stringContaining("Gateway restarted; health passed"),
+      );
+    } finally {
+      restore();
+    }
+  });
+
   it("refuses terminal agents with the unsupported-agent support matrix", () => {
     const restore = silenceConsole();
     try {

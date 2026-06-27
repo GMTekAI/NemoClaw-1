@@ -51,11 +51,11 @@ import {
 } from "./connect-autopair-budget";
 import { preflightVllmModelEnvOrExit } from "./connect-vllm-preflight";
 import { isDockerRuntimeDown, printDockerRuntimeDownGuidance } from "./gateway-failure-classifier";
-import { runTerminalAgentConnectProbe } from "./terminal-connect-probe";
 import { ensureLiveSandboxOrExit, printGatewayLifecycleHint } from "./gateway-state";
 import { getSandboxTargetGatewayName } from "./gateway-target";
 import { printGatewayWedgeDiagnostics } from "./gateway-wedge-diagnostics";
 import { checkAndRecoverSandboxProcesses, executeSandboxExecCommand } from "./process-recovery";
+import { runTerminalAgentConnectProbe } from "./terminal-connect-probe";
 import { applyOpenShellVmDnsMonkeypatch, shouldApplyVmDnsMonkeypatch } from "./vm-dns-monkeypatch";
 
 export type SandboxConnectOptions = {
@@ -211,6 +211,17 @@ function exitOnSecretBoundaryRefusal(
   process.exit(1);
 }
 
+function exitOnForwardRecoveryFailure(sandboxName: string, agentName: string): never {
+  console.error("");
+  console.error(
+    `  Probe failed: ${agentName} gateway is running in '${sandboxName}', but the dashboard/API host forward could not be restored.`,
+  );
+  console.error(
+    `  Run \`openshell forward start --background <port> ${sandboxName}\` manually and re-run \`nemoclaw ${sandboxName} recover\`.`,
+  );
+  process.exit(1);
+}
+
 function runSandboxConnectProbe(sandboxName: string): void {
   const agent = agentRuntime.getSessionAgent(sandboxName);
   const agentName = agentRuntime.getAgentDisplayName(agent);
@@ -234,6 +245,9 @@ function runSandboxConnectProbe(sandboxName: string): void {
   }
   if ("secretBoundaryRefused" in processCheck && processCheck.secretBoundaryRefused) {
     exitOnSecretBoundaryRefusal(sandboxName, agentName, processCheck, "Probe");
+  }
+  if ("forwardRecoveryFailed" in processCheck && processCheck.forwardRecoveryFailed) {
+    exitOnForwardRecoveryFailure(sandboxName, agentName);
   }
   if (processCheck.wasRunning) {
     ensureSandboxInferenceRoute(sandboxName, { quiet: true });

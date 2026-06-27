@@ -418,6 +418,64 @@ beta  127.0.0.1  18789  12345  running`;
     ).toBe(false);
   });
 
+  it("reports failure when the primary forward cannot recover even if secondary forwards recover", () => {
+    const openshellRuntime = requireDist("../dist/lib/adapters/openshell/runtime.js");
+    const agentRuntime = requireDist("../dist/lib/agent/runtime.js");
+    const registry = requireDist("../dist/lib/state/registry.js");
+    const forwardHealth = requireDist("../dist/lib/actions/sandbox/forward-health.js");
+    const childProcess = requireDist("node:child_process");
+    let teamsForwardStarted = false;
+
+    vi.spyOn(childProcess, "spawnSync").mockReturnValue({
+      status: 0,
+      stdout: "__NEMOCLAW_SANDBOX_EXEC_STARTED__\nRUNNING\n",
+      stderr: "",
+    } as never);
+    vi.spyOn(agentRuntime, "getSessionAgent").mockReturnValue(null);
+    vi.spyOn(registry, "getSandbox").mockReturnValue({
+      name: "beta",
+      agent: "openclaw",
+      dashboardPort: 18789,
+      messaging: { schemaVersion: 1, plan: compactTeamsMessagingPlan() },
+    });
+    vi.spyOn(forwardHealth, "isLocalForwardReachable").mockReturnValue(false);
+    vi.spyOn(openshellRuntime, "captureOpenshell").mockImplementation(() => ({
+      status: 0,
+      output: teamsForwardStarted
+        ? `SANDBOX  BIND  PORT  PID  STATUS
+beta  127.0.0.1  3978  12346  running`
+        : `SANDBOX  BIND  PORT  PID  STATUS
+beta  127.0.0.1  18789  12345  dead`,
+    }));
+    const runOpenshell = vi
+      .spyOn(openshellRuntime, "runOpenshell")
+      .mockImplementation((rawArgs: unknown) => {
+        const args = Array.isArray(rawArgs) ? rawArgs.map(String) : [];
+        if (args[0] === "forward" && args[1] === "start" && args.includes("18789")) {
+          return { status: 1 } as never;
+        }
+        if (args[0] === "forward" && args[1] === "start" && args.includes("3978")) {
+          teamsForwardStarted = true;
+        }
+        return { status: 0 } as never;
+      });
+
+    expect(
+      withFakeOpenshellBinary(() => checkAndRecoverSandboxProcesses("beta", { quiet: true })),
+    ).toEqual({
+      checked: true,
+      wasRunning: true,
+      recovered: false,
+      forwardRecovered: false,
+      forwardRecoveryFailed: true,
+    });
+    expect(teamsForwardStarted).toBe(true);
+    expect(runOpenshell).toHaveBeenCalledWith(
+      ["forward", "start", "--background", "3978", "beta"],
+      { ignoreError: true },
+    );
+  });
+
   it("checkAndRecoverSandboxProcesses re-establishes an active Teams messaging host forward from a compact plan when the dashboard forward is healthy", () => {
     const openshellRuntime = requireDist("../dist/lib/adapters/openshell/runtime.js");
     const agentRuntime = requireDist("../dist/lib/agent/runtime.js");

@@ -19,7 +19,8 @@ export type GatewayRestartFailureLayer =
   | "unsafe config path"
   | "hash mismatch while locked"
   | "launch failure"
-  | "health timeout";
+  | "health timeout"
+  | "forward recovery failure";
 
 export type GatewayRestartResult =
   | {
@@ -272,10 +273,14 @@ export function restartSandboxGatewayWithDeps(
     { quiet },
   );
 
+  if (!forwardRecovered) {
+    const detail =
+      "gateway health passed but the primary dashboard/API host forward could not be re-established";
+    printGatewayRestartFailure(sandboxName, "forward recovery failure", detail);
+    return { ok: false, failureLayer: "forward recovery failure", detail };
+  }
+
   if (!quiet) {
-    if (!forwardRecovered) {
-      console.error("  Dashboard port forward could not be re-established.");
-    }
     console.log(
       `  ${G}✓${R} Gateway restarted; health passed; forwards checked/recovered for '${sandboxName}'.`,
     );
