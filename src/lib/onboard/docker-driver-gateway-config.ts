@@ -15,6 +15,7 @@ import path from "node:path";
 export const DOCKER_DRIVER_GATEWAY_CONFIG_NAME = "openshell-gateway.toml";
 export const DOCKER_DRIVER_GATEWAY_JWT_TTL_SECS = 3600;
 const GATEWAY_JWT_DIR_NAME = "jwt";
+const GATEWAY_JWT_TMP_PREFIX = ".jwt-tmp-";
 
 export type DockerDriverGatewayJwtBundle = {
   signingKeyPath: string;
@@ -35,6 +36,23 @@ function writeRestrictedFile(filePath: string, value: string, mode = 0o600): voi
   fs.chmodSync(filePath, mode);
 }
 
+function dockerDriverGatewayJwtBundleForDir(jwtDir: string): DockerDriverGatewayJwtBundle {
+  return {
+    signingKeyPath: path.join(jwtDir, "signing.pem"),
+    publicKeyPath: path.join(jwtDir, "public.pem"),
+    kidPath: path.join(jwtDir, "kid"),
+  };
+}
+
+function normalizeDockerDriverGatewayJwtBundlePermissions(
+  bundle: DockerDriverGatewayJwtBundle,
+): void {
+  fs.chmodSync(path.dirname(bundle.signingKeyPath), 0o700);
+  fs.chmodSync(bundle.signingKeyPath, 0o600);
+  fs.chmodSync(bundle.publicKeyPath, 0o600);
+  fs.chmodSync(bundle.kidPath, 0o600);
+}
+
 function dockerDriverGatewayJwtBundleIsValid(bundle: DockerDriverGatewayJwtBundle): boolean {
   try {
     const kid = fs.readFileSync(bundle.kidPath, "utf-8").trim();
@@ -52,40 +70,19 @@ function dockerDriverGatewayJwtBundleIsValid(bundle: DockerDriverGatewayJwtBundl
   }
 }
 
-export function ensureDockerDriverGatewayJwtBundle(stateDir: string): DockerDriverGatewayJwtBundle {
-  const jwtDir = path.join(stateDir, GATEWAY_JWT_DIR_NAME);
-  const bundle = {
-    signingKeyPath: path.join(jwtDir, "signing.pem"),
-    publicKeyPath: path.join(jwtDir, "public.pem"),
-    kidPath: path.join(jwtDir, "kid"),
-  };
-  const files = [bundle.signingKeyPath, bundle.publicKeyPath, bundle.kidPath];
-
-  fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-  fs.chmodSync(stateDir, 0o700);
-
-  const present = existingFileCount(files);
-  if (present === files.length) {
-    fs.chmodSync(jwtDir, 0o700);
-    fs.chmodSync(bundle.signingKeyPath, 0o600);
-    fs.chmodSync(bundle.publicKeyPath, 0o600);
-    fs.chmodSync(bundle.kidPath, 0o600);
-    if (dockerDriverGatewayJwtBundleIsValid(bundle)) {
-      return bundle;
+function cleanupStaleDockerDriverGatewayJwtTempDirs(stateDir: string): void {
+  for (const entry of fs.readdirSync(stateDir, { withFileTypes: true })) {
+    if (entry.isDirectory() && entry.name.startsWith(GATEWAY_JWT_TMP_PREFIX)) {
+      fs.rmSync(path.join(stateDir, entry.name), { recursive: true, force: true });
     }
-    // Complete-but-invalid local auth material is unsafe to reuse because
-    // OpenShell loads these files as one Ed25519 gateway_jwt bundle.
-    fs.rmSync(jwtDir, { recursive: true, force: true });
-  } else if (present > 0) {
-    // Invalid state boundary: this directory is NemoClaw-owned local gateway
-    // state, and a manual edit or interrupted prior write can leave only part
-    // of the OpenShell v0.0.67 gateway_jwt bundle. OpenShell requires all three
-    // files to agree, so the safe source of truth is a freshly generated local
-    // bundle. Remove this recovery only if bundle creation becomes atomic.
-    fs.rmSync(jwtDir, { recursive: true, force: true });
   }
-  fs.mkdirSync(jwtDir, { recursive: true, mode: 0o700 });
-  fs.chmodSync(jwtDir, 0o700);
+}
+
+function writeNewDockerDriverGatewayJwtBundle(
+  bundle: DockerDriverGatewayJwtBundle,
+): DockerDriverGatewayJwtBundle {
+  fs.mkdirSync(path.dirname(bundle.signingKeyPath), { recursive: true, mode: 0o700 });
+  fs.chmodSync(path.dirname(bundle.signingKeyPath), 0o700);
 
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
   writeRestrictedFile(
@@ -98,7 +95,58 @@ export function ensureDockerDriverGatewayJwtBundle(stateDir: string): DockerDriv
   );
   writeRestrictedFile(bundle.kidPath, `${randomBytes(16).toString("hex")}\n`);
 
+  if (!dockerDriverGatewayJwtBundleIsValid(bundle)) {
+    throw new Error("OpenShell gateway JWT bundle generation produced an invalid keypair");
+  }
   return bundle;
+}
+
+function createAtomicDockerDriverGatewayJwtBundle(
+  stateDir: string,
+  finalBundle: DockerDriverGatewayJwtBundle,
+): DockerDriverGatewayJwtBundle {
+  const finalDir = path.dirname(finalBundle.signingKeyPath);
+  const tmpDir = fs.mkdtempSync(path.join(stateDir, GATEWAY_JWT_TMP_PREFIX));
+  let promoted = false;
+  try {
+    writeNewDockerDriverGatewayJwtBundle(dockerDriverGatewayJwtBundleForDir(tmpDir));
+    fs.rmSync(finalDir, { recursive: true, force: true });
+    fs.renameSync(tmpDir, finalDir);
+    promoted = true;
+    normalizeDockerDriverGatewayJwtBundlePermissions(finalBundle);
+    return finalBundle;
+  } finally {
+    if (!promoted) fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+export function ensureDockerDriverGatewayJwtBundle(stateDir: string): DockerDriverGatewayJwtBundle {
+  const jwtDir = path.join(stateDir, GATEWAY_JWT_DIR_NAME);
+  const bundle = dockerDriverGatewayJwtBundleForDir(jwtDir);
+  const files = [bundle.signingKeyPath, bundle.publicKeyPath, bundle.kidPath];
+
+  fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  fs.chmodSync(stateDir, 0o700);
+  cleanupStaleDockerDriverGatewayJwtTempDirs(stateDir);
+
+  const present = existingFileCount(files);
+  if (present === files.length) {
+    normalizeDockerDriverGatewayJwtBundlePermissions(bundle);
+    if (dockerDriverGatewayJwtBundleIsValid(bundle)) {
+      return bundle;
+    }
+    // Complete-but-invalid local auth material is unsafe to reuse because
+    // OpenShell loads these files as one Ed25519 gateway_jwt bundle.
+    fs.rmSync(jwtDir, { recursive: true, force: true });
+  } else if (present > 0) {
+    // Invalid state boundary: this directory is NemoClaw-owned local gateway
+    // state, and a manual edit or interrupted prior write can leave only part
+    // of the OpenShell v0.0.67 gateway_jwt bundle. OpenShell requires all three
+    // files to agree, so the safe source of truth is a freshly generated local
+    // bundle, staged outside the final jwt directory and renamed into place.
+    fs.rmSync(jwtDir, { recursive: true, force: true });
+  }
+  return createAtomicDockerDriverGatewayJwtBundle(stateDir, bundle);
 }
 
 function gatewayIdForStateDir(stateDir: string): string {

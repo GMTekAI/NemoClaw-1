@@ -82,13 +82,18 @@ describe("docker-driver-gateway-launch", () => {
   it("builds a Docker-hosted gateway launch that preserves Docker-driver env", () => {
     withTempBinaries(({ dir, gatewayBin, sandboxBin }) => {
       const stateDir = path.join(dir, "state");
+      const dockerSocket = path.join(dir, "docker.sock");
       fs.mkdirSync(stateDir);
+      fs.writeFileSync(dockerSocket, "");
       const launch = buildDockerDriverGatewayLaunch({
         gatewayBin,
         sandboxBin,
         stateDir,
         platform: "linux",
-        env: { NEMOCLAW_OPENSHELL_GATEWAY_CONTAINER_PATCH: "1" },
+        env: {
+          DOCKER_HOST: `unix://${dockerSocket}`,
+          NEMOCLAW_OPENSHELL_GATEWAY_CONTAINER_PATCH: "1",
+        },
         gatewayEnv: {
           OPENSHELL_DB_URL: `sqlite:${path.join(stateDir, "openshell.db")}`,
           OPENSHELL_DRIVERS: "docker",
@@ -112,6 +117,8 @@ describe("docker-driver-gateway-launch", () => {
           `${stateDir}:${stateDir}:rw`,
           "--volume",
           `${dir}:${dir}:ro`,
+          "--volume",
+          `${dockerSocket}:${dockerSocket}:rw`,
           "--env",
           "OPENSHELL_DRIVERS",
           "--env",
@@ -123,6 +130,8 @@ describe("docker-driver-gateway-launch", () => {
         ]),
       );
       expect(launch.args).not.toContain("ubuntu:24.04");
+      expect(launch.args).not.toContain("--publish");
+      expect(launch.args).not.toContain("-p");
       expect(launch.env.OPENSHELL_DOCKER_SUPERVISOR_BIN).toBe(sandboxBin);
       expect(launch.env.OPENSHELL_BIND_ADDRESS).toBe("127.0.0.1");
       const configPath = launch.env.OPENSHELL_GATEWAY_CONFIG;

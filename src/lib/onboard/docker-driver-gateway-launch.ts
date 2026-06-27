@@ -10,7 +10,10 @@ import {
   buildDockerDriverGatewayConfigToml,
   prepareDockerDriverGatewayConfigEnv,
 } from "./docker-driver-gateway-config";
-import { assertDockerDriverGatewayBindAddressSafe } from "./docker-driver-gateway-env";
+import {
+  assertDockerDriverGatewayBindAddressSafe,
+  assertDockerDriverGatewayRuntimeConfigSafe,
+} from "./docker-driver-gateway-env";
 import {
   buildDockerDriverGatewayLocalTlsEnv,
   ensureDockerDriverGatewayLocalTlsBundle,
@@ -253,6 +256,7 @@ export function buildDockerDriverGatewayLaunch(
     options.stateDir,
     options.sandboxBin || gatewayEnv.OPENSHELL_DOCKER_SUPERVISOR_BIN,
   );
+  assertDockerDriverGatewayRuntimeConfigSafe(gatewayEnv);
   const baseEnv = options.env ?? process.env;
   const compat = shouldUseContainerizedGateway(options);
   if (!compat.useContainer) {
@@ -296,6 +300,13 @@ export function buildDockerDriverGatewayLaunch(
     delete env.DOCKER_HOST;
   }
   const dockerSocket = getDockerSocketPath(env);
+  // The compat container is a host-side OpenShell gateway ABI shim for Linux
+  // hosts whose glibc is older than the downloaded gateway binary. Host
+  // networking is required so OpenShell can compute and bind Docker bridge
+  // callback addresses exactly as a host gateway would; the main listener is
+  // still forced to loopback by compatGatewayBindAddress(). Docker socket access
+  // is needed only so that gateway process can continue driving the Docker
+  // compute driver from inside the shim container.
   const args = ["run", "--rm", "--name", containerName, "--network", "host"];
   addVolume(args, path.resolve(options.gatewayBin), GATEWAY_MOUNT_PATH, "ro");
   addVolume(args, path.resolve(options.stateDir), path.resolve(options.stateDir), "rw");

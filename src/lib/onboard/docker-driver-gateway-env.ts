@@ -7,21 +7,20 @@ import path from "node:path";
 
 import {
   GATEWAY_BIND_ADDRESS,
-  WILDCARD_GATEWAY_BIND_ADDRESS,
   getGatewayConnectHost,
   getGatewayHttpsEndpoint,
+  WILDCARD_GATEWAY_BIND_ADDRESS,
 } from "../core/gateway-address";
 import { GATEWAY_PORT } from "../core/ports";
 import { prepareDockerDriverGatewayConfigEnv } from "./docker-driver-gateway-config";
 import { buildDockerDriverGatewayLocalTlsEnv } from "./docker-driver-gateway-local-tls";
 import {
   hasOpenShellGatewayUserService,
-  startPackageManagedDockerDriverGateway,
   type PackageManagedDockerDriverGatewayOptions,
+  startPackageManagedDockerDriverGateway,
 } from "./docker-driver-gateway-service";
 
-export { getGatewayHttpsEndpoint };
-export { startPackageManagedDockerDriverGateway };
+export { getGatewayHttpsEndpoint, startPackageManagedDockerDriverGateway };
 
 export const DOCKER_DRIVER_GATEWAY_RUNTIME_ENV_KEYS = [
   "OPENSHELL_DRIVERS",
@@ -75,6 +74,50 @@ export function assertDockerDriverGatewayBindAddressSafe(gatewayEnv: Record<stri
   throw new Error(
     "NEMOCLAW_GATEWAY_BIND_ADDRESS=0.0.0.0 is not supported for the OpenShell 0.0.67 Docker-driver gateway while gateway JWT auth is active. Remove the override, or use NEMOCLAW_DASHBOARD_BIND for dashboard exposure.",
   );
+}
+
+function parseTomlBooleanValues(toml: string): Map<string, boolean> {
+  const values = new Map<string, boolean>();
+  let section = "";
+  for (const rawLine of toml.split("\n")) {
+    const line = rawLine.replace(/#.*/, "").trim();
+    const sectionMatch = line.match(/^\[([A-Za-z0-9_.-]+)\]$/);
+    if (sectionMatch?.[1]) {
+      section = sectionMatch[1];
+      continue;
+    }
+    const booleanMatch = line.match(/^([A-Za-z0-9_]+)\s*=\s*(true|false)$/);
+    if (booleanMatch?.[1] && booleanMatch[2]) {
+      values.set(`${section}.${booleanMatch[1]}`, booleanMatch[2] === "true");
+    }
+  }
+  return values;
+}
+
+function assertTomlBoolean(values: Map<string, boolean>, key: string, expected: boolean): void {
+  const actual = values.get(key);
+  if (actual === expected) return;
+  throw new Error(
+    `OpenShell Docker-driver gateway config must set ${key}=${expected}; found ${
+      actual === undefined ? "missing" : actual
+    }`,
+  );
+}
+
+export function assertDockerDriverGatewayRuntimeConfigSafe(
+  gatewayEnv: Record<string, string>,
+): void {
+  assertDockerDriverGatewayBindAddressSafe(gatewayEnv);
+  const configPath = gatewayEnv.OPENSHELL_GATEWAY_CONFIG?.trim();
+  if (!configPath) {
+    throw new Error("OpenShell Docker-driver gateway requires OPENSHELL_GATEWAY_CONFIG");
+  }
+  const toml = fs.readFileSync(configPath, "utf-8");
+  const values = parseTomlBooleanValues(toml);
+  assertTomlBoolean(values, "openshell.gateway.disable_tls", false);
+  assertTomlBoolean(values, "openshell.gateway.tls.require_client_auth", true);
+  assertTomlBoolean(values, "openshell.gateway.mtls_auth.enabled", true);
+  assertTomlBoolean(values, "openshell.gateway.auth.allow_unauthenticated_users", false);
 }
 
 export function getDockerDriverGatewayEndpoint(): string {
@@ -186,7 +229,7 @@ export function startPackageManagedDockerDriverGatewayWithEnvOverride({
   gatewayEnv,
   ...options
 }: PackageManagedDockerDriverGatewayWithEnvOverrideOptions): Promise<boolean> {
-  assertDockerDriverGatewayBindAddressSafe(gatewayEnv);
+  assertDockerDriverGatewayRuntimeConfigSafe(gatewayEnv);
   return startPackageManagedDockerDriverGateway({
     ...options,
     prepareOpenShellGatewayUserServiceEnv: () =>

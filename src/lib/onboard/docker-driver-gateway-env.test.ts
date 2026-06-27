@@ -9,11 +9,34 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   assertDockerDriverGatewayBindAddressSafe,
+  assertDockerDriverGatewayRuntimeConfigSafe,
   buildDockerDriverGatewayEnv,
   buildDockerGatewayDebEnvFile,
   startPackageManagedDockerDriverGatewayWithEnvOverride,
   writeDockerGatewayDebEnvOverride,
 } from "./docker-driver-gateway-env";
+
+function writeSafeGatewayAuthConfig(dir: string): string {
+  const configPath = path.join(dir, "openshell-gateway.toml");
+  fs.writeFileSync(
+    configPath,
+    [
+      "[openshell.gateway]",
+      "disable_tls = false",
+      "",
+      "[openshell.gateway.tls]",
+      "require_client_auth = true",
+      "",
+      "[openshell.gateway.mtls_auth]",
+      "enabled = true",
+      "",
+      "[openshell.gateway.auth]",
+      "allow_unauthenticated_users = false",
+      "",
+    ].join("\n"),
+  );
+  return configPath;
+}
 
 describe("buildDockerDriverGatewayEnv", () => {
   it("sets Docker-driver gateway networking from NemoClaw configuration", () => {
@@ -70,6 +93,35 @@ describe("buildDockerDriverGatewayEnv", () => {
         OPENSHELL_GATEWAY_CONFIG: "/tmp/openshell-gateway.toml",
       }),
     ).toThrow(/not supported for the OpenShell 0\.0\.67 Docker-driver gateway/);
+  });
+
+  it("validates generated gateway auth config before runtime startup", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-env-"));
+    try {
+      const configPath = writeSafeGatewayAuthConfig(stateDir);
+
+      expect(() =>
+        assertDockerDriverGatewayRuntimeConfigSafe({
+          OPENSHELL_BIND_ADDRESS: "127.0.0.1",
+          OPENSHELL_GATEWAY_CONFIG: configPath,
+        }),
+      ).not.toThrow();
+
+      fs.writeFileSync(
+        configPath,
+        fs
+          .readFileSync(configPath, "utf-8")
+          .replace("allow_unauthenticated_users = false", "allow_unauthenticated_users = true"),
+      );
+      expect(() =>
+        assertDockerDriverGatewayRuntimeConfigSafe({
+          OPENSHELL_BIND_ADDRESS: "127.0.0.1",
+          OPENSHELL_GATEWAY_CONFIG: configPath,
+        }),
+      ).toThrow(/allow_unauthenticated_users=false/);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -230,7 +282,10 @@ describe("writeDockerGatewayDebEnvOverride", () => {
         startPackageManagedDockerDriverGatewayWithEnvOverride({
           clearDockerDriverGatewayRuntimeFiles: vi.fn(),
           exitOnFailure: false,
-          gatewayEnv: { OPENSHELL_BIND_ADDRESS: "127.0.0.1" },
+          gatewayEnv: {
+            OPENSHELL_BIND_ADDRESS: "127.0.0.1",
+            OPENSHELL_GATEWAY_CONFIG: writeSafeGatewayAuthConfig(tempHome),
+          },
           gatewayName: "nemoclaw",
           hasOpenShellGatewayUserService: () => true,
           isDockerDriverGatewayReady: async () => true,

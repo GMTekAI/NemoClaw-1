@@ -88,6 +88,25 @@ function text(value: Buffer | string | null | undefined): string {
   return "";
 }
 
+function redactPemPrivateKeys(value: string): string {
+  return value.replace(
+    /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)/g,
+    "<redacted private key>",
+  );
+}
+
+function sanitizeDockerDriverGatewayLocalTlsErrorDetail(
+  detail: string,
+  bundle: DockerDriverGatewayLocalTlsBundle,
+  stateDir: string,
+): string {
+  return redactPemPrivateKeys(detail)
+    .split(bundle.localTlsDir)
+    .join("<stateDir>/tls")
+    .split(stateDir)
+    .join("<stateDir>");
+}
+
 function readCertificate(filePath: string): X509Certificate | null {
   try {
     return new X509Certificate(fs.readFileSync(filePath));
@@ -192,15 +211,27 @@ export function ensureDockerDriverGatewayLocalTlsBundle({
     } satisfies SpawnSyncOptions,
   );
   if (result.error) {
-    throw new Error(`OpenShell gateway certificate generation failed: ${result.error.message}`);
+    throw new Error(
+      `OpenShell gateway certificate generation failed: ${sanitizeDockerDriverGatewayLocalTlsErrorDetail(
+        result.error.message,
+        bundle,
+        stateDir,
+      )}`,
+    );
   }
   if (result.status !== 0) {
-    const detail = text(result.stderr).trim() || text(result.stdout).trim() || "unknown error";
+    const rawDetail = text(result.stderr).trim() || text(result.stdout).trim() || "unknown error";
+    const detail = sanitizeDockerDriverGatewayLocalTlsErrorDetail(rawDetail, bundle, stateDir);
     throw new Error(`OpenShell gateway certificate generation failed: ${detail}`);
   }
   if (!dockerDriverGatewayLocalTlsBundleIsComplete(stateDir)) {
+    const detail = sanitizeDockerDriverGatewayLocalTlsErrorDetail(
+      `incomplete mTLS bundle in ${bundle.localTlsDir}`,
+      bundle,
+      stateDir,
+    );
     throw new Error(
-      `OpenShell gateway certificate generation did not create a complete, valid mTLS bundle in ${bundle.localTlsDir}`,
+      `OpenShell gateway certificate generation did not create a complete, valid mTLS bundle: ${detail}`,
     );
   }
   normalizeDockerDriverGatewayLocalTlsBundlePermissions(bundle);
