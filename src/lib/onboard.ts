@@ -552,6 +552,8 @@ const openshellInstallFlow: typeof import("./onboard/openshell-install") =
   require("./onboard/openshell-install");
 const openshellPinFlow: typeof import("./onboard/openshell-pin") =
   require("./onboard/openshell-pin");
+const openshellFeatureGate: typeof import("./onboard/openshell-feature-gate") =
+  require("./onboard/openshell-feature-gate");
 const sandboxCreateFailureDiagnostics: typeof import("./onboard/sandbox-create-failure") =
   require("./onboard/sandbox-create-failure");
 
@@ -615,11 +617,6 @@ const USE_COLOR = !process.env.NO_COLOR && !!process.stdout.isTTY;
 const DIM = USE_COLOR ? "\x1b[2m" : "";
 const RESET = USE_COLOR ? "\x1b[0m" : "";
 let OPENSHELL_BIN: string | null = null;
-const REQUIRED_OPENSHELL_MESSAGING_FEATURES = [
-  "request-body-credential-rewrite",
-  "websocket-credential-rewrite",
-  "allow_all_known_mcp_methods",
-] as const;
 const GATEWAY_NAME = gatewayBinding.resolveGatewayName(GATEWAY_PORT);
 const {
   clearDockerDriverGatewayRuntimeFiles,
@@ -1124,46 +1121,6 @@ function installOpenshell(): OpenShellInstallResult {
   });
 }
 
-function hasRequiredOpenshellMessagingFeatures(): boolean {
-  const openshellBin = resolveOpenshell();
-  if (!openshellBin) return false;
-  const requiredMarkers = REQUIRED_OPENSHELL_MESSAGING_FEATURES.map((marker) =>
-    Buffer.from(marker),
-  );
-
-  const candidates = [
-    openshellBin,
-    path.join(path.dirname(openshellBin), "openshell-gateway"),
-    path.join(path.dirname(openshellBin), "openshell-sandbox"),
-    path.join(path.dirname(openshellBin), "openshell-driver-vm"),
-    resolveOpenShellGatewayBinary(),
-    resolveOpenShellSandboxBinary(),
-  ].filter((candidate): candidate is string => typeof candidate === "string" && candidate.length > 0);
-
-  const seen = new Set<string>();
-  const foundMarkers = new Set<string>();
-  for (const candidate of candidates) {
-    if (seen.has(candidate)) continue;
-    seen.add(candidate);
-    let content: Buffer;
-    try {
-      if (!fs.statSync(candidate).isFile()) continue;
-      content = fs.readFileSync(candidate);
-    } catch {
-      continue;
-    }
-    for (let index = 0; index < requiredMarkers.length; index += 1) {
-      if (content.includes(requiredMarkers[index])) {
-        foundMarkers.add(REQUIRED_OPENSHELL_MESSAGING_FEATURES[index]);
-      }
-    }
-    if (REQUIRED_OPENSHELL_MESSAGING_FEATURES.every((marker) => foundMarkers.has(marker))) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function areRequiredDockerDriverBinariesPresent(
   platform: NodeJS.Platform = process.platform,
   binaries: DockerDriverBinaryOverrides = {},
@@ -1199,7 +1156,12 @@ function getOpenShellInstallDeps(): OpenShellInstallDeps {
     shouldUseOpenshellDevChannel,
     isOpenshellDevVersion,
     versionGte,
-    hasRequiredOpenshellMessagingFeatures,
+    hasRequiredOpenshellMessagingFeatures: () =>
+      openshellFeatureGate.hasRequiredOpenshellMessagingFeatures({
+        openshellBin: resolveOpenshell(),
+        gatewayBin: resolveOpenShellGatewayBinary(),
+        sandboxBin: resolveOpenShellSandboxBinary(),
+      }),
     shouldAllowOpenshellAboveBlueprintMax,
     cliDisplayName,
     log: console.log,
