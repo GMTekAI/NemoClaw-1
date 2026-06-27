@@ -14,8 +14,9 @@ import {
 } from "./docker-driver-gateway-local-tls";
 
 const TEST_CERT_VALID_AT = new Date("2026-06-27T00:00:00.000Z");
-const TEST_CERT_NOT_YET_VALID_AT = new Date("2026-06-26T20:43:46.000Z");
-const TEST_CERT_EXPIRED_AT = new Date("2036-06-23T20:43:48.000Z");
+const TEST_CERT_SMALL_SKEW_NOT_YET_VALID_AT = new Date("2026-06-26T20:43:46.000Z");
+const TEST_CERT_NOT_YET_VALID_AT = new Date("2026-06-26T20:38:46.000Z");
+const TEST_CERT_EXPIRED_AT = new Date("2036-06-23T20:49:48.000Z");
 
 const TEST_CERT_PEM = `-----BEGIN CERTIFICATE-----
 MIIDSDCCAjCgAwIBAgIUBpjeCY46iq7RCJIJJRARHcI2jUkwDQYJKoZIhvcNAQEL
@@ -330,6 +331,29 @@ describe("docker-driver-gateway-local-tls", () => {
       });
 
       expect(certgenCalls).toBe(1);
+      expect(dockerDriverGatewayLocalTlsBundleIsComplete(stateDir)).toBe(true);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("tolerates small certificate clock skew before reuse", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-tls-"));
+    writeBundle(stateDir, TEST_CERT_PEM, TEST_KEY_PEM);
+    let certgenCalls = 0;
+    useTestCertificateClock(TEST_CERT_SMALL_SKEW_NOT_YET_VALID_AT);
+    try {
+      ensureDockerDriverGatewayLocalTlsBundle({
+        env: { PATH: "/usr/bin" },
+        gatewayBin: "/opt/openshell/openshell-gateway",
+        stateDir,
+        spawnSyncImpl: (() => {
+          certgenCalls += 1;
+          return { status: 0, stdout: "", stderr: "" };
+        }) as never,
+      });
+
+      expect(certgenCalls).toBe(0);
       expect(dockerDriverGatewayLocalTlsBundleIsComplete(stateDir)).toBe(true);
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });

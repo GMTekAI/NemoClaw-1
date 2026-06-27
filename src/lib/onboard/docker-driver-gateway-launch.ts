@@ -11,8 +11,8 @@ import {
   prepareDockerDriverGatewayConfigEnv,
 } from "./docker-driver-gateway-config";
 import {
+  assertDockerDriverGatewayAuthConfigSafe,
   assertDockerDriverGatewayBindAddressSafe,
-  assertDockerDriverGatewayRuntimeConfigSafe,
 } from "./docker-driver-gateway-env";
 import {
   buildDockerDriverGatewayLocalTlsEnv,
@@ -199,8 +199,15 @@ function safeDockerName(value: string | undefined, fallback: string): string {
 function safeDockerImage(value: string | undefined, fallback: string): string {
   const candidate = String(value || "").trim();
   if (!candidate) return fallback;
-  if (/^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,255}$/.test(candidate)) return candidate;
-  throw new Error("Invalid Docker image override.");
+  if (
+    /^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,255}$/.test(candidate) &&
+    /@sha256:[A-Fa-f0-9]{64}$/.test(candidate)
+  ) {
+    return candidate;
+  }
+  throw new Error(
+    "Invalid Docker image override; NEMOCLAW_OPENSHELL_GATEWAY_COMPAT_IMAGE must include an immutable @sha256:<64-hex> digest.",
+  );
 }
 
 function safeDockerHost(value: string | undefined): string | undefined {
@@ -256,7 +263,7 @@ export function buildDockerDriverGatewayLaunch(
     options.stateDir,
     options.sandboxBin || gatewayEnv.OPENSHELL_DOCKER_SUPERVISOR_BIN,
   );
-  assertDockerDriverGatewayRuntimeConfigSafe(gatewayEnv);
+  assertDockerDriverGatewayAuthConfigSafe(gatewayEnv);
   const baseEnv = options.env ?? process.env;
   const compat = shouldUseContainerizedGateway(options);
   if (!compat.useContainer) {

@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   expectEd25519BundleSignsAndVerifies,
@@ -138,6 +138,32 @@ describe("docker-driver-gateway JWT bundle", () => {
       expect(toml).toContain("allow_unauthenticated_users = false");
       expectEd25519BundleSignsAndVerifies(jwtBundlePaths(stateDir));
     } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("surfaces unexpected JWT bundle read failures instead of silently regenerating", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-config-"));
+    try {
+      writeGatewayConfig(stateDir);
+      const paths = jwtBundlePaths(stateDir);
+      const originalReadFileSync = fs.readFileSync.bind(fs);
+      const denied = new Error(
+        "permission denied while reading signing key",
+      ) as NodeJS.ErrnoException;
+      denied.code = "EACCES";
+      const readSpy = vi.spyOn(fs, "readFileSync").mockImplementation(((
+        filePath: fs.PathOrFileDescriptor,
+        options?: Parameters<typeof fs.readFileSync>[1],
+      ) => {
+        if (filePath === paths.signingKeyPath) throw denied;
+        return originalReadFileSync(filePath, options as never);
+      }) as typeof fs.readFileSync);
+
+      expect(() => writeGatewayConfig(stateDir)).toThrow(/permission denied/);
+      readSpy.mockRestore();
+    } finally {
+      vi.restoreAllMocks();
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });

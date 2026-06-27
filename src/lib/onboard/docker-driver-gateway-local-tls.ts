@@ -6,10 +6,12 @@ import { createPrivateKey, createPublicKey, type KeyObject, X509Certificate } fr
 import fs from "node:fs";
 import path from "node:path";
 
+// See docs/security/openshell-0.0.67-gateway-auth-review.md for the source-of-truth review.
 export const DOCKER_DRIVER_GATEWAY_LOCAL_TLS_DIR_NAME = "tls";
 
 const REQUIRED_SERVER_DNS_SANS = ["host.openshell.internal", "localhost"];
 const REQUIRED_SERVER_IP_SANS = ["127.0.0.1"];
+const CERTIFICATE_VALIDITY_CLOCK_SKEW_MS = 5 * 60 * 1000;
 
 export type DockerDriverGatewayLocalTlsBundle = {
   localTlsDir: string;
@@ -127,7 +129,10 @@ function certificateIsCurrentlyValid(certificate: X509Certificate, nowMs: number
   const validFromMs = Date.parse(certificate.validFrom);
   const validToMs = Date.parse(certificate.validTo);
   if (Number.isNaN(validFromMs) || Number.isNaN(validToMs)) return false;
-  return validFromMs <= nowMs && nowMs <= validToMs;
+  return (
+    validFromMs - CERTIFICATE_VALIDITY_CLOCK_SKEW_MS <= nowMs &&
+    nowMs <= validToMs + CERTIFICATE_VALIDITY_CLOCK_SKEW_MS
+  );
 }
 
 function certificateMatchesPrivateKey(

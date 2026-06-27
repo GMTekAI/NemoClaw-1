@@ -104,9 +104,7 @@ function assertTomlBoolean(values: Map<string, boolean>, key: string, expected: 
   );
 }
 
-export function assertDockerDriverGatewayRuntimeConfigSafe(
-  gatewayEnv: Record<string, string>,
-): void {
+export function assertDockerDriverGatewayAuthConfigSafe(gatewayEnv: Record<string, string>): void {
   assertDockerDriverGatewayBindAddressSafe(gatewayEnv);
   const configPath = gatewayEnv.OPENSHELL_GATEWAY_CONFIG?.trim();
   if (!configPath) {
@@ -229,7 +227,7 @@ export function startPackageManagedDockerDriverGatewayWithEnvOverride({
   gatewayEnv,
   ...options
 }: PackageManagedDockerDriverGatewayWithEnvOverrideOptions): Promise<boolean> {
-  assertDockerDriverGatewayRuntimeConfigSafe(gatewayEnv);
+  assertDockerDriverGatewayAuthConfigSafe(gatewayEnv);
   return startPackageManagedDockerDriverGateway({
     ...options,
     prepareOpenShellGatewayUserServiceEnv: () =>

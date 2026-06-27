@@ -17,6 +17,10 @@ import {
   shouldUseContainerizedGateway,
 } from "../../../dist/lib/onboard/docker-driver-gateway-launch";
 
+const PINNED_COMPAT_IMAGE_OVERRIDE = `registry.example/nemoclaw/gateway-compat:0.0.67@sha256:${"a".repeat(
+  64,
+)}`;
+
 function withTempBinaries<T>(
   fn: (paths: { dir: string; gatewayBin: string; sandboxBin: string }) => T,
 ): T {
@@ -185,6 +189,43 @@ describe("docker-driver-gateway-launch", () => {
       expect(launch.mode).toBe("container");
       expect(launch.env.OPENSHELL_DISABLE_GATEWAY_AUTH).toBeUndefined();
       expect(launch.args).not.toContain("OPENSHELL_DISABLE_GATEWAY_AUTH");
+    });
+  });
+
+  it("requires digest-pinned compatibility gateway image overrides", () => {
+    withTempBinaries(({ dir, gatewayBin, sandboxBin }) => {
+      const stateDir = path.join(dir, "state");
+      fs.mkdirSync(stateDir);
+      expect(() =>
+        buildDockerDriverGatewayLaunch({
+          gatewayBin,
+          sandboxBin,
+          stateDir,
+          platform: "linux",
+          env: {
+            NEMOCLAW_OPENSHELL_GATEWAY_CONTAINER_PATCH: "1",
+            NEMOCLAW_OPENSHELL_GATEWAY_COMPAT_IMAGE: "ubuntu:24.04",
+          },
+          gatewayEnv: {
+            OPENSHELL_DRIVERS: "docker",
+          },
+        }),
+      ).toThrow(/must include an immutable @sha256/);
+
+      const launch = buildDockerDriverGatewayLaunch({
+        gatewayBin,
+        sandboxBin,
+        stateDir,
+        platform: "linux",
+        env: {
+          NEMOCLAW_OPENSHELL_GATEWAY_CONTAINER_PATCH: "1",
+          NEMOCLAW_OPENSHELL_GATEWAY_COMPAT_IMAGE: PINNED_COMPAT_IMAGE_OVERRIDE,
+        },
+        gatewayEnv: {
+          OPENSHELL_DRIVERS: "docker",
+        },
+      });
+      expect(launch.args).toContain(PINNED_COMPAT_IMAGE_OVERRIDE);
     });
   });
 

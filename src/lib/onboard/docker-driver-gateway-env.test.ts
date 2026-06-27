@@ -8,8 +8,8 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  assertDockerDriverGatewayAuthConfigSafe,
   assertDockerDriverGatewayBindAddressSafe,
-  assertDockerDriverGatewayRuntimeConfigSafe,
   buildDockerDriverGatewayEnv,
   buildDockerGatewayDebEnvFile,
   startPackageManagedDockerDriverGatewayWithEnvOverride,
@@ -101,7 +101,7 @@ describe("buildDockerDriverGatewayEnv", () => {
       const configPath = writeSafeGatewayAuthConfig(stateDir);
 
       expect(() =>
-        assertDockerDriverGatewayRuntimeConfigSafe({
+        assertDockerDriverGatewayAuthConfigSafe({
           OPENSHELL_BIND_ADDRESS: "127.0.0.1",
           OPENSHELL_GATEWAY_CONFIG: configPath,
         }),
@@ -114,7 +114,7 @@ describe("buildDockerDriverGatewayEnv", () => {
           .replace("allow_unauthenticated_users = false", "allow_unauthenticated_users = true"),
       );
       expect(() =>
-        assertDockerDriverGatewayRuntimeConfigSafe({
+        assertDockerDriverGatewayAuthConfigSafe({
           OPENSHELL_BIND_ADDRESS: "127.0.0.1",
           OPENSHELL_GATEWAY_CONFIG: configPath,
         }),

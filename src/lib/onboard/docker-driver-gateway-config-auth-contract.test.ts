@@ -150,6 +150,32 @@ describe("docker-driver-gateway auth contract", () => {
     }
   });
 
+  it("emits the complete OpenShell 0.0.67 gateway auth TOML schema", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-config-"));
+    try {
+      const env = writeGatewayConfig(stateDir);
+      const toml = fs.readFileSync(env.OPENSHELL_GATEWAY_CONFIG, "utf-8");
+
+      expect(toml).toContain("[openshell.gateway.tls]");
+      expect(toml).toContain("require_client_auth = true");
+      expect(toml).toContain("[openshell.gateway.mtls_auth]");
+      expect(toml).toContain("enabled = true");
+      expect(toml).toContain("[openshell.gateway.gateway_jwt]");
+      expect(toml).toContain("signing_key_path = ");
+      expect(toml).toContain("public_key_path = ");
+      expect(toml).toContain("kid_path = ");
+      expect(toml).toContain("gateway_id = ");
+      expect(toml).toContain(`ttl_secs = ${DOCKER_DRIVER_GATEWAY_JWT_TTL_SECS}`);
+      expect(toml).toContain("[openshell.gateway.auth]");
+      expect(toml).toContain("allow_unauthenticated_users = false");
+      expect(toml).toContain("guest_tls_ca = ");
+      expect(toml).toContain("guest_tls_cert = ");
+      expect(toml).toContain("guest_tls_key = ");
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a sandbox JWT minted for a different gateway config", () => {
     const stateDirA = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-config-a-"));
     const stateDirB = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-config-b-"));

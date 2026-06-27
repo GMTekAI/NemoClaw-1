@@ -12,6 +12,7 @@ import {
 import fs from "node:fs";
 import path from "node:path";
 
+// See docs/security/openshell-0.0.67-gateway-auth-review.md for the source-of-truth review.
 export const DOCKER_DRIVER_GATEWAY_CONFIG_NAME = "openshell-gateway.toml";
 export const DOCKER_DRIVER_GATEWAY_JWT_TTL_SECS = 3600;
 const GATEWAY_JWT_DIR_NAME = "jwt";
@@ -94,9 +95,19 @@ function dockerDriverGatewayJwtBundleIsValid(bundle: DockerDriverGatewayJwtBundl
     const payload = Buffer.from("nemoclaw-openshell-gateway-jwt-bundle-check", "utf-8");
     const signature = sign(null, payload, privateKey);
     return verify(null, payload, publicKey, signature);
-  } catch {
+  } catch (error) {
+    if (!isExpectedJwtBundleValidationError(error)) throw error;
     return false;
   }
+}
+
+function isExpectedJwtBundleValidationError(error: unknown): boolean {
+  if (error && typeof error === "object" && "code" in error) {
+    const code = String((error as NodeJS.ErrnoException).code);
+    if (code === "ENOENT" || code.startsWith("ERR_OSSL_")) return true;
+  }
+  if (!(error instanceof Error)) return false;
+  return /PEM|ASN1|DECODER|unsupported/i.test(error.message);
 }
 
 function cleanupStaleDockerDriverGatewayJwtTempDirs(stateDir: string): void {
