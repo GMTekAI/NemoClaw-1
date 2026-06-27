@@ -769,7 +769,7 @@ function providerExists(providerName: string): boolean {
   return result.status === 0;
 }
 
-function buildProviderArgs(
+export function buildMcpBridgeProviderArgs(
   action: "create" | "update",
   providerName: string,
   env: readonly ParsedEnvReference[],
@@ -782,7 +782,7 @@ function buildProviderArgs(
   for (const entry of env) {
     const value = envValues[entry.name];
     if (value !== undefined && value !== "") {
-      args.push("--credential", `${entry.name}=${value}`);
+      args.push("--credential", entry.name);
     }
   }
   return args;
@@ -805,7 +805,7 @@ function upsertMcpProvider(
   }
   const action = exists ? "update" : "create";
   const result = runOpenshellProviderCommand(
-    buildProviderArgs(action, providerName, env, envValues),
+    buildMcpBridgeProviderArgs(action, providerName, env, envValues),
     {
       ignoreError: true,
       env: envValues,

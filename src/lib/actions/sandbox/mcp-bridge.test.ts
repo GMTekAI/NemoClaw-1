@@ -13,6 +13,7 @@ import {
   buildHermesMcpRegisterCommand,
   buildMcpBridgePolicyName,
   buildMcpBridgePolicyYaml,
+  buildMcpBridgeProviderArgs,
   buildMcpBridgeProviderName,
   buildOpenClawMcporterRegisterCommand,
   dispatchMcpBridgeCommand,
@@ -102,6 +103,28 @@ describe("MCP CLI parsing", () => {
     );
     expect(output).toContain("provider failed for --credential");
     expect(output).not.toContain("inline-secret-value");
+  });
+
+  it("passes MCP provider credentials by environment name, not argv value", () => {
+    const args = buildMcpBridgeProviderArgs(
+      "create",
+      "alpha-mcp-github",
+      [{ name: "TOKEN", value: "inline-secret-value" }],
+      { TOKEN: "inline-secret-value" },
+    );
+
+    expect(args).toEqual([
+      "provider",
+      "create",
+      "--name",
+      "alpha-mcp-github",
+      "--type",
+      "generic",
+      "--credential",
+      "TOKEN",
+    ]);
+    expect(args.join(" ")).not.toContain("inline-secret-value");
+    expect(args.join(" ")).not.toContain("TOKEN=inline-secret-value");
   });
 
   it("rejects surplus positional arguments before sandbox side effects", async () => {
