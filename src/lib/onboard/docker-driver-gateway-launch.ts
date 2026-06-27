@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -11,8 +12,13 @@ const DEFAULT_COMPAT_IMAGE = "ubuntu:24.04";
 const DEFAULT_COMPAT_CONTAINER_NAME = "nemoclaw-openshell-gateway";
 const GATEWAY_MOUNT_PATH = "/opt/nemoclaw/openshell-gateway";
 const COMPAT_GATEWAY_CONFIG_NAME = "openshell-gateway.toml";
+const GATEWAY_JWT_DIR_NAME = "jwt";
+const GATEWAY_JWT_SIGNING_KEY_NAME = "signing.pem";
+const GATEWAY_JWT_PUBLIC_KEY_NAME = "public.pem";
+const GATEWAY_JWT_KID_NAME = "kid";
 const DEFAULT_COMPAT_BIND_ADDRESS = "0.0.0.0";
 const LOOPBACK_BIND_ADDRESS = "127.0.0.1";
+const DEFAULT_GATEWAY_ID = "nemoclaw";
 
 export type DockerDriverGatewayLaunch = {
   command: string;
@@ -72,11 +78,20 @@ type BuildGatewayLaunchOptions = {
   env?: NodeJS.ProcessEnv;
   hostGlibcVersion?: string | null;
   requiredGlibcVersions?: string[];
+  gatewayName?: string;
   // Default compatibility container name when NEMOCLAW_OPENSHELL_GATEWAY_COMPAT_CONTAINER_NAME
   // is unset. Callers pass a per-gateway-port name so a second sandbox's compat
   // container (and its pre-launch `docker rm`) cannot tear down the first
   // sandbox's gateway container (#4422).
   compatContainerName?: string;
+};
+
+export type DockerDriverGatewayJwtConfig = {
+  signingKeyPath: string;
+  publicKeyPath: string;
+  kidPath: string;
+  gatewayId: string;
+  ttlSecs: number;
 };
 
 export function compareDottedVersions(a: string, b: string): number {
@@ -178,11 +193,89 @@ function tomlString(value: string): string {
   return JSON.stringify(value);
 }
 
+function hasCompleteGatewayJwtMaterial(jwtConfig: DockerDriverGatewayJwtConfig): boolean {
+  return [jwtConfig.signingKeyPath, jwtConfig.publicKeyPath, jwtConfig.kidPath].every(
+    (filePath) => {
+      try {
+        return fs.statSync(filePath).isFile() && fs.statSync(filePath).size > 0;
+      } catch {
+        return false;
+      }
+    },
+  );
+}
+
+function chmodIfPresent(filePath: string, mode: number): void {
+  try {
+    fs.chmodSync(filePath, mode);
+  } catch {
+    /* best effort; the next read/write will surface actionable errors */
+  }
+}
+
+export function getDockerDriverGatewayJwtConfig(
+  stateDir: string,
+  gatewayName = DEFAULT_GATEWAY_ID,
+): DockerDriverGatewayJwtConfig {
+  const jwtDir = path.join(stateDir, GATEWAY_JWT_DIR_NAME);
+  return {
+    signingKeyPath: path.join(jwtDir, GATEWAY_JWT_SIGNING_KEY_NAME),
+    publicKeyPath: path.join(jwtDir, GATEWAY_JWT_PUBLIC_KEY_NAME),
+    kidPath: path.join(jwtDir, GATEWAY_JWT_KID_NAME),
+    gatewayId: gatewayName || DEFAULT_GATEWAY_ID,
+    ttlSecs: 0,
+  };
+}
+
+export function ensureDockerDriverGatewayJwtMaterial(
+  stateDir: string,
+  gatewayName = DEFAULT_GATEWAY_ID,
+): DockerDriverGatewayJwtConfig {
+  const jwtConfig = getDockerDriverGatewayJwtConfig(stateDir, gatewayName);
+  const jwtDir = path.dirname(jwtConfig.signingKeyPath);
+  fs.mkdirSync(jwtDir, { recursive: true, mode: 0o700 });
+  fs.chmodSync(jwtDir, 0o700);
+
+  if (hasCompleteGatewayJwtMaterial(jwtConfig)) {
+    chmodIfPresent(jwtConfig.signingKeyPath, 0o600);
+    chmodIfPresent(jwtConfig.publicKeyPath, 0o600);
+    chmodIfPresent(jwtConfig.kidPath, 0o600);
+    return jwtConfig;
+  }
+
+  for (const filePath of [jwtConfig.signingKeyPath, jwtConfig.publicKeyPath, jwtConfig.kidPath]) {
+    try {
+      fs.rmSync(filePath, { force: true });
+    } catch {
+      /* best effort before regenerating the complete bundle */
+    }
+  }
+
+  const { privateKey, publicKey } = crypto.generateKeyPairSync("ed25519");
+  fs.writeFileSync(jwtConfig.signingKeyPath, privateKey.export({ format: "pem", type: "pkcs8" }), {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
+  fs.writeFileSync(jwtConfig.publicKeyPath, publicKey.export({ format: "pem", type: "spki" }), {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
+  fs.writeFileSync(jwtConfig.kidPath, `${crypto.randomBytes(16).toString("hex")}\n`, {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
+  fs.chmodSync(jwtConfig.signingKeyPath, 0o600);
+  fs.chmodSync(jwtConfig.publicKeyPath, 0o600);
+  fs.chmodSync(jwtConfig.kidPath, 0o600);
+  return jwtConfig;
+}
+
 export function buildDockerDriverGatewayConfigToml(
   gatewayEnv: Record<string, string>,
-  sandboxBin: string,
+  sandboxBin: string | null | undefined,
+  gatewayJwt: DockerDriverGatewayJwtConfig,
 ): string {
-  const dockerEntries: [string, string | undefined][] = [
+  const dockerEntries: [string, string | null | undefined][] = [
     ["grpc_endpoint", gatewayEnv.OPENSHELL_GRPC_ENDPOINT],
     ["network_name", gatewayEnv.OPENSHELL_DOCKER_NETWORK_NAME],
     ["supervisor_image", gatewayEnv.OPENSHELL_DOCKER_SUPERVISOR_IMAGE],
@@ -202,6 +295,13 @@ export function buildDockerDriverGatewayConfigToml(
     "[openshell.gateway]",
     'compute_drivers = ["docker"]',
     "",
+    "[openshell.gateway.gateway_jwt]",
+    `signing_key_path = ${tomlString(gatewayJwt.signingKeyPath)}`,
+    `public_key_path = ${tomlString(gatewayJwt.publicKeyPath)}`,
+    `kid_path = ${tomlString(gatewayJwt.kidPath)}`,
+    `gateway_id = ${tomlString(gatewayJwt.gatewayId)}`,
+    `ttl_secs = ${gatewayJwt.ttlSecs}`,
+    "",
     "[openshell.drivers.docker]",
     dockerConfig,
     "",
@@ -211,14 +311,21 @@ export function buildDockerDriverGatewayConfigToml(
 function writeDockerDriverGatewayConfig(
   stateDir: string,
   gatewayEnv: Record<string, string>,
-  sandboxBin: string,
+  sandboxBin: string | null | undefined,
+  gatewayName = DEFAULT_GATEWAY_ID,
 ): string {
   const configPath = path.join(stateDir, COMPAT_GATEWAY_CONFIG_NAME);
   fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(configPath, buildDockerDriverGatewayConfigToml(gatewayEnv, sandboxBin), {
-    encoding: "utf-8",
-    mode: 0o600,
-  });
+  fs.chmodSync(stateDir, 0o700);
+  const gatewayJwt = ensureDockerDriverGatewayJwtMaterial(stateDir, gatewayName);
+  fs.writeFileSync(
+    configPath,
+    buildDockerDriverGatewayConfigToml(gatewayEnv, sandboxBin, gatewayJwt),
+    {
+      encoding: "utf-8",
+      mode: 0o600,
+    },
+  );
   fs.chmodSync(configPath, 0o600);
   return configPath;
 }
@@ -266,8 +373,24 @@ export function buildDockerDriverGatewayLaunch(
   }
   const baseEnv = options.env ?? process.env;
   const compat = shouldUseContainerizedGateway(options);
+  if (compat.useContainer) {
+    gatewayEnv.OPENSHELL_BIND_ADDRESS = compatGatewayBindAddress(baseEnv);
+  }
+  const sandboxBin = options.sandboxBin || gatewayEnv.OPENSHELL_DOCKER_SUPERVISOR_BIN;
+  if (compat.useContainer && !sandboxBin) {
+    throw new Error(
+      "OpenShell gateway container compatibility mode requires openshell-sandbox. " +
+        "Re-run the NemoClaw installer or set NEMOCLAW_OPENSHELL_SANDBOX_BIN.",
+    );
+  }
+  const env = { ...baseEnv, ...gatewayEnv };
+  env.OPENSHELL_GATEWAY_CONFIG = writeDockerDriverGatewayConfig(
+    options.stateDir,
+    gatewayEnv,
+    sandboxBin,
+    options.gatewayName,
+  );
   if (!compat.useContainer) {
-    const env = { ...baseEnv, ...gatewayEnv };
     return {
       command: options.gatewayBin,
       args: [],
@@ -276,18 +399,6 @@ export function buildDockerDriverGatewayLaunch(
       processGatewayBin: options.gatewayBin,
     };
   }
-
-  gatewayEnv.OPENSHELL_BIND_ADDRESS = compatGatewayBindAddress(baseEnv);
-  const env = { ...baseEnv, ...gatewayEnv };
-  const sandboxBin = options.sandboxBin || gatewayEnv.OPENSHELL_DOCKER_SUPERVISOR_BIN;
-  if (!sandboxBin) {
-    throw new Error(
-      "OpenShell gateway container compatibility mode requires openshell-sandbox. " +
-        "Re-run the NemoClaw installer or set NEMOCLAW_OPENSHELL_SANDBOX_BIN.",
-    );
-  }
-  const configPath = writeDockerDriverGatewayConfig(options.stateDir, gatewayEnv, sandboxBin);
-  env.OPENSHELL_GATEWAY_CONFIG = configPath;
 
   const image = safeDockerImage(env.NEMOCLAW_OPENSHELL_GATEWAY_COMPAT_IMAGE, DEFAULT_COMPAT_IMAGE);
   // The per-port compatContainerName wins so a process-wide
@@ -350,20 +461,16 @@ export function buildDockerDriverGatewayRuntimeIdentity(
   options: BuildGatewayLaunchOptions,
 ): DockerDriverGatewayRuntimeIdentity {
   const launch = buildDockerDriverGatewayLaunch(options);
-  const desiredEnv =
-    launch.mode === "container"
-      ? {
-          ...options.gatewayEnv,
-          ...Object.fromEntries(
-            Object.entries(launch.env).filter(
-              ([key, val]) => key in options.gatewayEnv && typeof val === "string",
-            ) as [string, string][],
-          ),
-          ...(typeof launch.env.OPENSHELL_GATEWAY_CONFIG === "string"
-            ? { OPENSHELL_GATEWAY_CONFIG: launch.env.OPENSHELL_GATEWAY_CONFIG }
-            : {}),
-        }
-      : options.gatewayEnv;
+  const desiredKeys = new Set([
+    ...Object.keys(options.gatewayEnv),
+    "OPENSHELL_DOCKER_SUPERVISOR_BIN",
+    "OPENSHELL_GATEWAY_CONFIG",
+  ]);
+  const desiredEnv = Object.fromEntries(
+    Object.entries(launch.env).filter(
+      ([key, val]) => desiredKeys.has(key) && typeof val === "string",
+    ) as [string, string][],
+  );
   return {
     launch,
     desiredEnv,

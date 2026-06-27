@@ -66,6 +66,7 @@ describe("buildDockerGatewayDebEnvFile", () => {
         "OPENSHELL_BIND_ADDRESS=127.0.0.1",
         "OPENSHELL_SERVER_PORT=8080",
         "OPENSHELL_DOCKER_SUPERVISOR_IMAGE=old",
+        "OPENSHELL_GATEWAY_CONFIG=/tmp/old.toml",
       ].join("\n"),
       {
         OPENSHELL_DRIVERS: "docker",
@@ -79,6 +80,7 @@ describe("buildDockerGatewayDebEnvFile", () => {
         OPENSHELL_SSH_GATEWAY_PORT: "8990",
         OPENSHELL_DOCKER_NETWORK_NAME: "openshell-docker",
         OPENSHELL_DOCKER_SUPERVISOR_IMAGE: "new",
+        OPENSHELL_GATEWAY_CONFIG: "/tmp/openshell-gateway.toml",
         OPENSHELL_VM_DRIVER_STATE_DIR: "/tmp/old-vm-driver",
       },
     );
@@ -87,9 +89,11 @@ describe("buildDockerGatewayDebEnvFile", () => {
     expect(next).toContain("OPENSHELL_BIND_ADDRESS=0.0.0.0\n");
     expect(next).toContain("OPENSHELL_SERVER_PORT=8990\n");
     expect(next).toContain("OPENSHELL_DOCKER_SUPERVISOR_IMAGE=new\n");
+    expect(next).toContain("OPENSHELL_GATEWAY_CONFIG=/tmp/openshell-gateway.toml\n");
     expect(next).toContain("OPENSHELL_VM_DRIVER_STATE_DIR=/tmp/old-vm-driver\n");
     expect(next).not.toContain("OPENSHELL_BIND_ADDRESS=127.0.0.1");
     expect(next).not.toContain("OPENSHELL_DOCKER_SUPERVISOR_IMAGE=old");
+    expect(next).not.toContain("OPENSHELL_GATEWAY_CONFIG=/tmp/old.toml");
   });
 
   it("removes stale VM driver env keys when writing a Docker-driver env file", () => {
@@ -193,7 +197,10 @@ describe("writeDockerGatewayDebEnvOverride", () => {
         startPackageManagedDockerDriverGatewayWithEnvOverride({
           clearDockerDriverGatewayRuntimeFiles: vi.fn(),
           exitOnFailure: false,
-          gatewayEnv: { OPENSHELL_BIND_ADDRESS: "127.0.0.1" },
+          gatewayEnv: {
+            OPENSHELL_BIND_ADDRESS: "127.0.0.1",
+            OPENSHELL_GATEWAY_CONFIG: "/tmp/openshell-gateway.toml",
+          },
           gatewayName: "nemoclaw",
           hasOpenShellGatewayUserService: () => true,
           isDockerDriverGatewayReady: async () => true,
@@ -212,6 +219,9 @@ describe("writeDockerGatewayDebEnvOverride", () => {
       ).resolves.toBe(true);
 
       expect(fs.readFileSync(envFile, "utf-8")).toContain("OPENSHELL_BIND_ADDRESS=127.0.0.1\n");
+      expect(fs.readFileSync(envFile, "utf-8")).toContain(
+        "OPENSHELL_GATEWAY_CONFIG=/tmp/openshell-gateway.toml\n",
+      );
     } finally {
       existsSpy.mockRestore();
       homedirSpy.mockRestore();

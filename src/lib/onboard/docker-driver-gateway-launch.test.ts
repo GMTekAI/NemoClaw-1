@@ -11,6 +11,7 @@ import {
   buildDockerDriverGatewayConfigToml,
   buildDockerDriverGatewayLaunch,
   buildDockerDriverGatewayRuntimeIdentity,
+  ensureDockerDriverGatewayJwtMaterial,
   parseGlibcVersionsFromBinaryText,
   resolveDriftGatewayBin,
   shouldUseContainerizedGateway,
@@ -29,6 +30,10 @@ function withTempBinaries<T>(
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+}
+
+function pemBanner(kind: "PRIVATE" | "PUBLIC"): string {
+  return ["BEGIN", kind, "KEY"].join(" ");
 }
 
 describe("docker-driver-gateway-launch", () => {
@@ -127,11 +132,63 @@ describe("docker-driver-gateway-launch", () => {
       expect(configPath).toBe(path.join(stateDir, "openshell-gateway.toml"));
       expect(configPath).toBeDefined();
       if (!configPath) throw new Error("expected generated gateway config path");
-      expect(fs.readFileSync(configPath, "utf-8")).toContain(`supervisor_bin = "${sandboxBin}"`);
+      const config = fs.readFileSync(configPath, "utf-8");
+      expect(fs.statSync(configPath).mode & 0o777).toBe(0o600);
+      expect(config).toContain("[openshell.gateway.gateway_jwt]");
+      expect(config).toContain(`signing_key_path = "${path.join(stateDir, "jwt", "signing.pem")}"`);
+      expect(config).toContain('gateway_id = "nemoclaw"');
+      expect(config).toContain("ttl_secs = 0");
+      expect(config).toContain(`supervisor_bin = "${sandboxBin}"`);
+      expect(fs.statSync(path.join(stateDir, "jwt")).mode & 0o777).toBe(0o700);
+      expect(fs.statSync(path.join(stateDir, "jwt", "signing.pem")).mode & 0o777).toBe(0o600);
+      expect(fs.readFileSync(path.join(stateDir, "jwt", "signing.pem"), "utf-8")).toContain(
+        pemBanner("PRIVATE"),
+      );
+      expect(fs.readFileSync(path.join(stateDir, "jwt", "public.pem"), "utf-8")).toContain(
+        pemBanner("PUBLIC"),
+      );
+      expect(fs.readFileSync(path.join(stateDir, "jwt", "kid"), "utf-8").trim()).toMatch(
+        /^[0-9a-f]{32}$/,
+      );
+    });
+  });
+
+  it("builds a host gateway launch with generated sandbox JWT config", () => {
+    withTempBinaries(({ dir, gatewayBin, sandboxBin }) => {
+      const stateDir = path.join(dir, "state");
+      fs.mkdirSync(stateDir);
+      const launch = buildDockerDriverGatewayLaunch({
+        gatewayBin,
+        sandboxBin,
+        stateDir,
+        platform: "linux",
+        env: {},
+        hostGlibcVersion: "2.39",
+        requiredGlibcVersions: ["2.39"],
+        gatewayName: "nemoclaw-8081",
+        gatewayEnv: {
+          OPENSHELL_DRIVERS: "docker",
+        },
+      });
+
+      expect(launch.mode).toBe("host");
+      expect(launch.env.OPENSHELL_GATEWAY_CONFIG).toBe(
+        path.join(stateDir, "openshell-gateway.toml"),
+      );
+      expect(fs.readFileSync(launch.env.OPENSHELL_GATEWAY_CONFIG!, "utf-8")).toContain(
+        'gateway_id = "nemoclaw-8081"',
+      );
     });
   });
 
   it("writes Docker driver settings in gateway TOML because OpenShell driver config is not env-backed", () => {
+    const gatewayJwt = {
+      signingKeyPath: "/tmp/jwt/signing.pem",
+      publicKeyPath: "/tmp/jwt/public.pem",
+      kidPath: "/tmp/jwt/kid",
+      gatewayId: "nemoclaw",
+      ttlSecs: 0,
+    };
     const toml = buildDockerDriverGatewayConfigToml(
       {
         OPENSHELL_GRPC_ENDPOINT: "http://127.0.0.1:8080",
@@ -139,13 +196,34 @@ describe("docker-driver-gateway-launch", () => {
         OPENSHELL_DOCKER_SUPERVISOR_IMAGE: "ghcr.io/nvidia/openshell/supervisor:0.0.44",
       },
       "/home/shadeform/.local/bin/openshell-sandbox",
+      gatewayJwt,
     );
 
     expect(toml).toContain('compute_drivers = ["docker"]');
+    expect(toml).toContain("[openshell.gateway.gateway_jwt]");
+    expect(toml).toContain('signing_key_path = "/tmp/jwt/signing.pem"');
+    expect(toml).toContain('public_key_path = "/tmp/jwt/public.pem"');
+    expect(toml).toContain('kid_path = "/tmp/jwt/kid"');
+    expect(toml).toContain('gateway_id = "nemoclaw"');
+    expect(toml).toContain("ttl_secs = 0");
     expect(toml).toContain('grpc_endpoint = "http://127.0.0.1:8080"');
     expect(toml).toContain('network_name = "openshell-docker"');
     expect(toml).toContain('supervisor_image = "ghcr.io/nvidia/openshell/supervisor:0.0.44"');
     expect(toml).toContain('supervisor_bin = "/home/shadeform/.local/bin/openshell-sandbox"');
+  });
+
+  it("preserves complete gateway JWT material across repeated config writes", () => {
+    withTempBinaries(({ dir }) => {
+      const stateDir = path.join(dir, "state");
+      const first = ensureDockerDriverGatewayJwtMaterial(stateDir, "nemoclaw");
+      const firstSigning = fs.readFileSync(first.signingKeyPath, "utf-8");
+      const firstKid = fs.readFileSync(first.kidPath, "utf-8");
+
+      const second = ensureDockerDriverGatewayJwtMaterial(stateDir, "nemoclaw");
+
+      expect(fs.readFileSync(second.signingKeyPath, "utf-8")).toBe(firstSigning);
+      expect(fs.readFileSync(second.kidPath, "utf-8")).toBe(firstKid);
+    });
   });
 
   it("allows the compatibility gateway bind address to be forced back to loopback", () => {
@@ -186,6 +264,9 @@ describe("docker-driver-gateway-launch", () => {
       });
 
       expect(identity.launch?.mode).toBe("container");
+      expect(identity.desiredEnv.OPENSHELL_GATEWAY_CONFIG).toBe(
+        path.join(stateDir, "openshell-gateway.toml"),
+      );
       // The compat gateway parent process is `/usr/bin/docker`, not the host
       // binary, so the executable check must be skipped via a null drift bin.
       expect(identity.driftGatewayBin).toBeNull();
@@ -240,10 +321,11 @@ describe("docker-driver-gateway-launch", () => {
 
       expect(launch).toMatchObject({
         command: gatewayBin,
-        args: [],
         mode: "host",
         processGatewayBin: gatewayBin,
       });
+      expect(launch.args).toEqual([]);
+      expect(launch.env.OPENSHELL_GATEWAY_CONFIG).toBe(path.join(dir, "openshell-gateway.toml"));
     });
   });
 });

@@ -1270,6 +1270,7 @@ async function refreshDockerDriverGatewayReuseState(
         gatewayEnv: baseDesiredEnv,
         stateDir: getDockerDriverGatewayStateDir(),
         sandboxBin: resolveOpenShellSandboxBinary(),
+        gatewayName: GATEWAY_NAME,
         compatContainerName: gatewayBinding.resolveGatewayCompatContainerName(GATEWAY_PORT),
       })
     : null;
@@ -2161,6 +2162,7 @@ async function startDockerDriverGateway({
         gatewayEnv,
         stateDir,
         sandboxBin: resolveOpenShellSandboxBinary(),
+        gatewayName: GATEWAY_NAME,
         compatContainerName: gatewayBinding.resolveGatewayCompatContainerName(GATEWAY_PORT),
       })
     : null;
@@ -2177,7 +2179,7 @@ async function startDockerDriverGateway({
     await dockerDriverGatewayEnv.startPackageManagedDockerDriverGatewayWithEnvOverride({
       clearDockerDriverGatewayRuntimeFiles,
       exitOnFailure,
-      gatewayEnv,
+      gatewayEnv: driftGatewayEnv,
       gatewayName: GATEWAY_NAME,
       registerDockerDriverGatewayEndpoint,
       runCaptureOpenshell,
