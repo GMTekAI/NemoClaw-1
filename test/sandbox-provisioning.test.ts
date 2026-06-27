@@ -1,4 +1,3 @@
-// @ts-nocheck
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -17,6 +16,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { hermesDockerShellPrelude } from "./helpers/hermes-dockerfile-run";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const DOCKERFILE = path.join(ROOT, "Dockerfile");
@@ -97,7 +97,7 @@ function runDockerShell(command: string, sandboxRoot: string) {
   const rewritten = command.replaceAll("/sandbox", sandboxRoot);
   const script = [
     "#!/usr/bin/env bash",
-    "set -euo pipefail; export BASE_IMAGE=${BASE_IMAGE:-nemoclaw-hermes-base-local}; export NEMOCLAW_STALE_OPENCLAW_BASE_DIGEST=sha256:60333c1982ad855d55887b4488e867eb343f3930a30aa8e0268e5397fc6f2926",
+    hermesDockerShellPrelude(),
     `call_log=${JSON.stringify(logPath)}`,
     'chown() { printf "chown %s\\n" "$*" >> "$call_log"; }',
     rewritten,
@@ -1305,18 +1305,14 @@ describe("Hermes sandbox provisioning", () => {
     }
     const openclawDir = path.join(sandboxRoot, ".openclaw");
     const staleOpenclawTarget = path.join(tmp, "stale-openclaw-target");
-    ({
-      false: () => {},
-      true: () => {
-        fs.mkdirSync(openclawDir, { recursive: true });
-        fs.writeFileSync(path.join(openclawDir, "openclaw.json"), "{}\n");
-      },
-      symlink: () => {
-        fs.mkdirSync(staleOpenclawTarget, { recursive: true });
-        fs.writeFileSync(path.join(staleOpenclawTarget, "sentinel"), "keep\n");
-        fs.symlinkSync(staleOpenclawTarget, openclawDir, "dir");
-      },
-    })[String(precreateStaleOpenclaw)]();
+    if (precreateStaleOpenclaw === true) {
+      fs.mkdirSync(openclawDir, { recursive: true });
+      fs.writeFileSync(path.join(openclawDir, "openclaw.json"), "{}\n");
+    } else if (precreateStaleOpenclaw === "symlink") {
+      fs.mkdirSync(staleOpenclawTarget, { recursive: true });
+      fs.writeFileSync(path.join(staleOpenclawTarget, "sentinel"), "keep\n");
+      fs.symlinkSync(staleOpenclawTarget, openclawDir, "dir");
+    }
     const command = dockerRunCommandBetween(dockerfile, startMarker, endMarker).replaceAll(
       "/root/.cache/pip",
       path.join(tmp, "root-cache", "pip"),

@@ -8,6 +8,10 @@ set -euo pipefail
 # validation-only test path.
 LOG_PATH="${NEMOCLAW_HERMES_STALE_OPENCLAW_IMAGE_LOG:-/tmp/nemoclaw-hermes-stale-openclaw-image.log}"
 : >"$LOG_PATH"
+# The mirrored log is intentionally limited to this verifier's command stream.
+# require_safe_image_ref runs before any Docker build and only allows local test
+# tags or immutable GHCR digest refs, so credential-bearing image URLs are not
+# accepted into the build/log path.
 exec > >(tee -a "$LOG_PATH") 2>&1
 
 RED='\033[0;31m'
@@ -37,7 +41,9 @@ require_safe_image_ref() {
       fail "Hermes base image ref contains unsafe characters: $ref"
       ;;
   esac
-  if [[ "$ref" == nemoclaw-hermes-base-local ]]; then
+  if [[ "$ref" == nemoclaw-hermes-base-local ]] \
+    || [[ "$ref" == nemoclaw-hermes-stale-openclaw-dir-base:* ]] \
+    || [[ "$ref" == nemoclaw-hermes-stale-openclaw-link-base:* ]]; then
     return 0
   fi
   if [[ "$ref" =~ ^ghcr\.io/nvidia/nemoclaw/hermes-sandbox-base@sha256:[a-f0-9]{64}$ ]]; then
@@ -57,6 +63,10 @@ require_safe_image_ref() {
 
 verify_dockerfile_base_digest_contract() {
   local dockerfile="${REPO_ROOT}/agents/hermes/Dockerfile"
+  # This is a Dockerfile contract check. Semantic cleanup proof comes from
+  # building synthetic stale directory and symlink bases from the resolved digest
+  # below; mutable GHCR tag lineage checks are intentionally rejected while this
+  # temporary cleanup exists.
   # shellcheck disable=SC2016 # literal Dockerfile ARG reference, not shell expansion
   grep -Fx 'ARG BASE_IMAGE=ghcr.io/nvidia/nemoclaw/hermes-sandbox-base@${NEMOCLAW_STALE_OPENCLAW_BASE_DIGEST}' "$dockerfile" >/dev/null \
     || fail "Hermes Dockerfile must single-source BASE_IMAGE from NEMOCLAW_STALE_OPENCLAW_BASE_DIGEST"
@@ -169,6 +179,8 @@ main() {
   require_docker
   SYMLINK_BUILD_LOG="$(mktemp -t nemoclaw-hermes-stale-openclaw-build.XXXXXX.log)"
   CLEANUP_DOCKER_IMAGES=1
+  # Keep the two build/proof paths sequential so Docker logs remain attributable
+  # and the self-hosted daemon is not competing for image layers.
   build_stale_dir_base
   verify_stale_dir_final_image
   build_stale_link_base

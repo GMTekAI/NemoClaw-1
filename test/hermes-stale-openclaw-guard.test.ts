@@ -6,12 +6,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { dockerRunCommandContaining, runDockerShell } from "./helpers/hermes-dockerfile-run";
+import {
+  dockerRunCommandContaining,
+  hermesStaleOpenclawBaseDigest,
+  runDockerShell,
+} from "./helpers/hermes-dockerfile-run";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const HERMES_DOCKERFILE = path.join(ROOT, "agents", "hermes", "Dockerfile");
 const VERIFY_SCRIPT = path.join(ROOT, "scripts", "verify-hermes-stale-openclaw-image.sh");
-const STALE_DIGEST = "sha256:60333c1982ad855d55887b4488e867eb343f3930a30aa8e0268e5397fc6f2926";
+const STALE_DIGEST = hermesStaleOpenclawBaseDigest();
 const DIFFERENT_DIGEST = `sha256:${"0".repeat(64)}`;
 const STALE_CLEANUP_SIGNATURE = 'stale_base_digest="${NEMOCLAW_STALE_OPENCLAW_BASE_DIGEST:?}"';
 
@@ -73,24 +77,54 @@ describe("Hermes stale OpenClaw guardrails", () => {
     ).replaceAll("/root/.cache/pip", path.join(tmp, "root-cache", "pip"));
     const sandboxRoot = path.join(tmp, "sandbox");
     const hermesDir = path.join(sandboxRoot, ".hermes");
+    const legacyDataDir = path.join(sandboxRoot, ".hermes-data");
     const openclawDir = path.join(sandboxRoot, ".openclaw");
     fs.mkdirSync(openclawDir, { recursive: true });
     fs.mkdirSync(hermesDir, { recursive: true });
+    fs.mkdirSync(path.join(legacyDataDir, "sessions"), { recursive: true });
     fs.writeFileSync(path.join(openclawDir, "openclaw.json"), "{}\n");
+    fs.writeFileSync(path.join(legacyDataDir, "sessions", "legacy.json"), "{}\n");
+    fs.writeFileSync(path.join(legacyDataDir, "legacy.txt"), "legacy\n");
     fs.writeFileSync(path.join(hermesDir, "config.yaml"), "model: test\n", { mode: 0o600 });
     fs.writeFileSync(path.join(hermesDir, ".env"), "TOKEN=test\n", { mode: 0o600 });
+    fs.symlinkSync(path.join(legacyDataDir, "sessions"), path.join(hermesDir, "sessions"));
+    fs.symlinkSync(path.join(legacyDataDir, "legacy.txt"), path.join(hermesDir, "legacy.txt"));
 
     try {
       const { result } = runDockerShell(cleanupCommand, sandboxRoot);
       expect(result.status, result.stderr).toBe(0);
       expect(result.stderr).toBe("");
       expect(fs.existsSync(openclawDir)).toBe(false);
+      expect(fs.existsSync(legacyDataDir)).toBe(false);
+      expect(fs.lstatSync(path.join(hermesDir, "sessions")).isDirectory()).toBe(true);
+      expect(fs.readFileSync(path.join(hermesDir, "sessions", "legacy.json"), "utf-8")).toBe(
+        "{}\n",
+      );
+      expect(fs.lstatSync(path.join(hermesDir, "legacy.txt")).isSymbolicLink()).toBe(false);
+      expect(fs.readFileSync(path.join(hermesDir, "legacy.txt"), "utf-8")).toBe("legacy\n");
       expect(fs.lstatSync(path.join(hermesDir, "gateway_state.json")).isSymbolicLink()).toBe(true);
       expect(fs.readlinkSync(path.join(hermesDir, "gateway_state.json"))).toBe(
         "runtime/gateway_state.json",
       );
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("Hermes stale OpenClaw verifier allows local verifier base refs without docker", () => {
+    const allowedRefs = [
+      "nemoclaw-hermes-base-local",
+      "nemoclaw-hermes-stale-openclaw-dir-base:test",
+      "nemoclaw-hermes-stale-openclaw-link-base:test",
+    ];
+
+    for (const ref of allowedRefs) {
+      const result = spawnSync("bash", [VERIFY_SCRIPT, "--validate-ref-only", ref], {
+        encoding: "utf-8",
+        timeout: 5000,
+      });
+      expect(result.status, `${ref}\n${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(result.stdout).toContain("Hermes base image ref is allowed");
     }
   });
 

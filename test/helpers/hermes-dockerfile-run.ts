@@ -5,6 +5,28 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
+const ROOT = path.resolve(import.meta.dirname, "..", "..");
+const HERMES_DOCKERFILE = path.join(ROOT, "agents", "hermes", "Dockerfile");
+
+export function hermesStaleOpenclawBaseDigest(): string {
+  const dockerfile = fs.readFileSync(HERMES_DOCKERFILE, "utf-8");
+  const match = dockerfile.match(
+    /^ARG NEMOCLAW_STALE_OPENCLAW_BASE_DIGEST=(sha256:[a-f0-9]{64})$/m,
+  );
+  if (!match) {
+    throw new Error("Expected pinned Hermes stale OpenClaw base digest");
+  }
+  return match[1];
+}
+
+export function hermesDockerShellPrelude(): string {
+  return [
+    "set -euo pipefail",
+    "export BASE_IMAGE=${BASE_IMAGE:-nemoclaw-hermes-base-local}",
+    `export NEMOCLAW_STALE_OPENCLAW_BASE_DIGEST=${hermesStaleOpenclawBaseDigest()}`,
+  ].join("; ");
+}
+
 export function dockerRunCommandBetween(
   dockerfile: string,
   startMarker: string,
@@ -65,7 +87,7 @@ export function runDockerShell(command: string, sandboxRoot: string) {
     "#!/usr/bin/env bash",
     // Extracted RUN snippets execute as shell, not docker builds; export mirrors the ARG value
     // so unit tests stay daemon-free while the real verifier covers --build-arg behavior.
-    "set -euo pipefail; export BASE_IMAGE=${BASE_IMAGE:-nemoclaw-hermes-base-local}; export NEMOCLAW_STALE_OPENCLAW_BASE_DIGEST=sha256:60333c1982ad855d55887b4488e867eb343f3930a30aa8e0268e5397fc6f2926",
+    hermesDockerShellPrelude(),
     `call_log=${JSON.stringify(logPath)}`,
     'chown() { printf "chown %s\\n" "$*" >> "$call_log"; }',
     rewritten,
