@@ -81,6 +81,20 @@ describe("interactive E2E expect prerequisites", () => {
     expect(testCase).not.toContain('apply_preset "slack"');
   });
 
+  it("keeps network-policy web_fetch coverage independent of Brave web_search", () => {
+    const source = readScript("./e2e/test-network-policy.sh");
+    const liveSource = readScript("./e2e-scenario/live/network-policy.test.ts");
+    const start = source.indexOf("setup_sandbox()");
+    const end = source.indexOf("test_net_01_deny_default()");
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+
+    expect(source).toContain("TC-NET-10: OpenClaw web_fetch Host Gateway");
+    expect(source.slice(start, end)).not.toContain("NEMOCLAW_WEB_SEARCH_ENABLED=1");
+    expect(liveSource).toContain("hostGatewayWebFetch");
+    expect(liveSource).not.toContain('NEMOCLAW_WEB_SEARCH_ENABLED: "1"');
+  });
+
   it("records a GPU TUI guard failure when expect is unavailable", () => {
     const source = readScript("./e2e/test-gpu-e2e.sh");
     const expectBranch = extractExpectThenBranch(
