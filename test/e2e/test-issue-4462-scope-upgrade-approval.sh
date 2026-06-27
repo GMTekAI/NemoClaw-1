@@ -761,7 +761,10 @@ fi
 exit 1
 ' 2>&1)
     rc=$?
-    printf '=== auto-pair watcher inactivity probe rc=%s ===\n%s\n' "$rc" "$output" >>"$STATE_LOG"
+    {
+      printf '=== auto-pair watcher inactivity probe rc=%s ===\n' "$rc"
+      printf '%s\n' "$output" | redact_text_for_log_or_marker "watcher-inactivity-probe"
+    } >>"$STATE_LOG"
     if [ "$rc" -eq 0 ]; then
       pass "auto-pair watcher reached its deadline before legacy scope-upgrade trigger"
       return 0
@@ -810,7 +813,10 @@ echo "__AUTO_PAIR_WATCHER__=stopped"
 tail -20 /tmp/auto-pair.log 2>/dev/null || true
 ' 2>&1)
   rc=$?
-  printf '=== auto-pair watcher forced stop rc=%s ===\n%s\n' "$rc" "$output" >>"$STATE_LOG"
+  {
+    printf '=== auto-pair watcher forced stop rc=%s ===\n' "$rc"
+    printf '%s\n' "$output" | redact_text_for_log_or_marker "watcher-forced-stop"
+  } >>"$STATE_LOG"
   if [ "$rc" -eq 0 ]; then
     pass "auto-pair watcher is inactive before legacy scope-upgrade trigger"
     return 0
@@ -922,7 +928,7 @@ grep -F "unset OPENCLAW_GATEWAY_URL OPENCLAW_GATEWAY_PORT OPENCLAW_GATEWAY_TOKEN
   && echo "APPROVE_GUARD_PRESENT"
 ' 2>&1)
 guard_rc=$?
-printf '%s\n' "$guard_probe" >>"$STATE_LOG"
+printf '%s\n' "$guard_probe" | redact_text_for_log_or_marker "guard-probe" >>"$STATE_LOG"
 if [ "$guard_rc" -ne 0 ]; then
   fail "Could not source /tmp/nemoclaw-proxy-env.sh: $(redacted_excerpt "$guard_probe" 400)"
   exit 1
@@ -949,7 +955,10 @@ set -e
 printf "__LIST_RC__=%s\n" "$rc" >&2
 exit 0
 ' 2>&1)
-printf '=== initial devices list ===\n%s\n' "$initial_list" >>"$STATE_LOG"
+{
+  printf '=== initial devices list ===\n'
+  printf '%s\n' "$initial_list" | redact_text_for_log_or_marker "initial-devices-list"
+} >>"$STATE_LOG"
 
 state="$(device_state_json 2>&1)" || {
   fail "Could not read OpenClaw device state after initial list: $(redacted_excerpt "$state" 500)"
@@ -1005,7 +1014,10 @@ printf "__URL_FOR_LIST__=%s\n" "${OPENCLAW_GATEWAY_URL-unset}" >&2
 openclaw devices list --json
 ' 2>&1)
 gateway_list_rc=$?
-printf '=== gateway devices list after initial approval rc=%s ===\n%s\n' "$gateway_list_rc" "$gateway_list" >>"$STATE_LOG"
+{
+  printf '=== gateway devices list after initial approval rc=%s ===\n' "$gateway_list_rc"
+  printf '%s\n' "$gateway_list" | redact_text_for_log_or_marker "gateway-devices-list"
+} >>"$STATE_LOG"
 if [ "$gateway_list_rc" -eq 0 ] && grep -q '^__URL_FOR_LIST__=ws://' <<<"$gateway_list"; then
   pass "openclaw devices list observes device state while OPENCLAW_GATEWAY_URL is set"
 else

@@ -3809,6 +3809,13 @@ gateway_pid_is_openclaw_gateway() {
   printf '%s' "$cmdline" | grep -qE 'openclaw([ -]gateway| gateway run|$)'
 }
 
+# Positive integer guard used by the gateway watchdog env validation. Extracted
+# so a regression test can exercise the regex against trailing-non-digit and
+# zero/garbage inputs without spinning up the whole watcher.
+gateway_watchdog_positive_int_ok() {
+  [[ "$1" =~ ^[1-9][0-9]*$ ]]
+}
+
 start_gateway_serving_watchdog() {
   (
     local interval refused_threshold armed=0 refused_streak=0 pid last_pid="" rc msg
@@ -3817,13 +3824,13 @@ start_gateway_serving_watchdog() {
     # Both knobs must be positive integers: a zero/garbage interval would
     # busy-loop the probe, and a zero threshold would kill on the first
     # refusal. Fall back to the defaults rather than trusting bad input.
-    # Use regex (=~) not glob (case [1-9]*) so trailing non-digit input
-    # like "12x" or "30abc" is rejected, not coerced.
-    if [[ ! "$interval" =~ ^[1-9][0-9]*$ ]]; then
+    # gateway_watchdog_positive_int_ok uses regex (=~), not glob, so trailing
+    # non-digit input like "12x" or "30abc" is rejected, not coerced.
+    if ! gateway_watchdog_positive_int_ok "$interval"; then
       echo "[gateway-watchdog] invalid NEMOCLAW_GATEWAY_WATCHDOG_INTERVAL_SECONDS='${interval}'; defaulting to 30" >&2
       interval=30
     fi
-    if [[ ! "$refused_threshold" =~ ^[1-9][0-9]*$ ]]; then
+    if ! gateway_watchdog_positive_int_ok "$refused_threshold"; then
       echo "[gateway-watchdog] invalid NEMOCLAW_GATEWAY_WATCHDOG_REFUSED_THRESHOLD='${refused_threshold}'; defaulting to 4" >&2
       refused_threshold=4
     fi

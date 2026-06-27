@@ -265,6 +265,50 @@ describe("Phase 7 Ollama tarball layout validator (behavioural fixtures)", () =>
     expect(result.rc).toBe(1);
     expect(result.stderr).toContain("symlink with an absolute or parent-traversal target");
   });
+
+  it("rejects a tarball that contains a FIFO entry under lib/", () => {
+    const tarball = path.join(tmpRoot, "fifo.tgz");
+    const src = path.join(tmpRoot, "tar-src");
+    mkdirSync(path.join(src, "lib", "ollama"), { recursive: true });
+    const fifoPath = path.join(src, "lib", "ollama", "queue.fifo");
+    const mkfifo = spawnSync("mkfifo", [fifoPath], { encoding: "utf-8" });
+    expect(mkfifo.status).toBe(0);
+    const tarResult = spawnSync("tar", ["-czf", tarball, "-C", src, "lib"], {
+      encoding: "utf-8",
+      timeout: 20_000,
+    });
+    expect(tarResult.status).toBe(0);
+    rmSync(src, { recursive: true, force: true });
+    const result = runLayoutValidator(tarball);
+    expect(result.rc).toBe(1);
+    expect(result.stderr).toContain(
+      "non-file/non-directory/non-symlink entries (hardlink, device, fifo, or socket)",
+    );
+  });
+
+  it("rejects a tarball that contains a hardlink to another bin/ member", () => {
+    const tarball = path.join(tmpRoot, "hardlink.tgz");
+    const src = path.join(tmpRoot, "tar-src");
+    mkdirSync(path.join(src, "bin"), { recursive: true });
+    writeFileSync(path.join(src, "bin", "ollama"), "ELF stub\n");
+    const linkResult = spawnSync(
+      "ln",
+      [path.join(src, "bin", "ollama"), path.join(src, "bin", "ollama-alias")],
+      { encoding: "utf-8" },
+    );
+    expect(linkResult.status).toBe(0);
+    const tarResult = spawnSync("tar", ["-czf", tarball, "-C", src, "bin"], {
+      encoding: "utf-8",
+      timeout: 20_000,
+    });
+    expect(tarResult.status).toBe(0);
+    rmSync(src, { recursive: true, force: true });
+    const result = runLayoutValidator(tarball);
+    expect(result.rc).toBe(1);
+    expect(result.stderr).toContain(
+      "non-file/non-directory/non-symlink entries (hardlink, device, fifo, or socket)",
+    );
+  });
 });
 
 describe("Phase 7 Ollama pinned install script wiring", () => {

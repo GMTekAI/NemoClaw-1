@@ -1463,4 +1463,14 @@ describe("E2E reusable workflow contract", () => {
     expect(String(job.with?.nvidia_api_key)).toBe("true");
     expect(job.with?.script).toBe("test/e2e/test-issue-4462-scope-upgrade-approval.sh");
   });
+
+  it("legacy gateway-pinned repro lane is wired through the reusable runner with the NVIDIA inference key", () => {
+    const job = nightlyWorkflow.jobs["cli-scope-upgrade-legacy-repro-e2e"];
+    expect(job).toBeDefined();
+    expect(String(job.with?.nvidia_api_key)).toBe("true");
+    expect(job.with?.script).toBe("test/e2e/test-issue-4462-scope-upgrade-approval.sh");
+    const envJson = String(job.with?.env_json ?? "{}");
+    const env = JSON.parse(envJson) as Record<string, string>;
+    expect(env.NEMOCLAW_CLI_SCOPE_MODE).toBe("legacy-repro");
+  });
 });

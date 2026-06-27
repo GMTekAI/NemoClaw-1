@@ -26,7 +26,9 @@ SOURCE_OF_TRUTH_REVIEW (Phase 7 / #5343 differing-providers):
   per-sandbox effective inference metadata, this reader becomes a wrapper
   around that API and the JSON-on-disk path is dropped.
 
-Exit codes: 0 on success; 2 if the registry file is unreadable or invalid.
+Exit codes: 0 on success; 2 if the registry file is unreadable or invalid;
+3 if the named sandbox is not registered (fail-closed for Phase 7's
+two-sandbox contract).
 """
 
 import json
@@ -48,7 +50,13 @@ def main() -> int:
         sys.stderr.write(f"registry-read-failed: {exc}\n")
         return 2
 
-    entry = (data.get("sandboxes") or {}).get(sandbox_name) or {}
+    entries = data.get("sandboxes") or {}
+    if sandbox_name not in entries:
+        sys.stderr.write(
+            f"registry-missing-sandbox: {sandbox_name!r} not registered in {registry_file}\n",
+        )
+        return 3
+    entry = entries.get(sandbox_name) or {}
     provider = str(entry.get("provider") or "").strip()
     model = str(entry.get("model") or "").strip()
     print(json.dumps({"provider": provider, "model": model}, sort_keys=True))
