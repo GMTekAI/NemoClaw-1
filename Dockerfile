@@ -47,6 +47,7 @@ ARG OPENCLAW_BRAVE_PLUGIN_2026_6_9_INTEGRITY=sha512-8HawXB5ylo+vkvkmDJZAE9uhOtm0
 # intentionally build an older OpenClaw base image before proving upgrade
 # behavior. Production workflows must reject
 # NEMOCLAW_E2E_FIXTURE_LEGACY_OPENCLAW=1 before docker build.
+# Post-tag retirement criteria are tracked in #5896.
 ARG NEMOCLAW_E2E_FIXTURE_LEGACY_OPENCLAW=0
 ARG OPENCLAW_2026_3_11_INTEGRITY=sha512-bxwiBmHPakwfpY5tqC9lrV5TCu5PKf0c1bHNc3nhrb+pqKcPEWV4zOjDVFLQUHr98ihgWA+3pacy4b3LQ8wduQ==
 ARG OPENCLAW_2026_3_11_TARBALL=https://registry.npmjs.org/openclaw/-/openclaw-2026.3.11.tgz
@@ -128,6 +129,9 @@ RUN chmod 755 /usr/local/lib/nemoclaw/patch-openclaw-tool-catalog.js \
 # versioned npx package specs even when the package is globally installed.
 # Installing the binary at build time and configuring ACPx to use it
 # directly keeps TC-SBX-02 off the runtime npm path.
+# Pack the already-reviewed tarball URL after verifying current registry
+# metadata. Re-resolving package@version here would introduce another mutable
+# registry selection between the reviewed identity check and installation.
 #
 # hadolint ignore=DL3059,DL4006,DL3016
 RUN set -eu; \

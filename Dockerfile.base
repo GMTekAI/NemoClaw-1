@@ -199,6 +199,7 @@ ARG OPENCLAW_2026_6_9_TARBALL=https://registry.npmjs.org/openclaw/-/openclaw-202
 # intentionally build an older OpenClaw base image before proving upgrade
 # behavior. Production workflows must reject
 # NEMOCLAW_E2E_FIXTURE_LEGACY_OPENCLAW=1 before docker build.
+# Post-tag retirement criteria are tracked in #5896.
 ARG NEMOCLAW_E2E_FIXTURE_LEGACY_OPENCLAW=0
 ARG OPENCLAW_2026_3_11_INTEGRITY=sha512-bxwiBmHPakwfpY5tqC9lrV5TCu5PKf0c1bHNc3nhrb+pqKcPEWV4zOjDVFLQUHr98ihgWA+3pacy4b3LQ8wduQ==
 ARG OPENCLAW_2026_3_11_TARBALL=https://registry.npmjs.org/openclaw/-/openclaw-2026.3.11.tgz
