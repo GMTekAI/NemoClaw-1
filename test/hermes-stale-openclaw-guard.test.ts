@@ -66,8 +66,11 @@ describe("Hermes stale OpenClaw guardrails", () => {
 
   it("Hermes stale cleanup succeeds for a non-symlink stale OpenClaw directory", () => {
     const dockerfile = fs.readFileSync(HERMES_DOCKERFILE, "utf-8");
-    const cleanupCommand = dockerRunCommandContaining(dockerfile, STALE_CLEANUP_SIGNATURE);
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-hermes-stale-success-"));
+    const cleanupCommand = dockerRunCommandContaining(
+      dockerfile,
+      STALE_CLEANUP_SIGNATURE,
+    ).replaceAll("/root/.cache/pip", path.join(tmp, "root-cache", "pip"));
     const sandboxRoot = path.join(tmp, "sandbox");
     const hermesDir = path.join(sandboxRoot, ".hermes");
     const openclawDir = path.join(sandboxRoot, ".openclaw");
