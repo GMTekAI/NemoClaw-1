@@ -163,6 +163,32 @@ describe("docker-driver-gateway JWT bundle", () => {
     }
   });
 
+  it("preserves a replacement lock when its nonce changes during stale recovery", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-config-"));
+    const lockPath = path.join(stateDir, ".jwt-generating");
+    const ownerPid = 424242;
+    const replacementOwner = `${ownerPid} replacement-nonce\n`;
+    fs.writeFileSync(lockPath, `${ownerPid} stale-nonce\n`, { mode: 0o600 });
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => {
+      fs.writeFileSync(lockPath, replacementOwner, { mode: 0o600 });
+      const error = new Error("process does not exist") as NodeJS.ErrnoException;
+      error.code = "ESRCH";
+      throw error;
+    });
+    try {
+      expect(() => writeGatewayConfig(stateDir)).toThrow(
+        /JWT bundle generation is already in progress/,
+      );
+
+      expect(killSpy).toHaveBeenCalledWith(ownerPid, 0);
+      expect(fs.readFileSync(lockPath, "utf-8")).toBe(replacementOwner);
+      expect(fs.existsSync(path.join(stateDir, "jwt"))).toBe(false);
+    } finally {
+      killSpy.mockRestore();
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("treats the gateway config file as the final atomic commitment record", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-config-"));
     try {

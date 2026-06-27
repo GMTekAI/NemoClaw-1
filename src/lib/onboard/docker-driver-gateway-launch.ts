@@ -215,6 +215,7 @@ export function resolveDriftGatewayBin(
 export function prepareAndLogDockerDriverGatewayLaunch(
   launch: DockerDriverGatewayLaunch,
   log: (message: string) => void = console.log,
+  warn: (message: string) => void = console.warn,
 ): void {
-  logContainerizedDockerDriverGatewayLaunch(launch, log);
+  logContainerizedDockerDriverGatewayLaunch(launch, log, warn);
 }

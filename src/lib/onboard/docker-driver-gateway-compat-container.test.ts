@@ -204,8 +204,9 @@ describe("docker-driver-gateway compatibility container", () => {
     });
   });
 
-  it("logs the loopback main bind, Docker bridge listener contract, and auth boundary", () => {
+  it("warns about the trust boundary on the production compatibility launch path", () => {
     const messages: string[] = [];
+    const warnings: string[] = [];
     prepareAndLogDockerDriverGatewayLaunch(
       {
         command: "docker",
@@ -219,14 +220,15 @@ describe("docker-driver-gateway compatibility container", () => {
         reason: "forced by test",
       },
       (message) => messages.push(message),
+      (message) => warnings.push(message),
     );
 
     expect(messages).toContain(
       "  Compatibility gateway bind: 127.0.0.1 main listener plus OpenShell Docker-driver bridge reachability.",
     );
-    expect(messages).toContain(
-      "  Compatibility container trust boundary: host networking plus Docker API access; enabled only by NEMOCLAW_OPENSHELL_GATEWAY_CONTAINER_PATCH=1.",
-    );
+    expect(warnings).toEqual([
+      "  SECURITY NOTICE: compatibility container uses host networking plus Docker API access; enabled only by NEMOCLAW_OPENSHELL_GATEWAY_CONTAINER_PATCH=1.",
+    ]);
     expect(messages).toContain(
       "  Gateway auth boundary: host-side OpenShell CLI uses local mTLS; sandbox callbacks use mTLS plus OpenShell gateway JWT.",
     );
