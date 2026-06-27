@@ -228,6 +228,9 @@ function resolveOpenClawSlackApiLocation() {
   if (process.env.OPENCLAW_SLACK_PACKAGE_ROOT) {
     addExternalCandidate(process.env.OPENCLAW_SLACK_PACKAGE_ROOT);
   }
+  addExternalCandidate(
+    path.join(process.env.OPENCLAW_STATE_DIR || "/sandbox/.openclaw", "extensions", "slack"),
+  );
   addCoreCandidate(process.env.OPENCLAW_PACKAGE_ROOT);
   for (const base of [process.cwd(), "/sandbox", "/usr/local/lib/node_modules", "/tmp/npm-global/lib/node_modules"]) {
     try {

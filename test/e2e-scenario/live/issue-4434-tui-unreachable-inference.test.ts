@@ -7,6 +7,7 @@ import path from "node:path";
 import { buildAvailabilityProbeEnv } from "../fixtures/availability-env.ts";
 import { trustedSandboxShellScript, validateSandboxName } from "../fixtures/clients/sandbox.ts";
 import { expect, test } from "../fixtures/e2e-test.ts";
+import { startFakeOpenAiCompatibleServer } from "../fixtures/fake-openai-compatible.ts";
 import { requireHostedInferenceConfig } from "../fixtures/hosted-inference.ts";
 import { shouldRunLiveE2EScenarios } from "../fixtures/live-project-gate.ts";
 import { ubuntuRepoDocker } from "../scenarios/matrix.ts";
@@ -14,7 +15,8 @@ import { ubuntuRepoDocker } from "../scenarios/matrix.ts";
 // Migrated from test/e2e/test-issue-4434-tui-unreachable-inference.sh.
 // This remains a privileged opt-in live repro: it onboards a real cloud
 // OpenClaw sandbox, installs temporary DOCKER-USER DROP rules for the NVIDIA
-// endpoint IPs, drives `openclaw tui` through `openshell sandbox exec --tty`,
+// endpoint IPs, proves the managed route through a test endpoint and then stops
+// that endpoint, drives `openclaw tui` through `openshell sandbox exec --tty`,
 // and requires a visible inference error, full #4434 diagnostic fields, and an
 // error status instead of the broken spinner+connected signature from #4434.
 // The legacy bash lane remains wired until Phase 11 shell retirement. Keep its
@@ -170,6 +172,7 @@ runIssue4434LiveTest(
       boundary: [
         "real cloud OpenClaw sandbox",
         "host DOCKER-USER iptables DROP rules",
+        "managed inference route through a stopped fake OpenAI-compatible endpoint",
         "openshell sandbox exec --tty",
         "openclaw tui",
       ],
@@ -256,7 +259,7 @@ runIssue4434LiveTest(
     expect(routePlain).toContain(`Provider: ${hosted.providerName}`);
     expect(routePlain).toContain(`Model: ${hosted.model}`);
 
-    const preBlockPayload = JSON.stringify({
+    const completionPayload = JSON.stringify({
       model: hosted.model,
       messages: [{ role: "user", content: "Reply with OK." }],
       max_tokens: 8,
@@ -264,7 +267,7 @@ runIssue4434LiveTest(
     const preBlockProbe = await sandbox.execShell(
       instance.sandboxName,
       trustedSandboxShellScript(
-        `command -v curl >/dev/null && curl -fsS --max-time 60 https://inference.local/v1/chat/completions -H 'Content-Type: application/json' -d ${shellSingleQuote(preBlockPayload)} >/dev/null`,
+        `command -v curl >/dev/null && curl -fsS --max-time 60 https://inference.local/v1/chat/completions -H 'Content-Type: application/json' -d ${shellSingleQuote(completionPayload)} >/dev/null`,
       ),
       {
         artifactName: "issue4434-inference-local-before-block",
@@ -312,6 +315,127 @@ runIssue4434LiveTest(
     expect(
       blockedEndpointProbe.exitCode,
       `inference-api.nvidia.com remained reachable from inside the sandbox after firewall block\n${resultText(blockedEndpointProbe)}`,
+    ).not.toBe(0);
+
+    const fake = await startFakeOpenAiCompatibleServer({
+      host: "0.0.0.0",
+      model: hosted.model,
+      publicHost: "host.openshell.internal",
+    });
+    let fakeOpen = true;
+    cleanup.add("close issue #4434 fake OpenAI-compatible endpoint", async () => {
+      if (!fakeOpen) return;
+      await artifacts.writeJson("issue4434-fake-openai-requests-cleanup.json", fake.requests());
+      await fake.close();
+      fakeOpen = false;
+    });
+    cleanup.add("restore issue #4434 hosted provider endpoint", async () => {
+      const restore = await host.command(
+        "openshell",
+        [
+          "provider",
+          "update",
+          "-g",
+          "nemoclaw",
+          hosted.providerName,
+          "--config",
+          `OPENAI_BASE_URL=${hosted.endpointUrl}`,
+        ],
+        {
+          artifactName: "cleanup-issue4434-restore-provider-endpoint",
+          env: buildAvailabilityProbeEnv(),
+          timeoutMs: 30_000,
+        },
+      );
+      if (restore.exitCode !== 0) {
+        throw new Error(`failed to restore hosted provider endpoint\n${resultText(restore)}`);
+      }
+    });
+    await artifacts.writeJson("issue4434-fake-openai-endpoint.json", { baseUrl: fake.baseUrl });
+
+    const updateProvider = await host.command(
+      "openshell",
+      [
+        "provider",
+        "update",
+        "-g",
+        "nemoclaw",
+        hosted.providerName,
+        "--config",
+        `OPENAI_BASE_URL=${fake.baseUrl}`,
+      ],
+      {
+        artifactName: "issue4434-update-provider-to-fake-endpoint",
+        env: buildAvailabilityProbeEnv(),
+        timeoutMs: 30_000,
+      },
+    );
+    expect(updateProvider.exitCode, resultText(updateProvider)).toBe(0);
+
+    const updateRoute = await host.command(
+      "openshell",
+      [
+        "inference",
+        "set",
+        "-g",
+        "nemoclaw",
+        "--no-verify",
+        "--provider",
+        hosted.providerName,
+        "--model",
+        hosted.model,
+        "--timeout",
+        "15",
+      ],
+      {
+        artifactName: "issue4434-route-to-fake-endpoint",
+        env: buildAvailabilityProbeEnv(),
+        timeoutMs: 30_000,
+      },
+    );
+    expect(updateRoute.exitCode, resultText(updateRoute)).toBe(0);
+
+    const fakeRouteProbe = await sandbox.execShell(
+      instance.sandboxName,
+      trustedSandboxShellScript(
+        `command -v curl >/dev/null && curl -fsS --max-time 30 https://inference.local/v1/chat/completions -H 'Content-Type: application/json' -d ${shellSingleQuote(completionPayload)} >/dev/null`,
+      ),
+      {
+        artifactName: "issue4434-inference-local-through-fake-endpoint",
+        env: buildAvailabilityProbeEnv(),
+        timeoutMs: 45_000,
+      },
+    );
+    expect(
+      fakeRouteProbe.exitCode,
+      `inference.local did not reach the fake provider before it stopped\n${resultText(fakeRouteProbe)}`,
+    ).toBe(0);
+    const fakeRequests = fake.requests();
+    await artifacts.writeJson("issue4434-fake-openai-requests.json", fakeRequests);
+    expect(
+      fakeRequests.some(
+        (request) => request.method === "POST" && request.path === "/v1/chat/completions",
+      ),
+      `managed inference did not send a chat completion to the fake endpoint: ${JSON.stringify(fakeRequests)}`,
+    ).toBe(true);
+
+    await fake.close();
+    fakeOpen = false;
+
+    const failedManagedRouteProbe = await sandbox.execShell(
+      instance.sandboxName,
+      trustedSandboxShellScript(
+        `command -v curl >/dev/null && curl -fsS --connect-timeout 5 --max-time 30 https://inference.local/v1/chat/completions -H 'Content-Type: application/json' -d ${shellSingleQuote(completionPayload)} >/dev/null`,
+      ),
+      {
+        artifactName: "issue4434-inference-local-after-fake-endpoint-stopped",
+        env: buildAvailabilityProbeEnv(),
+        timeoutMs: 45_000,
+      },
+    );
+    expect(
+      failedManagedRouteProbe.exitCode,
+      `inference.local remained healthy after its configured provider stopped\n${resultText(failedManagedRouteProbe)}`,
     ).not.toBe(0);
 
     const captureFile = artifacts.pathFor("openclaw-tui-capture.log");
