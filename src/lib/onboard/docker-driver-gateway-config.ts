@@ -119,28 +119,85 @@ function cleanupStaleDockerDriverGatewayJwtTempDirs(stateDir: string): void {
   }
 }
 
+function removeStaleDockerDriverGatewayJwtGenerationLock(lockPath: string): boolean {
+  let observedOwner: string;
+  try {
+    observedOwner = fs.readFileSync(lockPath, "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+    throw error;
+  }
+
+  const pidText = observedOwner.trim().split(/\s+/, 1)[0];
+  if (!/^[1-9]\d*$/.test(pidText)) return false;
+  const ownerPid = Number(pidText);
+  if (!Number.isSafeInteger(ownerPid)) return false;
+
+  try {
+    process.kill(ownerPid, 0);
+    return false;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EPERM") return false;
+    if (code !== "ESRCH") throw error;
+  }
+
+  try {
+    // A per-acquisition nonce keeps a replaced lock distinguishable even if
+    // the operating system quickly reuses the previous owner's PID.
+    if (fs.readFileSync(lockPath, "utf-8") !== observedOwner) return false;
+    fs.unlinkSync(lockPath);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+    throw error;
+  }
+}
+
 function acquireDockerDriverGatewayJwtGenerationLock(stateDir: string): () => void {
   const lockPath = path.join(stateDir, GATEWAY_JWT_GENERATING_NAME);
-  let fd: number | null = null;
-  try {
-    fd = fs.openSync(
-      lockPath,
-      fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY,
-      0o600,
-    );
-    fs.writeSync(fd, `${process.pid}\n`);
-    fs.closeSync(fd);
-    fd = null;
-    return () => fs.rmSync(lockPath, { force: true });
-  } catch (error) {
-    if (fd !== null) fs.closeSync(fd);
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-      throw new Error(
-        "OpenShell gateway JWT bundle generation is already in progress for this state directory; " +
-          "concurrent gateway starts for the same state directory are unsupported. Retry after the other start completes.",
+  let staleRecoveryAttempted = false;
+
+  while (true) {
+    let fd: number | null = null;
+    let created = false;
+    const owner = `${process.pid} ${randomBytes(8).toString("hex")}\n`;
+    try {
+      fd = fs.openSync(
+        lockPath,
+        fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY,
+        0o600,
       );
+      created = true;
+      fs.writeSync(fd, owner);
+      fs.closeSync(fd);
+      fd = null;
+      return () => {
+        try {
+          if (fs.readFileSync(lockPath, "utf-8") === owner) fs.unlinkSync(lockPath);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+      };
+    } catch (error) {
+      if (fd !== null) fs.closeSync(fd);
+      if (created) fs.rmSync(lockPath, { force: true });
+      if (
+        (error as NodeJS.ErrnoException).code === "EEXIST" &&
+        !staleRecoveryAttempted &&
+        removeStaleDockerDriverGatewayJwtGenerationLock(lockPath)
+      ) {
+        staleRecoveryAttempted = true;
+        continue;
+      }
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        throw new Error(
+          "OpenShell gateway JWT bundle generation is already in progress for this state directory; " +
+            "concurrent gateway starts for the same state directory are unsupported. Retry after the other start completes.",
+        );
+      }
+      throw error;
     }
-    throw error;
   }
 }
 

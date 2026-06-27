@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 import { describe, expect, it } from "vitest";
 import {
   evaluateE2eVitestWorkflowDispatchSelectors,
@@ -33,6 +37,25 @@ describe("OpenShell gateway auth contract workflow boundary", () => {
         selectedFreeStandingJobs: ["openshell-gateway-auth-contract-vitest"],
         registryScenarios: [],
       });
+    }
+  });
+
+  it("rejects automatic pull-request triggers for the dispatch-only workflow", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-openshell-workflow-"));
+    try {
+      const workflowPath = path.join(tmpDir, "e2e-vitest-scenarios.yaml");
+      const source = fs.readFileSync(".github/workflows/e2e-vitest-scenarios.yaml", "utf-8");
+      fs.writeFileSync(
+        workflowPath,
+        source.replace("on:\n  workflow_dispatch:", "on:\n  pull_request:\n  workflow_dispatch:"),
+        "utf-8",
+      );
+
+      expect(validateE2eVitestScenariosWorkflowBoundary(workflowPath)).toContain(
+        "workflow must not run on pull_request",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 });

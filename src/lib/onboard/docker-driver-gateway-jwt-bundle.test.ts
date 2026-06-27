@@ -138,6 +138,31 @@ describe("docker-driver-gateway JWT bundle", () => {
     }
   });
 
+  it("recovers a gateway JWT generation lock left by a crashed process", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-config-"));
+    const ownerPid = 424242;
+    const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+      expect(pid).toBe(ownerPid);
+      expect(signal).toBe(0);
+      const error = new Error("process does not exist") as NodeJS.ErrnoException;
+      error.code = "ESRCH";
+      throw error;
+    });
+    try {
+      const lockPath = path.join(stateDir, ".jwt-generating");
+      fs.writeFileSync(lockPath, `${ownerPid}\n`, { mode: 0o600 });
+
+      writeGatewayConfig(stateDir);
+
+      expect(killSpy).toHaveBeenCalledOnce();
+      expect(fs.existsSync(lockPath)).toBe(false);
+      expectEd25519BundleSignsAndVerifies(jwtBundlePaths(stateDir));
+    } finally {
+      killSpy.mockRestore();
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("treats the gateway config file as the final atomic commitment record", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-config-"));
     try {

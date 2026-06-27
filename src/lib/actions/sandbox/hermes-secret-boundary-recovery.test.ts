@@ -116,5 +116,6 @@ describe("enforceHermesSecretBoundaryOnRunningGateway", () => {
 
     expect(result).toEqual({ refused: true, reason: "inconclusive", stderr: "missing\n" });
     expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("validator missing"));
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("Re-image the sandbox"));
   });
 });
