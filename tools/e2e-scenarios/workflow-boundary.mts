@@ -57,6 +57,10 @@ const FULL_SUITE_EXCLUDED_FREE_STANDING_JOBS = new Set([
   "jetson-nvmap-gpu-vitest",
   "sandbox-rlimits-connect-vitest",
 ]);
+const PUBLIC_NVIDIA_ENDPOINT_KEY_JOBS = new Set([
+  "device-auth-health-vitest",
+  "model-router-provider-routed-inference-vitest",
+]);
 
 function asRecord(value: unknown): WorkflowRecord {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -484,6 +488,32 @@ function validateFreeStandingJobSelector(
   }
 }
 
+function validateGatewayGuardRecoveryVitestJob(errors: string[], jobs: WorkflowRecord): void {
+  const job = asRecord(jobs["gateway-guard-recovery"]);
+  if (Object.keys(job).length === 0) return;
+  const jobEnv = asRecord(job.env);
+  if (jobEnv.NEMOCLAW_E2E_USE_HOSTED_INFERENCE !== "1") {
+    errors.push("gateway-guard-recovery job must enable hosted-compatible inference mode");
+  }
+}
+
+function jobPassesNvidiaInferenceSecret(job: WorkflowRecord): boolean {
+  return asSteps(job.steps).some(
+    (step) => asRecord(step.env).NVIDIA_INFERENCE_API_KEY !== undefined,
+  );
+}
+
+function validateHostedCompatibleInferenceFlag(
+  errors: string[],
+  jobName: string,
+  jobEnv: WorkflowRecord,
+): void {
+  if (PUBLIC_NVIDIA_ENDPOINT_KEY_JOBS.has(jobName)) return;
+  if (jobEnv.NEMOCLAW_E2E_USE_HOSTED_INFERENCE !== "1") {
+    errors.push(`${jobName} job must enable hosted-compatible inference mode`);
+  }
+}
+
 function validateFreeStandingInventoryBoundary(
   errors: string[],
   jobs: WorkflowRecord,
@@ -507,6 +537,12 @@ function validateFreeStandingInventoryBoundary(
     }
 
     const jobEnv = asRecord(job.env);
+    if (
+      jobEnv.NEMOCLAW_RUN_E2E_SCENARIOS === "1" &&
+      jobPassesNvidiaInferenceSecret(job)
+    ) {
+      validateHostedCompatibleInferenceFlag(errors, jobName, jobEnv);
+    }
     for (const secret of COMMON_SECRET_ENV_NAMES) {
       requireEnvDoesNotExposeSecret(errors, `${jobName} job`, jobEnv, secret);
     }
@@ -7561,6 +7597,7 @@ export function validateE2eVitestScenariosWorkflowBoundary(
   if (jobEnv.NEMOCLAW_RUN_E2E_SCENARIOS !== "1") {
     errors.push("live-scenarios job must set NEMOCLAW_RUN_E2E_SCENARIOS=1");
   }
+  validateHostedCompatibleInferenceFlag(errors, "live-scenarios", jobEnv);
   if (!stringValue(jobEnv.E2E_ARTIFACT_DIR).includes("e2e-artifacts/vitest")) {
     errors.push(
       "live-scenarios job must write artifacts under e2e-artifacts/vitest",
@@ -7770,6 +7807,7 @@ export function validateE2eVitestScenariosWorkflowBoundary(
     "openclaw-tui-chat-correlation",
   );
   validateFreeStandingJobSelector(errors, jobs, "gateway-guard-recovery");
+  validateGatewayGuardRecoveryVitestJob(errors, jobs);
   validateFreeStandingJobSelector(
     errors,
     jobs,
