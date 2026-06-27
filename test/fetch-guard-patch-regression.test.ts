@@ -462,7 +462,10 @@ describe("fetch-guard patch regression guard", () => {
     expect(stale.result.status).toBe(0);
     expect(stale.result.stdout).toContain(`Installing mcporter ${expectedMcporterVersion}`);
     expect(stale.calls).toContain(
-      `npm install -g --no-audit --no-fund --no-progress mcporter@${expectedMcporterVersion}`,
+      `npm install -g --ignore-scripts --no-audit --no-fund --no-progress mcporter@${expectedMcporterVersion}`,
+    );
+    expect(fs.readFileSync(DOCKERFILE_BASE, "utf-8")).toContain(
+      `npm install -g --ignore-scripts --no-audit --no-fund --no-progress "mcporter@\${MCPORTER_VERSION}"`,
     );
     expect(
       dockerRunCommandBetween(

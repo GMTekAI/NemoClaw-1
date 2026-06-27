@@ -6,13 +6,19 @@ without copying external service credentials into the sandbox.
 The integration has three parts:
 
 - an OpenShell provider that stores host-side credentials;
-- a generated OpenShell network policy for the MCP endpoint using `protocol: mcp`;
+- a generated OpenShell network policy for the MCP endpoint using `protocol: mcp`
+  with explicit JSON-RPC MCP method rules;
 - an agent adapter that writes the MCP endpoint into OpenClaw, Hermes, or
   LangChain Deep Agents Code config.
 
 This depends on the OpenShell MCP/JSON-RPC L7 policy support from
 NVIDIA/OpenShell#1865. NemoClaw requires an OpenShell release that exposes the
 `protocol: mcp` policy capability before managed MCP servers are enabled.
+
+This v1 intentionally accepts Streamable HTTP MCP endpoints only. NemoClaw does
+not launch host stdio MCP servers or a host-side MCP credential proxy; host-only
+credentials follow the same OpenShell provider model used for other provider
+secrets.
 
 ## Add An MCP Server
 
@@ -107,3 +113,8 @@ If the sandbox cannot reach an MCP server hosted on the workstation, use the
 OpenShell host alias path that works for your runtime, such as
 `host.openshell.internal`, and let the generated `protocol: mcp` policy enforce
 that endpoint. Do not run a separate NemoClaw host proxy for MCP credentials.
+
+The generated policy permits normal MCP client methods such as
+`initialize`, `tools/list`, `tools/call`, `resources/*`, `prompts/*`, `ping`,
+`completion/complete`, and `logging/setLevel`, bounded to the configured MCP
+endpoint path and the selected agent adapter binaries.

@@ -1688,10 +1688,15 @@ jobs:
 
       - name: Install OpenShell CLI
         env:
-          GH_TOKEN: ${{ github.token }}
           NEMOCLAW_OPENSHELL_CHANNEL: ${{ github.event_name == 'workflow_dispatch' && inputs.openshell_channel || 'stable' }}
           NEMOCLAW_OPENSHELL_ARTIFACT_RUN_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.openshell_artifact_run_id || '' }}
-        run: bash scripts/install-openshell.sh
+          NEMOCLAW_INSTALL_OPENSHELL_GH_TOKEN: ${{ github.event_name == 'workflow_dispatch' && inputs.openshell_channel == 'artifact' && github.token || '' }}
+        run: |
+          set -euo pipefail
+          if [[ "${NEMOCLAW_OPENSHELL_CHANNEL}" == "artifact" ]]; then
+            export GH_TOKEN="${NEMOCLAW_INSTALL_OPENSHELL_GH_TOKEN:?OpenShell artifact channel requires the workflow token}"
+          fi
+          bash scripts/install-openshell.sh
 
       - name: Run MCP OpenShell provider Vitest E2E
         env:

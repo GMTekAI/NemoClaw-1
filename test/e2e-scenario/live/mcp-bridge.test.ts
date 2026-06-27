@@ -220,7 +220,9 @@ async function assertBridgeInfrastructure(
   expectExitZero(policy, `${options.artifactPrefix} openshell policy get --full`);
   expect(resultText(policy)).toContain("mcp-bridge-fake");
   expect(resultText(policy)).toContain("protocol: mcp");
-  expect(resultText(policy)).toContain("allow_all_known_mcp_methods");
+  expect(resultText(policy)).toContain("strict_tool_names");
+  expect(resultText(policy)).toContain("method: tools/list");
+  expect(resultText(policy)).toContain("method: tools/call");
   expect(resultText(policy)).toContain("host.openshell.internal");
 
   const provider = await host.command(

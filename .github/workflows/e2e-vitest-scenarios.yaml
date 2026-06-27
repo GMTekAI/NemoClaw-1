@@ -398,6 +398,9 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Configure isolated Docker auth directory
+        run: echo "DOCKER_CONFIG=${RUNNER_TEMP}/docker-config-mcp-bridge" >> "$GITHUB_ENV"
+
       - name: Authenticate to Docker Hub
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -405,6 +408,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p "${DOCKER_CONFIG}"
+          chmod 700 "${DOCKER_CONFIG}"
           if [[ -z "${DOCKERHUB_USERNAME}" || -z "${DOCKERHUB_TOKEN}" ]]; then
             echo "::notice::Docker Hub credentials not configured; continuing with anonymous pulls."
             exit 0
@@ -438,8 +443,13 @@ jobs:
 
       - name: Install OpenShell CLI
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash scripts/install-openshell.sh
+          NEMOCLAW_INSTALL_OPENSHELL_GH_TOKEN: ${{ inputs.openshell_channel == 'artifact' && github.token || '' }}
+        run: |
+          set -euo pipefail
+          if [[ "${NEMOCLAW_OPENSHELL_CHANNEL}" == "artifact" ]]; then
+            export GH_TOKEN="${NEMOCLAW_INSTALL_OPENSHELL_GH_TOKEN:?OpenShell artifact channel requires the workflow token}"
+          fi
+          bash scripts/install-openshell.sh
 
       - name: Run MCP OpenShell provider live test
         run: |
@@ -468,6 +478,13 @@ jobs:
           include-hidden-files: false
           if-no-files-found: ignore
           retention-days: 14
+
+      - name: Clean up Docker auth
+        if: always()
+        run: |
+          set -euo pipefail
+          docker logout docker.io || true
+          rm -rf "${DOCKER_CONFIG}"
 
   onboard-negative-paths-vitest:
     needs: generate-matrix

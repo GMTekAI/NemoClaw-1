@@ -238,7 +238,8 @@ RUN --mount=type=bind,source=nemoclaw-blueprint/blueprint.yaml,target=/tmp/bluep
             echo "Actual:   ${MCPORTER_REGISTRY_INTEGRITY}"; exit 1; \
         fi; \
     fi; \
-    npm install -g "openclaw@${OPENCLAW_VERSION}" "mcporter@${MCPORTER_VERSION}" \
+    npm install -g --no-audit --no-fund --no-progress "openclaw@${OPENCLAW_VERSION}" \
+    && npm install -g --ignore-scripts --no-audit --no-fund --no-progress "mcporter@${MCPORTER_VERSION}" \
     && pip3 install --no-cache-dir --break-system-packages "pyyaml==6.0.3"
 
 

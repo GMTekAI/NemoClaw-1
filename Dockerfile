@@ -161,7 +161,7 @@ RUN set -eu; \
             fi; \
         fi; \
         rm -rf /usr/local/lib/node_modules/mcporter /usr/local/bin/mcporter; \
-        npm install -g --no-audit --no-fund --no-progress "mcporter@${MCPORTER_VERSION}"; \
+        npm install -g --ignore-scripts --no-audit --no-fund --no-progress "mcporter@${MCPORTER_VERSION}"; \
     fi; \
     # Pre-install the codex-acp package so the embedded ACPx runtime can
     # call the local binary instead of `npx @zed-industries/codex-acp`.

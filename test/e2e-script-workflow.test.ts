@@ -399,6 +399,18 @@ describe("E2E reusable workflow contract", () => {
     }
   });
 
+  it("only exposes the workflow token to MCP OpenShell installs for artifact-channel runs", () => {
+    const job = nightlyWorkflow.jobs["mcp-bridge-e2e"];
+    const installStep = job.steps?.find((step) => step.name === "Install OpenShell CLI");
+
+    expect(installStep).toBeDefined();
+    expect(installStep?.env ?? {}).not.toHaveProperty("GH_TOKEN");
+    expect(installStep?.env?.NEMOCLAW_INSTALL_OPENSHELL_GH_TOKEN).toContain(
+      "inputs.openshell_channel == 'artifact'",
+    );
+    expect(installStep?.run).toContain('if [[ "${NEMOCLAW_OPENSHELL_CHANNEL}" == "artifact" ]]');
+  });
+
   it("runs only validated test/e2e shell scripts through the composite action", () => {
     const runStep = action.runs.steps.find((step) => step.name === "Run E2E script");
 

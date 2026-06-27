@@ -560,6 +560,14 @@ exit 0`,
         path.join(fakeBin, "gh"),
         `#!/usr/bin/env bash
 set -euo pipefail
+write_checksum() {
+  file="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    (cd "$(dirname "$file")" && sha256sum "$(basename "$file")" > "$(basename "$file").sha256")
+  else
+    (cd "$(dirname "$file")" && shasum -a 256 "$(basename "$file")" > "$(basename "$file").sha256")
+  fi
+}
 if [ "\${1:-}" = "run" ] && [ "\${2:-}" = "download" ]; then
   run_id="\${3:-}"
   name=""
@@ -582,6 +590,7 @@ if [ "\${1:-}" = "--version" ]; then echo "openshell 0.0.72-dev+artifact"; exit 
 exit 0
 SH
       chmod 755 "$dir/openshell"
+      write_checksum "$dir/openshell"
       ;;
     rust-binary-gateway-gateway-linux-amd64)
       cat > "$dir/openshell-gateway" <<'SH'
@@ -590,6 +599,7 @@ SH
 exit 0
 SH
       chmod 755 "$dir/openshell-gateway"
+      write_checksum "$dir/openshell-gateway"
       ;;
     rust-binary-supervisor-sandbox-linux-amd64)
       cat > "$dir/openshell-sandbox" <<'SH'
@@ -598,6 +608,7 @@ SH
 exit 0
 SH
       chmod 755 "$dir/openshell-sandbox"
+      write_checksum "$dir/openshell-sandbox"
       ;;
     *)
       exit 7
@@ -632,6 +643,74 @@ exit 1`,
       expect(fs.existsSync(path.join(installDir, "openshell"))).toBe(true);
       expect(fs.existsSync(path.join(installDir, "openshell-gateway"))).toBe(true);
       expect(fs.existsSync(path.join(installDir, "openshell-sandbox"))).toBe(true);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects OpenShell workflow artifacts without checksum metadata", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-openshell-artifact-checks-"));
+    try {
+      const fakeBin = path.join(tmp, "bin");
+      const installDir = path.join(tmp, "install-bin");
+      fs.mkdirSync(fakeBin);
+      fs.mkdirSync(installDir);
+
+      writeExecutable(
+        path.join(fakeBin, "uname"),
+        `#!/usr/bin/env bash
+if [ "\${1:-}" = "-m" ]; then echo "x86_64"; else echo "Linux"; fi`,
+      );
+      writeExecutable(
+        path.join(fakeBin, "gh"),
+        `#!/usr/bin/env bash
+set -euo pipefail
+if [ "\${1:-}" = "run" ] && [ "\${2:-}" = "download" ]; then
+  name=""
+  dir=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --name) shift; name="\${1:-}" ;;
+      --dir) shift; dir="\${1:-}" ;;
+    esac
+    shift || true
+  done
+  mkdir -p "$dir"
+  case "$name" in
+    rust-binary-cli-cli-linux-amd64)
+      printf '#!/usr/bin/env bash\\nexit 0\\n' > "$dir/openshell"
+      ;;
+    rust-binary-gateway-gateway-linux-amd64)
+      printf '#!/usr/bin/env bash\\nexit 0\\n' > "$dir/openshell-gateway"
+      ;;
+    rust-binary-supervisor-sandbox-linux-amd64)
+      printf '#!/usr/bin/env bash\\nexit 0\\n' > "$dir/openshell-sandbox"
+      ;;
+    *)
+      exit 7
+      ;;
+  esac
+  exit 0
+fi
+exit 1`,
+      );
+
+      const result = spawnSync("bash", [SCRIPT], {
+        env: {
+          ...process.env,
+          HOME: tmp,
+          XDG_BIN_HOME: installDir,
+          NEMOCLAW_NON_INTERACTIVE: "1",
+          NEMOCLAW_OPENSHELL_CHANNEL: "artifact",
+          NEMOCLAW_OPENSHELL_ARTIFACT_RUN_ID: "28267935010",
+          PATH: `${fakeBin}:${installDir}:/usr/bin:/bin`,
+        },
+        encoding: "utf8",
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("did not include SHA-256 checksum metadata");
+      expect(fs.existsSync(path.join(installDir, "openshell"))).toBe(false);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }

@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   buildDeepAgentsMcpRegisterCommand,
+  buildDeepAgentsMcpRemoveCommand,
   buildHermesMcpRegisterCommand,
   buildMcpBridgePolicyName,
   buildMcpBridgePolicyYaml,
@@ -17,6 +18,7 @@ import {
   buildMcpBridgeProviderName,
   buildOpenClawMcporterRegisterCommand,
   dispatchMcpBridgeCommand,
+  MCP_BRIDGE_ALLOWED_METHODS,
   MCP_BRIDGE_POLICY_MAX_BODY_BYTES,
   MCPORTER_VERSION,
   normalizeMcpServerUrl,
@@ -190,8 +192,8 @@ describe("MCP OpenShell policy", () => {
             port: number;
             path: string;
             protocol: string;
-            mcp: { max_body_bytes: number; allow_all_known_mcp_methods?: boolean };
-            rules?: Array<{ allow: { method: string } }>;
+            mcp: { max_body_bytes: number; strict_tool_names?: boolean };
+            rules?: Array<{ allow: { method: string; path: string } }>;
           }>;
           binaries: Array<{ path: string }>;
         }
@@ -209,10 +211,14 @@ describe("MCP OpenShell policy", () => {
       enforcement: "enforce",
       mcp: {
         max_body_bytes: MCP_BRIDGE_POLICY_MAX_BODY_BYTES,
+        strict_tool_names: true,
       },
     });
-    expect(entry.endpoints[0].mcp.allow_all_known_mcp_methods).toBe(true);
-    expect(entry.endpoints[0].rules).toBeUndefined();
+    expect(entry.endpoints[0].rules).toEqual(
+      MCP_BRIDGE_ALLOWED_METHODS.map((method) => ({
+        allow: { method, path: "/mcp" },
+      })),
+    );
     expect(entry.binaries.map((binary) => binary.path)).toEqual([
       "/usr/local/bin/mcporter",
       "/usr/bin/mcporter",
@@ -317,6 +323,16 @@ describe("MCP adapters", () => {
     expect(command).toContain("mcpServers must be an object");
   });
 
+  it("fails Deep Agents removal on corrupt config unless forced", () => {
+    const normal = buildDeepAgentsMcpRemoveCommand("github");
+    const forced = buildDeepAgentsMcpRemoveCommand("github", true);
+
+    expect(normal).toContain("Invalid /sandbox/.mcp.json");
+    expect(normal).toContain('\\"force\\":false');
+    expect(normal).toContain("raise SystemExit(2)");
+    expect(forced).toContain('\\"force\\":true');
+  });
+
   it("keeps unauthenticated servers free of Authorization headers", () => {
     const command = buildOpenClawMcporterRegisterCommand({ ...baseEntry, env: [] });
 
@@ -334,6 +350,24 @@ describe("MCP adapters", () => {
       );
 
       expect(redacted).toBe("failed header Authorization=Bearer ***REDACTED*** raw ***REDACTED***");
+    } finally {
+      prior === undefined ? delete process.env.GITHUB_TOKEN : (process.env.GITHUB_TOKEN = prior);
+    }
+  });
+
+  it("redacts inline credential values that were not exported in host env", () => {
+    const prior = process.env.GITHUB_TOKEN;
+    delete process.env.GITHUB_TOKEN;
+    try {
+      const redacted = redactBridgeSecretsForDisplay(
+        "adapter echoed Authorization=Bearer inline-provider-secret and inline-provider-secret",
+        baseEntry,
+        { GITHUB_TOKEN: "inline-provider-secret" },
+      );
+
+      expect(redacted).toBe(
+        "adapter echoed Authorization=Bearer ***REDACTED*** and ***REDACTED***",
+      );
     } finally {
       prior === undefined ? delete process.env.GITHUB_TOKEN : (process.env.GITHUB_TOKEN = prior);
     }

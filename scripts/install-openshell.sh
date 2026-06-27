@@ -390,6 +390,62 @@ fi
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 
+select_sha_cmd() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    SHA_CMD="sha256sum"
+  elif command -v shasum >/dev/null 2>&1; then
+    SHA_CMD="shasum -a 256"
+  else
+    fail "No SHA-256 tool available (sha256sum/shasum)"
+  fi
+}
+
+verify_checksum_entry() {
+  local checksum_file="$1"
+  local binary_path="$2"
+  local binary_name escaped_binary_name
+
+  binary_name="$(basename "$binary_path")"
+  escaped_binary_name="$(printf '%s\n' "$binary_name" | sed 's/[][(){}.^$+*?|\\/]/\\&/g')"
+  if grep -Eq "[[:space:]]\\*?${escaped_binary_name}\$" "$checksum_file"; then
+    (cd "$(dirname "$binary_path")" && grep -E "[[:space:]]\\*?${escaped_binary_name}\$" "$checksum_file" | $SHA_CMD -c -) \
+      || fail "SHA-256 checksum verification failed for $binary_name"
+    return
+  fi
+
+  local digest
+  digest="$(tr -d '\r' <"$checksum_file" | awk 'NF == 1 && $1 ~ /^[0-9a-fA-F]{64}$/ { print $1; exit }')"
+  [ -n "$digest" ] \
+    || fail "OpenShell artifact checksum file '$checksum_file' does not contain a checksum for $binary_name."
+  (cd "$(dirname "$binary_path")" && printf '%s  %s\n' "$digest" "$binary_name" | $SHA_CMD -c -) \
+    || fail "SHA-256 checksum verification failed for $binary_name"
+}
+
+verify_artifact_binary() {
+  local artifact_name="$1"
+  local artifact_dir="$2"
+  local binary_name="$3"
+  local binary_path="$artifact_dir/$binary_name"
+  local checksum_file=""
+
+  [ -f "$binary_path" ] \
+    || fail "OpenShell artifact '$artifact_name' did not contain '$binary_name'."
+
+  for candidate in \
+    "$artifact_dir/${binary_name}.sha256" \
+    "$artifact_dir/${binary_name}.sha256sum" \
+    "$artifact_dir/SHA256SUMS" \
+    "$artifact_dir/checksums-sha256.txt"; do
+    if [ -f "$candidate" ]; then
+      checksum_file="$candidate"
+      break
+    fi
+  done
+  [ -n "$checksum_file" ] \
+    || fail "OpenShell artifact '$artifact_name' did not include SHA-256 checksum metadata for '$binary_name'."
+  verify_checksum_entry "$checksum_file" "$binary_path"
+}
+
 download_from_actions_artifacts() {
   local artifact_arch cli_artifact gateway_artifact sandbox_artifact
 
@@ -417,6 +473,11 @@ download_from_actions_artifacts() {
   GH_PROMPT_DISABLED=1 GH_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}" gh run download "$OPENSHELL_ARTIFACT_RUN_ID" \
     --repo NVIDIA/OpenShell --name "$sandbox_artifact" --dir "$tmpdir/artifact-sandbox" \
     || fail "Failed to download OpenShell artifact '$sandbox_artifact' from run ${OPENSHELL_ARTIFACT_RUN_ID}."
+
+  select_sha_cmd
+  verify_artifact_binary "$cli_artifact" "$tmpdir/artifact-cli" "openshell"
+  verify_artifact_binary "$gateway_artifact" "$tmpdir/artifact-gateway" "openshell-gateway"
+  verify_artifact_binary "$sandbox_artifact" "$tmpdir/artifact-sandbox" "openshell-sandbox"
 
   cp "$tmpdir/artifact-cli/openshell" "$tmpdir/openshell"
   cp "$tmpdir/artifact-gateway/openshell-gateway" "$tmpdir/openshell-gateway"
@@ -465,13 +526,7 @@ else
   fi
 
   info "Verifying SHA-256 checksum..."
-  if command -v sha256sum >/dev/null 2>&1; then
-    SHA_CMD="sha256sum"
-  elif command -v shasum >/dev/null 2>&1; then
-    SHA_CMD="shasum -a 256"
-  else
-    fail "No SHA-256 tool available (sha256sum/shasum)"
-  fi
+  select_sha_cmd
   for i in "${!ASSETS[@]}"; do
     asset_name="${ASSETS[$i]}"
     checksum_file="${CHECKSUM_FILES[$i]}"

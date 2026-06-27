@@ -23,6 +23,20 @@ import { getSandboxTargetGatewayName } from "./gateway-target";
 export const MCPORTER_VERSION = "0.7.3";
 export const MCP_BRIDGE_POLICY_SOURCE = "generated:nemoclaw-mcp-bridge";
 export const MCP_BRIDGE_POLICY_MAX_BODY_BYTES = 131_072;
+export const MCP_BRIDGE_ALLOWED_METHODS = [
+  "initialize",
+  "notifications/initialized",
+  "ping",
+  "tools/list",
+  "tools/call",
+  "resources/list",
+  "resources/read",
+  "resources/templates/list",
+  "prompts/list",
+  "prompts/get",
+  "completion/complete",
+  "logging/setLevel",
+] as const;
 
 const VALID_SERVER_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const VALID_ENV_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
@@ -400,8 +414,11 @@ export function buildMcpBridgePolicyYaml(
             ...(allowedIps ? { allowed_ips: allowedIps } : {}),
             mcp: {
               max_body_bytes: MCP_BRIDGE_POLICY_MAX_BODY_BYTES,
-              allow_all_known_mcp_methods: true,
+              strict_tool_names: true,
             },
+            rules: MCP_BRIDGE_ALLOWED_METHODS.map((method) => ({
+              allow: { method, path: endpointPath(parsed) },
+            })),
           },
         ],
         binaries: binariesForAdapter(adapter),
@@ -553,19 +570,27 @@ export function buildDeepAgentsMcpRegisterCommand(entry: McpBridgeEntry): string
   ].join("\n");
 }
 
-function buildDeepAgentsMcpRemoveCommand(server: string): string {
-  const payload = { server };
+export function buildDeepAgentsMcpRemoveCommand(server: string, force = false): string {
+  const payload = { server, force };
   return [
     "python3 - <<'PY'",
-    "import json, os, pathlib",
+    "import json, os, pathlib, sys",
     `payload = json.loads(${pythonJsonLiteral(payload)})`,
     'config_path = pathlib.Path("/sandbox/.mcp.json")',
     "if not config_path.exists():",
     "    raise SystemExit(0)",
     "try:",
     "    data = json.loads(config_path.read_text(encoding='utf-8') or '{}')",
-    "except json.JSONDecodeError:",
-    "    raise SystemExit(0)",
+    "except json.JSONDecodeError as exc:",
+    "    if payload.get('force'):",
+    "        raise SystemExit(0)",
+    "    print(f'Invalid /sandbox/.mcp.json: {exc}', file=sys.stderr)",
+    "    raise SystemExit(2)",
+    "if not isinstance(data, dict):",
+    "    if payload.get('force'):",
+    "        raise SystemExit(0)",
+    "    print('Invalid /sandbox/.mcp.json: expected a JSON object', file=sys.stderr)",
+    "    raise SystemExit(2)",
     "servers = data.get('mcpServers')",
     "if isinstance(servers, dict):",
     "    servers.pop(payload['server'], None)",
@@ -602,10 +627,14 @@ function buildDeepAgentsMcpStatusCommand(entry: McpBridgeEntry): string {
 export function redactBridgeSecretsForDisplay(
   text: string,
   entry?: Pick<McpBridgeEntry, "env">,
+  envValues: Record<string, string> = {},
 ): string {
   let output = redact(text || "");
   for (const envName of entry?.env ?? []) {
-    const value = process.env[envName];
+    const value = envValues[envName] ?? process.env[envName];
+    if (value) output = output.replaceAll(value, "***REDACTED***");
+  }
+  for (const value of Object.values(envValues)) {
     if (value) output = output.replaceAll(value, "***REDACTED***");
   }
   return output.replace(/Authorization=Bearer\s+\S+/g, "Authorization=Bearer ***REDACTED***");
@@ -615,12 +644,17 @@ function buildOpenClawMcporterRemoveCommand(server: string): string {
   return ["mcporter", "config", "remove", server].map(shellQuote).join(" ");
 }
 
-function registerOpenClawAdapter(sandboxName: string, entry: McpBridgeEntry): void {
+function registerOpenClawAdapter(
+  sandboxName: string,
+  entry: McpBridgeEntry,
+  envValues: Record<string, string> = {},
+): void {
   ensureMcporter(sandboxName);
   const result = executeSandboxCommand(sandboxName, buildOpenClawMcporterRegisterCommand(entry));
   const output = redactBridgeSecretsForDisplay(
     [result?.stdout, result?.stderr].filter(Boolean).join("\n").trim(),
     entry,
+    envValues,
   );
   if (!result || result.status !== 0) {
     throw new McpBridgeError(output || `mcporter config add failed for '${entry.server}'.`);
@@ -632,12 +666,13 @@ function runAdapterCommand(
   entry: Pick<McpBridgeEntry, "env">,
   command: string,
   failureMessage: string,
-  options: { force?: boolean } = {},
+  options: { force?: boolean; envValues?: Record<string, string> } = {},
 ): void {
   const result = executeSandboxCommand(sandboxName, command);
   const output = redactBridgeSecretsForDisplay(
     [result?.stdout, result?.stderr].filter(Boolean).join("\n").trim(),
     entry,
+    options.envValues ?? {},
   );
   if (!result || result.status !== 0) {
     if (options.force) return;
@@ -649,10 +684,11 @@ function registerAgentAdapter(
   sandboxName: string,
   adapter: AgentMcpAdapter,
   entry: McpBridgeEntry,
+  envValues: Record<string, string> = {},
 ): void {
   switch (adapter) {
     case "mcporter":
-      registerOpenClawAdapter(sandboxName, entry);
+      registerOpenClawAdapter(sandboxName, entry, envValues);
       return;
     case "hermes-config":
       runAdapterCommand(
@@ -660,6 +696,7 @@ function registerAgentAdapter(
         entry,
         buildHermesMcpRegisterCommand(entry),
         `Hermes MCP config registration failed for '${entry.server}'.`,
+        { envValues },
       );
       return;
     case "deepagents-config":
@@ -668,6 +705,7 @@ function registerAgentAdapter(
         entry,
         buildDeepAgentsMcpRegisterCommand(entry),
         `Deep Agents Code MCP config registration failed for '${entry.server}'.`,
+        { envValues },
       );
       return;
   }
@@ -676,7 +714,7 @@ function registerAgentAdapter(
 function unregisterOpenClawAdapter(
   sandboxName: string,
   entry: Pick<McpBridgeEntry, "server" | "env">,
-  options: { force?: boolean } = {},
+  options: { force?: boolean; envValues?: Record<string, string> } = {},
 ): void {
   const result = executeSandboxCommand(
     sandboxName,
@@ -685,6 +723,7 @@ function unregisterOpenClawAdapter(
   const output = redactBridgeSecretsForDisplay(
     [result?.stdout, result?.stderr].filter(Boolean).join("\n").trim(),
     entry,
+    options.envValues ?? {},
   );
   if (!result || result.status !== 0) {
     if (options.force) return;
@@ -696,7 +735,7 @@ function unregisterAgentAdapter(
   sandboxName: string,
   adapter: AgentMcpAdapter,
   entry: Pick<McpBridgeEntry, "server" | "env">,
-  options: { force?: boolean } = {},
+  options: { force?: boolean; envValues?: Record<string, string> } = {},
 ): void {
   switch (adapter) {
     case "mcporter":
@@ -715,7 +754,7 @@ function unregisterAgentAdapter(
       runAdapterCommand(
         sandboxName,
         entry,
-        buildDeepAgentsMcpRemoveCommand(entry.server),
+        buildDeepAgentsMcpRemoveCommand(entry.server, options.force === true),
         `Deep Agents Code MCP config removal failed for '${entry.server}'.`,
         options,
       );
@@ -944,6 +983,7 @@ export async function addMcpBridge(
   let providerAttachedState = false;
   let policyApplied = false;
   let adapterRegistered = false;
+  const adapterEnvValues = resolveCredentialEnv(options.env);
   try {
     await ensureSandboxGatewaySelected(sandboxName);
     const providerAction = upsertMcpProvider(providerName ?? "", options.env);
@@ -952,11 +992,16 @@ export async function addMcpBridge(
     providerAttachedState = !!providerName;
     applyGeneratedPolicy(sandboxName, entry);
     policyApplied = true;
-    registerAgentAdapter(sandboxName, adapter, entry);
+    registerAgentAdapter(sandboxName, adapter, entry, adapterEnvValues);
     adapterRegistered = true;
     writeBridgeEntry(sandboxName, entry);
   } catch (error) {
-    if (adapterRegistered) unregisterAgentAdapter(sandboxName, adapter, entry, { force: true });
+    if (adapterRegistered) {
+      unregisterAgentAdapter(sandboxName, adapter, entry, {
+        force: true,
+        envValues: adapterEnvValues,
+      });
+    }
     if (policyApplied) removeGeneratedPolicy(sandboxName, entry.policyName, true);
     if (providerAttachedState) detachProvider(sandboxName, providerName, { force: true });
     if (providerCreated) deleteProvider(providerName, { force: true });
@@ -982,6 +1027,7 @@ export async function restartMcpBridge(sandboxName: string, server?: string): Pr
       throw new McpBridgeError(`MCP server '${name}' not found on sandbox '${sandboxName}'.`);
     }
     const envRefs = entry.env.map((envName) => ({ name: envName }));
+    const adapterEnvValues = resolveCredentialEnv(envRefs);
     upsertMcpProvider(entry.providerName ?? "", envRefs);
     attachProvider(sandboxName, entry.providerName);
     applyGeneratedPolicy(sandboxName, entry);
@@ -989,6 +1035,7 @@ export async function restartMcpBridge(sandboxName: string, server?: string): Pr
       sandboxName,
       (entry.adapter as AgentMcpAdapter | undefined) ?? adapter,
       entry,
+      adapterEnvValues,
     );
     writeBridgeEntry(sandboxName, {
       ...entry,
@@ -1019,12 +1066,13 @@ export function removeMcpBridge(
   }
 
   const failures: string[] = [];
+  const adapterEnvValues = resolveCredentialEnv(entry.env.map((envName) => ({ name: envName })));
   try {
     unregisterAgentAdapter(
       sandboxName,
       (entry.adapter as AgentMcpAdapter | undefined) ?? adapter,
       entry,
-      { force: options.force === true },
+      { force: options.force === true, envValues: adapterEnvValues },
     );
   } catch (error) {
     failures.push(error instanceof Error ? error.message : String(error));
