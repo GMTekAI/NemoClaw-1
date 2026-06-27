@@ -11,6 +11,19 @@ import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } fr
 
 const requireDist = createRequire(import.meta.url);
 const shieldsModulePath = "../../../dist/lib/shields/index.js";
+const HUNG_FORWARD_OWNER_SOURCE = `
+const { spawn } = require("node:child_process");
+const childScriptPath = process.argv[2];
+const sentinelPath = process.argv[3];
+spawn(process.execPath, [childScriptPath, sentinelPath], { stdio: "ignore" });
+setTimeout(() => {}, 5000);
+`;
+const LATE_WEAKENING_CHILD_SOURCE = `
+const fs = require("node:fs");
+const sentinelPath = process.argv[2];
+setTimeout(() => fs.writeFileSync(sentinelPath, "ran"), 1200);
+setTimeout(() => {}, 5000);
+`;
 
 type ShieldsHarness = {
   auditSpy: MockInstance;
@@ -366,6 +379,10 @@ describe("shields command flow", () => {
       stateDir,
       `shields-transition-${sandboxName}-${processToken}.json`,
     );
+    const ownerScriptPath = path.join(stateDir, "hung-forward-owner.cjs");
+    const childScriptPath = path.join(stateDir, "late-weakening-child.cjs");
+    fs.writeFileSync(ownerScriptPath, HUNG_FORWARD_OWNER_SOURCE, { mode: 0o600 });
+    fs.writeFileSync(childScriptPath, LATE_WEAKENING_CHILD_SOURCE, { mode: 0o600 });
     fs.writeFileSync(snapshotPath, "version: 1\nnetwork_policies:\n  test: {}\n");
     fs.writeFileSync(
       path.join(stateDir, `shields-timer-${sandboxName}.json`),
@@ -378,20 +395,9 @@ describe("shields command flow", () => {
       }),
     );
 
-    const owner = spawn(
-      process.execPath,
-      [
-        "-e",
-        [
-          "const {spawn}=require('child_process')",
-          `spawn(process.execPath,['-e',${JSON.stringify(
-            `setTimeout(()=>require('fs').writeFileSync(${JSON.stringify(sentinelPath)},'ran'),1200);setTimeout(()=>{},5000)`,
-          )}],{stdio:'ignore'})`,
-          "setTimeout(()=>{},5000)",
-        ].join(";"),
-      ],
-      { stdio: "ignore" },
-    );
+    const owner = spawn(process.execPath, [ownerScriptPath, childScriptPath, sentinelPath], {
+      stdio: "ignore",
+    });
     expect(owner.pid).toBeTypeOf("number");
     const timerControl = requireDist("../../../dist/lib/shields/timer-control.js");
     const ownerStartIdentity = timerControl.readProcessStartIdentity(owner.pid);

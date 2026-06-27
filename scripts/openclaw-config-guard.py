@@ -693,6 +693,7 @@ def _write_pid1_marker(path: str, identity: Identity) -> None:
             try:
                 os.unlink(temp, dir_fd=parent_fd)
             except FileNotFoundError:
+                # The atomic rename or an earlier cleanup already consumed it.
                 pass
         os.close(parent_fd)
 
@@ -839,6 +840,7 @@ def _write_secondary_journal(record: dict[str, object], identity: Identity) -> N
             try:
                 os.unlink(temp_name, dir_fd=journal_fd)
             except FileNotFoundError:
+                # The atomic rename or an earlier cleanup already consumed it.
                 pass
         os.close(journal_fd)
 
@@ -1118,6 +1120,7 @@ def _write_persistent_journal(
             if stat.S_ISDIR(existing.st_mode):
                 _quarantine_untrusted_persistent_journal(opened, identity)
         except FileNotFoundError:
+            # No planted persistent journal exists to quarantine before replace.
             pass
         os.replace(
             temp_name,
@@ -1134,6 +1137,7 @@ def _write_persistent_journal(
             try:
                 os.unlink(temp_name, dir_fd=opened.config_fd)
             except FileNotFoundError:
+                # The atomic rename or an earlier cleanup already consumed it.
                 pass
 
 
@@ -1266,6 +1270,7 @@ def _clear_persistent_journal(opened: OpenConfig) -> None:
             os.unlink(PERSISTENT_JOURNAL_NAME, dir_fd=opened.config_fd)
         os.fsync(opened.config_fd)
     except FileNotFoundError:
+        # Clearing an already-absent journal is intentionally idempotent.
         pass
 
 
@@ -1284,6 +1289,8 @@ def _commit_mutable_and_retire_journal(opened: OpenConfig, identity: Identity) -
     try:
         _clear_secondary_journal(identity)
     except (OSError, GuardError):
+        # Visible mutable handoff is already durable; recovery can retire the
+        # root-only secondary record idempotently on the next invocation.
         pass
 
 
@@ -2144,6 +2151,8 @@ def _replace_from_snapshot(
                 try:
                     _set_inode_flags(source_fd, source_flags)
                 except OSError:
+                    # Preserve the primary replacement failure; callers keep
+                    # the canonical directory frozen and fail closed.
                     pass
             os.close(source_fd)
         if fd >= 0:
@@ -2196,6 +2205,7 @@ def _force_replace_bytes(
                     dst_dir_fd=opened.config_fd,
                 )
         except FileNotFoundError:
+            # An absent target needs no quarantine before atomic replacement.
             pass
         os.replace(temp, name, src_dir_fd=opened.config_fd, dst_dir_fd=opened.config_fd)
         temp = ""
@@ -2207,6 +2217,7 @@ def _force_replace_bytes(
             try:
                 os.unlink(temp, dir_fd=opened.config_fd)
             except FileNotFoundError:
+                # The atomic rename or an earlier cleanup already consumed it.
                 pass
 
 
@@ -2684,6 +2695,7 @@ def _force_fail_closed_lock(opened: OpenConfig, identity: Identity) -> list[str]
                         dst_dir_fd=opened.config_fd,
                     )
                 except FileNotFoundError:
+                    # A concurrently absent canonical name is already severed.
                     pass
                 except Exception as file_exc:
                     errors.append(f"{name}: {file_exc}")
@@ -2732,10 +2744,14 @@ def _settle_pending_transaction_for_lock(
         try:
             _quarantine_untrusted_persistent_journal(opened, identity)
         except (OSError, GuardError):
+            # The directory is already frozen; sealing the bounded current
+            # pair below remains the fail-closed containment authority.
             pass
         try:
             _clear_secondary_journal(identity)
         except (OSError, GuardError):
+            # A stale root-only secondary record cannot weaken the frozen tree
+            # and can be retired by a later idempotent recovery.
             pass
 
 
@@ -2783,7 +2799,6 @@ def _transition(
     pair = _snapshot_pair(opened)
     _verify_locked_posture(opened, pair, identity, allow_blocking_flags=True)
     snapshots: list[FileSnapshot] = []
-    handed_off = False
     try:
         _freeze(opened, identity)
         snapshots.extend(_snapshot_pair(opened))
@@ -2793,11 +2808,10 @@ def _transition(
         _install_stored_pair(opened, targets)
         _snapshot_pair(opened)
         _commit_mutable_dirs(opened, identity)
-        handed_off = True
     except Exception as exc:
         rollback_errors = (
             []
-            if handed_off or isinstance(exc, MutableHandoffError)
+            if isinstance(exc, MutableHandoffError)
             else _restore_originals(opened, tuple(snapshots), identity)
         )
         detail = str(exc)
@@ -3003,6 +3017,8 @@ def _recover_restart(
         try:
             _clear_journal(identity, opened)
         except (OSError, GuardError):
+            # Locked posture is already verified; later recovery can retire an
+            # idempotent stale journal without reopening mutation authority.
             pass
         return "restart-locked-preserved", digest, True
 
@@ -3026,6 +3042,8 @@ def _recover_restart(
         try:
             _clear_journal(identity, opened)
         except (OSError, GuardError):
+            # Mutable posture is already verified and committed; journal
+            # retirement can be retried without changing visible bytes.
             pass
         return "restart-prepared-preserved", visible_digest, False
 
@@ -3041,6 +3059,8 @@ def _recover_restart(
         try:
             _clear_journal(identity, opened)
         except (OSError, GuardError):
+            # Mutable posture is already verified and committed; journal
+            # retirement can be retried without changing visible bytes.
             pass
         return "restart-unseal-visible", visible_digest, False
 
@@ -3172,7 +3192,6 @@ def _write_config(
     )
 
     snapshots: list[FileSnapshot] = []
-    handed_off = False
     try:
         _freeze(opened, identity, quarantine_reserved=True)
         frozen = _snapshot_raw_pair(opened)
@@ -3245,10 +3264,9 @@ def _write_config(
         }
         _write_journal(committed_record, identity, opened)
         _commit_mutable_and_retire_journal(opened, identity)
-        handed_off = True
         return new_digest
     except Exception as exc:
-        rollback_allowed = not (handed_off or isinstance(exc, MutableHandoffError))
+        rollback_allowed = not isinstance(exc, MutableHandoffError)
         rollback_errors: list[str] = []
         if rollback_allowed:
             rollback_targets = (

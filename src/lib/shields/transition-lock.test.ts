@@ -22,6 +22,25 @@ function runWhen(condition: boolean, action: () => void): void {
   condition && action();
 }
 
+function readLockFileSnapshot(lockPath: string) {
+  const fd = fs.openSync(
+    lockPath,
+    fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
+  );
+  try {
+    const stat = fs.fstatSync(fd, { bigint: true });
+    expect(stat.isFile(), `expected a regular lock file at '${lockPath}'`).toBe(true);
+    return {
+      contents: fs.readFileSync(fd, "utf8"),
+      inode: stat.ino,
+      mode: stat.mode & 0o777n,
+      mtimeMs: Number(stat.mtimeMs),
+    };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 function owner(
   sandboxName: string,
   pid: number,
@@ -95,11 +114,9 @@ describe("host shields transition lock", () => {
     });
 
     const result = locker.withShieldsTransitionLock("alpha", "nemoclaw alpha shields up", () => {
-      const stat = fs.lstatSync(lockPath);
-      const written = JSON.parse(fs.readFileSync(lockPath, "utf8"));
-      expect(stat.isFile()).toBe(true);
-      expect(stat.isSymbolicLink()).toBe(false);
-      expect(stat.mode & 0o777).toBe(0o600);
+      const snapshot = readLockFileSnapshot(lockPath);
+      const written = JSON.parse(snapshot.contents);
+      expect(snapshot.mode).toBe(0o600n);
       expect(written).toEqual({
         version: 1,
         sandboxName: "alpha",
@@ -412,8 +429,8 @@ describe("host shields transition lock", () => {
 
   it("waits on a recent malformed owner record", () => {
     const lockPath = writeOwner("alpha", "{incomplete");
-    const mtimeMs = fs.lstatSync(lockPath).mtimeMs;
-    let nowMs = mtimeMs + 5;
+    const initialSnapshot = readLockFileSnapshot(lockPath);
+    let nowMs = initialSnapshot.mtimeMs + 5;
     const locker = manager({
       now: () => nowMs,
       sleep: (milliseconds) => {
@@ -428,7 +445,9 @@ describe("host shields transition lock", () => {
         malformedStaleMs: 30_000,
       }),
     ).toThrow(/owner record is incomplete/);
-    expect(fs.readFileSync(lockPath, "utf8")).toBe("{incomplete");
+    const finalSnapshot = readLockFileSnapshot(lockPath);
+    expect(finalSnapshot.inode).toBe(initialSnapshot.inode);
+    expect(finalSnapshot.contents).toBe("{incomplete");
   });
 
   it("fails closed with manual recovery guidance for an old malformed owner record", () => {
@@ -474,10 +493,11 @@ describe("host shields transition lock", () => {
     const lockPath = shieldsTransitionLockPath("alpha", stateDir);
 
     locker.withShieldsTransitionLock("alpha", "outer transition", () => {
-      const outerInode = fs.lstatSync(lockPath, { bigint: true }).ino;
+      const outerSnapshot = readLockFileSnapshot(lockPath);
       locker.withShieldsTransitionLock("alpha", "inner transition", () => {
-        expect(fs.lstatSync(lockPath, { bigint: true }).ino).toBe(outerInode);
-        expect(JSON.parse(fs.readFileSync(lockPath, "utf8")).command).toBe("outer transition");
+        const innerSnapshot = readLockFileSnapshot(lockPath);
+        expect(innerSnapshot.inode).toBe(outerSnapshot.inode);
+        expect(JSON.parse(innerSnapshot.contents).command).toBe("outer transition");
       });
       expect(fs.existsSync(lockPath)).toBe(true);
     });
@@ -591,13 +611,12 @@ describe("host shields transition lock", () => {
 
     await expect(
       locker.withShieldsTransitionLockAsync("alpha", "outer async transition", async () => {
-        const outerInode = fs.lstatSync(lockPath, { bigint: true }).ino;
+        const outerSnapshot = readLockFileSnapshot(lockPath);
         await Promise.resolve();
         await locker.withShieldsTransitionLockAsync("alpha", "inner async transition", async () => {
-          expect(fs.lstatSync(lockPath, { bigint: true }).ino).toBe(outerInode);
-          expect(JSON.parse(fs.readFileSync(lockPath, "utf8")).command).toBe(
-            "outer async transition",
-          );
+          const innerSnapshot = readLockFileSnapshot(lockPath);
+          expect(innerSnapshot.inode).toBe(outerSnapshot.inode);
+          expect(JSON.parse(innerSnapshot.contents).command).toBe("outer async transition");
         });
         expect(fs.existsSync(lockPath)).toBe(true);
       }),

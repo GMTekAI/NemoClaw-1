@@ -139,7 +139,7 @@ function runShieldsTransition(fixture: RestartFixture, shieldsMode: "locked" | "
   const token = shieldsTransactionToken(begun.stdout);
   switch (token) {
     case undefined:
-      return begun;
+      throw new Error("Expected begin-shields-transition to emit a token");
     default:
       break;
   }

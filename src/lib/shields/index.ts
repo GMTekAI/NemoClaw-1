@@ -1499,7 +1499,6 @@ function unlockAgentConfigUnderMutationLock(
   const legacyHermesProtocol = target.agentName === "hermes" && protocol === "legacy";
   const openClawProtocol = target.agentName === "openclaw";
   let openClawMutationStarted = false;
-  let transactionFinished = false;
   try {
     if (openClawProtocol) {
       transitionOpenClawTopConfig(sandboxName, target, "preflight");
@@ -1610,10 +1609,9 @@ function unlockAgentConfigUnderMutationLock(
     if (issues.length > 0) throw new Error(`Config not unlocked: ${issues.join(", ")}`);
     if (transaction) {
       finishHermesConfigShields(sandboxName, target, transaction.token);
-      transactionFinished = true;
     }
   } catch (error) {
-    if (transaction && !transactionFinished) {
+    if (transaction) {
       try {
         prepareHermesConfigShieldsAbort(sandboxName, target, transaction.token);
         runHermesStateDirTransition(
@@ -1835,7 +1833,6 @@ function lockAgentConfigUnderMutationLock(
   } | null = null;
   const legacyHermesProtocol = target.agentName === "hermes" && protocol === "legacy";
   let openClawMutationStarted = false;
-  let transactionFinished = false;
   let chattrSucceeded = target.agentName === "hermes" && !legacyHermesProtocol ? false : true;
 
   // Agents without a descriptor-sealed top-level transaction retain the
@@ -1947,11 +1944,10 @@ function lockAgentConfigUnderMutationLock(
     const fileHashes = captureSealHashes(sandboxName, filesToLock);
     if (transaction) {
       finishHermesConfigShields(sandboxName, target, transaction.token);
-      transactionFinished = true;
     }
     return { chattrApplied: chattrSucceeded, fileHashes };
   } catch (error) {
-    if (transaction && !transactionFinished && !transaction.rollbackLocked) {
+    if (transaction && !transaction.rollbackLocked) {
       // The requested direction is hardening from a mutable posture. Once the
       // root guard has frozen the canonical Hermes config, a nested-state
       // finding must not hand mutation authority back to the sandbox. Commit
@@ -1960,7 +1956,6 @@ function lockAgentConfigUnderMutationLock(
       try {
         applyHermesConfigShields(sandboxName, target, transaction.token);
         finishHermesConfigShields(sandboxName, target, transaction.token);
-        transactionFinished = true;
       } catch (containmentError) {
         const message =
           containmentError instanceof Error ? containmentError.message : String(containmentError);
@@ -1968,7 +1963,7 @@ function lockAgentConfigUnderMutationLock(
           `  CRITICAL: Hermes lock failed after containment began; the root transaction remains sealed. Restore from a trusted backup and recreate the sandbox. ${message}`,
         );
       }
-    } else if (transaction && !transactionFinished) {
+    } else if (transaction) {
       try {
         prepareHermesConfigShieldsAbort(sandboxName, target, transaction.token);
         runHermesStateDirTransition(

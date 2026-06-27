@@ -492,6 +492,8 @@ def _atomic_replace_preserving_flags(
                 try:
                     _set_inode_flags(opened.fd, original_flags)
                 except Exception:
+                    # Preserve the primary replacement failure; the caller
+                    # retains the sealed transaction for explicit recovery.
                     pass
             raise
     finally:
@@ -798,6 +800,7 @@ def _acquire_mutation_lock(
         try:
             os.unlink(tmp_name, dir_fd=parent_fd)
         except FileNotFoundError:
+            # The hard-link publication or an earlier cleanup consumed it.
             pass
         os.close(parent_fd)
 
@@ -1066,8 +1069,9 @@ def recover_dead_prestate_mutation_lock(state_file: str) -> bool:
                     src_dir_fd=parent_fd,
                     dst_dir_fd=parent_fd,
                 )
-                moved = False
             except OSError:
+                # Keep the quarantined root-owned lock and propagate the
+                # original recovery failure; never guess at its ownership.
                 pass
         raise
     finally:
@@ -1275,6 +1279,7 @@ def _remove_restart_orphan_marker(hermes_fd: int) -> None:
         os.unlink(RESTART_ORPHAN_MARKER_NAME, dir_fd=hermes_fd)
         os.fsync(hermes_fd)
     except FileNotFoundError:
+        # Removing an already-absent orphan marker is intentionally idempotent.
         pass
 
 
@@ -1601,6 +1606,8 @@ def seal_restart(
             try:
                 _restore_restart_seal(state_file, verify_hash=False)
             except Exception:
+                # Preserve the frozen root-owned state for explicit recovery
+                # and propagate the original seal failure.
                 pass
         raise
     finally:
@@ -2349,6 +2356,8 @@ def begin_shields_transition(
         try:
             unseal_restart(hermes_dir, state_file)
         except Exception:
+            # Retain the root-owned token and frozen tree for PID 1 recovery;
+            # the original transition failure remains authoritative.
             pass
         raise
 
@@ -3074,7 +3083,6 @@ def write_config_transaction(
         raise UnsafePathError("refusing oversized Hermes config input")
 
     seal_restart(hermes_dir, hash_file, state_file, purpose="config-write")
-    transaction_active = True
     committed = False
     config_path = os.path.join(hermes_dir, "config.yaml")
     try:
@@ -3119,18 +3127,15 @@ def write_config_transaction(
         _write_restart_state(state_file, state_data, create=False)
         committed = True
         unseal_restart(hermes_dir, state_file)
-        transaction_active = False
     except Exception:
-        if transaction_active:
-            try:
-                unseal_restart(hermes_dir, state_file)
-                transaction_active = False
-                if committed:
-                    return
-            except Exception:
-                # Retain the root-only token, frozen parent, and mutation lock.
-                # PID 1 can retry recovery; it must never guess at metadata.
-                pass
+        try:
+            unseal_restart(hermes_dir, state_file)
+            if committed:
+                return
+        except Exception:
+            # Retain the root-only token, frozen parent, and mutation lock.
+            # PID 1 can retry recovery; it must never guess at metadata.
+            pass
         raise
 
 

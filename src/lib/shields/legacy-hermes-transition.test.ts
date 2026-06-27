@@ -102,6 +102,24 @@ function mode(filePath: string): number {
   return fs.statSync(filePath).mode & 0o7777;
 }
 
+function readRegularFileSnapshot(filePath: string) {
+  const fd = fs.openSync(
+    filePath,
+    fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
+  );
+  try {
+    const stat = fs.fstatSync(fd, { bigint: true });
+    expect(stat.isFile(), `expected a regular file at '${filePath}'`).toBe(true);
+    return {
+      bytes: fs.readFileSync(fd),
+      inode: stat.ino,
+      mode: Number(stat.mode & 0o7777n),
+    };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 afterEach(() => {
   for (const fixture of fixtures.splice(0)) {
     fs.rmSync(fixture, { recursive: true, force: true });
@@ -112,19 +130,22 @@ describe("legacy Hermes config transition", () => {
   it("fresh-replaces locked files, revokes stale writable FDs, protects the parent, and rejects strict-anchor tamper", () => {
     const fixture = createFixture();
     const staleFd = fs.openSync(fixture.configPath, "r+");
-    const staleInode = fs.fstatSync(staleFd).ino;
+    const staleInode = fs.fstatSync(staleFd, { bigint: true }).ino;
 
     const locked = runTransition(fixture, "lock");
     expect(locked.status, locked.stderr).toBe(0);
-    expect(fs.statSync(fixture.configPath).ino).not.toBe(staleInode);
+    const lockedSnapshot = readRegularFileSnapshot(fixture.configPath);
+    expect(lockedSnapshot.inode).not.toBe(staleInode);
     fs.writeSync(staleFd, Buffer.from("EVIL"), 0, 4, 0);
     fs.fsyncSync(staleFd);
     fs.closeSync(staleFd);
 
-    expect(fs.readFileSync(fixture.configPath)).toEqual(fixture.configBytes);
+    const afterStaleWrite = readRegularFileSnapshot(fixture.configPath);
+    expect(afterStaleWrite.inode).toBe(lockedSnapshot.inode);
+    expect(afterStaleWrite.bytes).toEqual(fixture.configBytes);
     expect(mode(fixture.parentDir)).toBe(0o1775);
     expect(mode(fixture.configDir)).toBe(0o755);
-    expect(mode(fixture.configPath)).toBe(0o444);
+    expect(afterStaleWrite.mode).toBe(0o444);
     expect(mode(fixture.envPath)).toBe(0o444);
     expect(mode(fixture.compatPath)).toBe(0o444);
 
@@ -136,7 +157,10 @@ describe("legacy Hermes config transition", () => {
     expect(refused.stderr).toContain("strict hash verification failed");
     expect(mode(fixture.parentDir)).toBe(0o1775);
     expect(mode(fixture.configDir)).toBe(0o755);
-    expect(fs.readFileSync(fixture.configPath)).toEqual(fixture.configBytes);
+    const afterRefusedUnlock = readRegularFileSnapshot(fixture.configPath);
+    expect(afterRefusedUnlock.inode).toBe(afterStaleWrite.inode);
+    expect(afterRefusedUnlock.bytes).toEqual(fixture.configBytes);
+    expect(afterRefusedUnlock.mode).toBe(0o444);
   });
 
   it("rejects oversized mutable inputs before staging replacements", () => {

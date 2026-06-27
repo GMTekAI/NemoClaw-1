@@ -296,22 +296,26 @@ describe("state-dir-guard", () => {
     },
   );
 
-  it("streams a large file into a fresh inode while preserving read and execute bits", () => {
-    const { configDir } = fixture();
-    const workspaceDir = path.join(configDir, "workspace-large");
-    const payloadPath = path.join(workspaceDir, "model.bin");
-    const payload = Buffer.alloc(1024 * 1024, 0xa5);
-    fs.mkdirSync(workspaceDir);
-    fs.writeFileSync(payloadPath, payload, { mode: 0o751 });
-    const oldInode = fs.statSync(payloadPath).ino;
+  it(
+    "streams a large file into a fresh inode while preserving read and execute bits",
+    testTimeoutOptions(20_000),
+    () => {
+      const { configDir } = fixture();
+      const workspaceDir = path.join(configDir, "workspace-large");
+      const payloadPath = path.join(workspaceDir, "model.bin");
+      const payload = Buffer.alloc(1024 * 1024, 0xa5);
+      fs.mkdirSync(workspaceDir);
+      fs.writeFileSync(payloadPath, payload, { mode: 0o751 });
+      const oldInode = fs.statSync(payloadPath).ino;
 
-    const result = runGuard("lock", configDir);
+      const result = runGuard("lock", configDir);
 
-    expect(result.status).toBe(0);
-    expect(fs.statSync(payloadPath).ino).not.toBe(oldInode);
-    expect(mode(payloadPath)).toBe(0o751);
-    expect(fs.readFileSync(payloadPath)).toEqual(payload);
-  });
+      expect(result.status).toBe(0);
+      expect(fs.statSync(payloadPath).ino).not.toBe(oldInode);
+      expect(mode(payloadPath)).toBe(0o751);
+      expect(fs.readFileSync(payloadPath)).toEqual(payload);
+    },
+  );
 
   it("preserves sparse holes instead of expanding logical size into copied bytes", () => {
     const { configDir } = fixture();

@@ -221,15 +221,28 @@ def _open_env_path(
     chain: list[tuple[int, str, int, tuple[int, int, int, int, int]]] = []
     file_fd = -1
     try:
-        root_fd = os.open(os.sep, directory_flags)
-        directory_fds.append(root_fd)
+        # CodeQL cannot associate the dynamic descriptor stack with the close
+        # loop below. Register each descriptor immediately, and close it here
+        # too if list growth itself fails before ownership transfers.
+        root_fd = os.open(os.sep, directory_flags)  # codeql[py/file-not-closed]
+        try:
+            directory_fds.append(root_fd)
+        except BaseException:
+            os.close(root_fd)
+            raise
         _validate_directory_descriptor(os.sep, root_fd)
         current_fd = root_fd
         display = ""
         for component in components[:-1]:
             display = f"{display}/{component}"
-            child_fd = os.open(component, directory_flags, dir_fd=current_fd)
-            directory_fds.append(child_fd)
+            child_fd = os.open(  # codeql[py/file-not-closed]
+                component, directory_flags, dir_fd=current_fd
+            )
+            try:
+                directory_fds.append(child_fd)
+            except BaseException:
+                os.close(child_fd)
+                raise
             identity = _validate_directory_descriptor(display, child_fd)
             chain.append((current_fd, component, child_fd, identity))
             current_fd = child_fd
