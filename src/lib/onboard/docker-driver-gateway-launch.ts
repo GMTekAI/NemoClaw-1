@@ -217,8 +217,9 @@ function safeDockerHost(value: string | undefined): string | undefined {
     const socketPath = candidate.slice("unix://".length);
     if (path.isAbsolute(socketPath) && !socketPath.includes("\0")) return candidate;
   }
-  if (/^tcp:\/\/[A-Za-z0-9_.-]+:[0-9]{1,5}$/.test(candidate)) return candidate;
-  return undefined;
+  throw new Error(
+    "Invalid DOCKER_HOST for OpenShell gateway compatibility mode; only absolute unix:// Docker sockets are supported.",
+  );
 }
 
 function compatGatewayBindAddress(env: NodeJS.ProcessEnv): string {

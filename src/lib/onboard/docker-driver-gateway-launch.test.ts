@@ -141,6 +141,7 @@ describe("docker-driver-gateway-launch", () => {
       expect(launch.args).not.toContain("--publish");
       expect(launch.args).not.toContain("-p");
       expect(launch.env.OPENSHELL_DOCKER_SUPERVISOR_BIN).toBe(sandboxBin);
+      expect(launch.env.DOCKER_HOST).toBe(`unix://${dockerSocket}`);
       expect(launch.env.OPENSHELL_BIND_ADDRESS).toBe("127.0.0.1");
       const configPath = launch.env.OPENSHELL_GATEWAY_CONFIG;
       expect(configPath).toBe(path.join(stateDir, "openshell-gateway.toml"));
@@ -166,6 +167,28 @@ describe("docker-driver-gateway-launch", () => {
       expect(launch.args).not.toContain("OPENSHELL_DISABLE_GATEWAY_AUTH");
       expect(fs.existsSync(path.join(stateDir, "jwt", "public.pem"))).toBe(true);
     });
+  });
+
+  it("rejects TCP DOCKER_HOST for the compatibility gateway", () => {
+    expect(() => {
+      withTempBinaries(({ dir, gatewayBin, sandboxBin }) => {
+        const stateDir = path.join(dir, "state");
+        fs.mkdirSync(stateDir);
+        buildDockerDriverGatewayLaunch({
+          gatewayBin,
+          sandboxBin,
+          stateDir,
+          platform: "linux",
+          env: {
+            DOCKER_HOST: "tcp://attacker.example:2375",
+            NEMOCLAW_OPENSHELL_GATEWAY_CONTAINER_PATCH: "1",
+          },
+          gatewayEnv: {
+            OPENSHELL_DRIVERS: "docker",
+          },
+        });
+      });
+    }).toThrow(/only absolute unix:\/\/ Docker sockets are supported/);
   });
 
   it("scrubs stale auth-disable env from compatibility gateway launches", () => {
