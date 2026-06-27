@@ -258,6 +258,8 @@ runIssue4434LiveTest(
     const routePlain = stripTerminalControl(resultText(route));
     expect(routePlain).toContain(`Provider: ${hosted.providerName}`);
     expect(routePlain).toContain(`Model: ${hosted.model}`);
+    const originalRouteTimeout = routePlain.match(/Timeout:\s*(\d+)s/i)?.[1] ?? "0";
+    expect(originalRouteTimeout, `could not parse inference timeout\n${routePlain}`).not.toBe("0");
 
     const completionPayload = JSON.stringify({
       model: hosted.model,
@@ -331,49 +333,78 @@ runIssue4434LiveTest(
       return fakeClosePromise;
     };
     cleanup.add("close issue #4434 fake OpenAI-compatible endpoint", closeFake);
-    cleanup.add("restore issue #4434 hosted provider endpoint", async () => {
-      const restore = await host.command(
+    await artifacts.writeJson("issue4434-fake-openai-endpoint.json", { baseUrl: fake.baseUrl });
+
+    const fakeProviderName = `issue-4434-fake-${new URL(fake.baseUrl).port}`;
+    const createProvider = await host.command(
+      "openshell",
+      [
+        "provider",
+        "create",
+        "-g",
+        "nemoclaw",
+        "--name",
+        fakeProviderName,
+        "--type",
+        "openai",
+        "--credential",
+        "COMPATIBLE_API_KEY",
+        "--config",
+        `OPENAI_BASE_URL=${fake.baseUrl}`,
+      ],
+      {
+        artifactName: "issue4434-create-fake-provider",
+        env: {
+          ...buildAvailabilityProbeEnv(),
+          COMPATIBLE_API_KEY: "issue-4434-test-only",
+        },
+        timeoutMs: 30_000,
+      },
+    );
+    expect(createProvider.exitCode, resultText(createProvider)).toBe(0);
+
+    cleanup.add("delete issue #4434 fake inference provider", async () => {
+      const removeProvider = await host.command(
         "openshell",
-        [
-          "provider",
-          "update",
-          "-g",
-          "nemoclaw",
-          hosted.providerName,
-          "--config",
-          `OPENAI_BASE_URL=${hosted.endpointUrl}`,
-        ],
+        ["provider", "delete", "-g", "nemoclaw", fakeProviderName],
         {
-          artifactName: "cleanup-issue4434-restore-provider-endpoint",
+          artifactName: "cleanup-issue4434-delete-fake-provider",
           env: buildAvailabilityProbeEnv(),
           timeoutMs: 30_000,
         },
       );
       expect(
-        restore.exitCode,
-        `failed to restore hosted provider endpoint\n${resultText(restore)}`,
+        removeProvider.exitCode,
+        `failed to delete fake inference provider\n${resultText(removeProvider)}`,
       ).toBe(0);
     });
-    await artifacts.writeJson("issue4434-fake-openai-endpoint.json", { baseUrl: fake.baseUrl });
-
-    const updateProvider = await host.command(
-      "openshell",
-      [
-        "provider",
-        "update",
-        "-g",
-        "nemoclaw",
-        hosted.providerName,
-        "--config",
-        `OPENAI_BASE_URL=${fake.baseUrl}`,
-      ],
-      {
-        artifactName: "issue4434-update-provider-to-fake-endpoint",
-        env: buildAvailabilityProbeEnv(),
-        timeoutMs: 30_000,
-      },
-    );
-    expect(updateProvider.exitCode, resultText(updateProvider)).toBe(0);
+    cleanup.add("restore issue #4434 hosted inference route", async () => {
+      const restoreRoute = await host.command(
+        "openshell",
+        [
+          "inference",
+          "set",
+          "-g",
+          "nemoclaw",
+          "--no-verify",
+          "--provider",
+          hosted.providerName,
+          "--model",
+          hosted.model,
+          "--timeout",
+          originalRouteTimeout,
+        ],
+        {
+          artifactName: "cleanup-issue4434-restore-inference-route",
+          env: buildAvailabilityProbeEnv(),
+          timeoutMs: 30_000,
+        },
+      );
+      expect(
+        restoreRoute.exitCode,
+        `failed to restore hosted inference route\n${resultText(restoreRoute)}`,
+      ).toBe(0);
+    });
 
     const updateRoute = await host.command(
       "openshell",
@@ -384,7 +415,7 @@ runIssue4434LiveTest(
         "nemoclaw",
         "--no-verify",
         "--provider",
-        hosted.providerName,
+        fakeProviderName,
         "--model",
         hosted.model,
         "--timeout",
@@ -417,7 +448,9 @@ runIssue4434LiveTest(
     await artifacts.writeJson("issue4434-fake-openai-requests.json", fakeRequests);
     expect(
       fakeRequests.some(
-        (request) => request.method === "POST" && request.path === "/v1/chat/completions",
+        (request) =>
+          request.method === "POST" &&
+          ["/chat/completions", "/v1/chat/completions"].includes(request.path),
       ),
       `managed inference did not send a chat completion to the fake endpoint: ${JSON.stringify(fakeRequests)}`,
     ).toBe(true);
