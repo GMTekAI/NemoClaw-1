@@ -646,9 +646,9 @@ test.skipIf(!shouldRunLiveE2EScenarios())(
     expect(recoverHostHealth.exitCode, resultText(recoverHostHealth)).toBe(0);
     expect(resultText(recoverHostHealth)).toMatch(/"ok"/i);
 
-    if (hermesDashboardE2eEnabled()) {
+    for (const dashboardPort of hermesDashboardE2eEnabled() ? [HERMES_DASHBOARD_PORT] : []) {
       const stopDashboardForward = await sandbox.openshell(
-        ["forward", "stop", HERMES_DASHBOARD_PORT, SANDBOX_NAME],
+        ["forward", "stop", dashboardPort, SANDBOX_NAME],
         {
           artifactName: "phase-5-stop-hermes-dashboard-forward-before-recover",
           env: commandEnv(),
@@ -659,7 +659,7 @@ test.skipIf(!shouldRunLiveE2EScenarios())(
 
       const dashboardDown = await host.command(
         "curl",
-        ["-sf", "--max-time", "3", `http://127.0.0.1:${HERMES_DASHBOARD_PORT}/`],
+        ["-sf", "--max-time", "3", `http://127.0.0.1:${dashboardPort}/`],
         {
           artifactName: "phase-5-hermes-dashboard-host-down-after-forward-stop",
           env: commandEnv(),
@@ -686,7 +686,7 @@ test.skipIf(!shouldRunLiveE2EScenarios())(
           "/tmp/hermes-dashboard-recovered-vitest-body",
           "-w",
           "%{http_code}",
-          `http://127.0.0.1:${HERMES_DASHBOARD_PORT}/`,
+          `http://127.0.0.1:${dashboardPort}/`,
         ],
         {
           artifactName: "phase-5-hermes-dashboard-host-after-forward-recover",
