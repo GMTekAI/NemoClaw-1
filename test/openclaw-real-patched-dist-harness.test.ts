@@ -119,10 +119,14 @@ function runDockerfilePatchBlock(dist: string, tmp: string, version: string) {
 }
 
 function grepRealDist(dist: string, needle: string) {
-  return spawnSync("bash", ["-lc", `grep -RIlF --include='*.js' ${shellQuote(needle)} ${shellQuote(dist)}`], {
-    encoding: "utf-8",
-    timeout: 10000,
-  });
+  return spawnSync(
+    "bash",
+    ["-lc", `grep -RIlF --include='*.js' ${shellQuote(needle)} ${shellQuote(dist)}`],
+    {
+      encoding: "utf-8",
+      timeout: 10000,
+    },
+  );
 }
 
 describe.skipIf(process.env.NEMOCLAW_REAL_OPENCLAW_DIST_HARNESS !== "1")(
