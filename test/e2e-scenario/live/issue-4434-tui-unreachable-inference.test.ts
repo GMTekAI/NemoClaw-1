@@ -242,7 +242,6 @@ runIssue4434LiveTest(
     expect(status.exitCode, resultText(status)).toBe(0);
     expect(resultText(status)).toMatch(/managed_inference|inference\.local/i);
     expect(resultText(status)).toMatch(/Docker health:\s*healthy/i);
-
     const route = await host.command(
       "bash",
       ["-lc", "openshell inference get -g nemoclaw 2>&1 || openshell inference get 2>&1"],
