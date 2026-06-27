@@ -97,8 +97,7 @@ describe("docker-driver-gateway compatibility container", () => {
       const configPath = launch.env.OPENSHELL_GATEWAY_CONFIG;
       expect(configPath).toBe(path.join(stateDir, "openshell-gateway.toml"));
       expect(configPath).toBeDefined();
-      if (!configPath) throw new Error("expected generated gateway config path");
-      const toml = fs.readFileSync(configPath, "utf-8");
+      const toml = fs.readFileSync(configPath as string, "utf-8");
       expect(toml).toContain(`supervisor_bin = "${sandboxBin}"`);
       expect(toml).toContain("disable_tls = false");
       expect(toml).toContain("[openshell.gateway.tls]");
