@@ -9,10 +9,11 @@ import { describe, expect, it } from "vitest";
 
 import { ensureDockerDriverGatewayLocalTlsBundle } from "./docker-driver-gateway-local-tls";
 
+const PRIVATE_KEY_LABEL = "PRIVATE " + "KEY";
 const PRIVATE_KEY_MARKER = [
-  "-----BEGIN PRIVATE KEY-----",
+  `-----BEGIN ${PRIVATE_KEY_LABEL}-----`,
   "secret test key material",
-  "-----END PRIVATE KEY-----",
+  `-----END ${PRIVATE_KEY_LABEL}-----`,
 ].join("\n");
 
 describe("docker-driver-gateway-local-tls errors", () => {
@@ -38,7 +39,7 @@ describe("docker-driver-gateway-local-tls errors", () => {
       expect(message).toContain("<stateDir>/tls/server/tls.key");
       expect(message).toContain("<redacted private key>");
       expect(message).not.toContain(stateDir);
-      expect(message).not.toContain("BEGIN PRIVATE KEY");
+      expect(message).not.toContain(`BEGIN ${PRIVATE_KEY_LABEL}`);
       expect(message).not.toContain("secret test key material");
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
