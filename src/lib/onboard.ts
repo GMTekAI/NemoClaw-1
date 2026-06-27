@@ -3067,6 +3067,27 @@ async function createSandbox(
 
   dockerGpuCreatePatch.exitOnPatchError();
 
+  const restoreBackupPath =
+    pendingStateRestore?.manifest?.backupPath ?? pendingStateRestoreBackupPath;
+  const printSandboxCreateDiagnostics = () => {
+    const diagnostics = sandboxCreateFailureDiagnostics.collectSandboxCreateFailureDiagnostics(
+      sandboxName,
+      { backupPath: restoreBackupPath },
+    );
+    if (!diagnostics) return;
+
+    console.error(`  Diagnostics saved: ${diagnostics.dir}`);
+    if (diagnostics.summaryLines.length > 0) {
+      console.error("  Recent OpenShell gateway failure:");
+      for (const line of diagnostics.summaryLines) {
+        console.error(`    ${line}`);
+      }
+    }
+    if (diagnostics.backupPath) {
+      console.error(`  State backup retained: ${diagnostics.backupPath}`);
+    }
+  };
+
   if (createResult.status !== 0) {
     const failure = classifySandboxCreateFailure(createResult.output);
     if (failure.kind === "sandbox_create_incomplete") {
@@ -3085,6 +3106,7 @@ async function createSandbox(
         console.error("");
         console.error(createResult.output);
       }
+      printSandboxCreateDiagnostics();
       console.error("  Try:  openshell sandbox list        # check gateway state");
       printSandboxCreateRecoveryHints(createResult.output, { createArgs });
       process.exit(createResult.status || 1);
@@ -3108,28 +3130,10 @@ async function createSandbox(
     sleep: sleepSeconds,
   });
 
-  const restoreBackupPath =
-    pendingStateRestore?.manifest?.backupPath ?? pendingStateRestoreBackupPath;
-
   if (!readiness.ready) {
-    const diagnostics = sandboxCreateFailureDiagnostics.collectSandboxCreateFailureDiagnostics(
-      sandboxName,
-      { backupPath: restoreBackupPath },
-    );
     console.error("");
     sandboxReadinessTracing.printReadinessFailure(readiness, sandboxName, sandboxReadyTimeoutSecs);
-    if (diagnostics) {
-      console.error(`  Diagnostics saved: ${diagnostics.dir}`);
-      if (diagnostics.summaryLines.length > 0) {
-        console.error("  Recent OpenShell gateway failure:");
-        for (const line of diagnostics.summaryLines) {
-          console.error(`    ${line}`);
-        }
-      }
-      if (diagnostics.backupPath) {
-        console.error(`  State backup retained: ${diagnostics.backupPath}`);
-      }
-    }
+    printSandboxCreateDiagnostics();
     if (useDockerGpuPatch) {
       dockerGpuCreatePatch.printReadinessFailureIfEnabled();
     } else {

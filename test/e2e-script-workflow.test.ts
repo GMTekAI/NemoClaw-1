@@ -976,6 +976,10 @@ describe("E2E reusable workflow contract", () => {
     expect(networkPolicyEnv.NEMOCLAW_OPENSHELL_ARTIFACT_RUN_ID).toBe(
       "${{ github.event_name == 'workflow_dispatch' && inputs.openshell_artifact_run_id || '' }}",
     );
+    const networkPolicyArtifactPath = nightlyWorkflow.jobs["network-policy-e2e"].with
+      ?.artifact_path as string | undefined;
+    expect(networkPolicyArtifactPath).toContain("test-network-policy-*.log");
+    expect(networkPolicyArtifactPath).toContain("/home/runner/.nemoclaw/onboard-failures/**");
   });
 
   it("exports checked-out commit SHAs for reusable public-installer jobs", () => {

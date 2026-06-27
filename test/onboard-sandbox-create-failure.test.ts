@@ -56,4 +56,15 @@ describe("sandbox create failure diagnostics", () => {
       "backup_path=/tmp/pre-upgrade-backup",
     );
   });
+
+  it("prints diagnostics for immediate create command failures", () => {
+    const source = fs.readFileSync(path.join(process.cwd(), "src/lib/onboard.ts"), "utf-8");
+
+    expect(source).toMatch(
+      /Sandbox creation failed \(exit \$\{createResult\.status\}\)\.[\s\S]*printSandboxCreateDiagnostics\(\);[\s\S]*printSandboxCreateRecoveryHints/,
+    );
+    expect(source).toMatch(
+      /printReadinessFailure\(readiness, sandboxName, sandboxReadyTimeoutSecs\);[\s\S]*printSandboxCreateDiagnostics\(\);/,
+    );
+  });
 });
