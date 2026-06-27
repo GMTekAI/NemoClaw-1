@@ -12,7 +12,12 @@ import { R } from "../../cli/terminal-style";
 import * as registry from "../../state/registry";
 import type { SandboxCommandResult } from "./process-recovery";
 
-type SecretBoundaryRefusalReason = "raw-secret" | "exec-failed" | "inconclusive";
+export type SecretBoundaryRefusalReason =
+  | "raw-secret"
+  | "exec-failed"
+  | "validator-missing"
+  | "unexpected-marker"
+  | "agent-missing";
 
 export type HermesSecretBoundaryEnforcement =
   | { refused: false }
@@ -52,7 +57,7 @@ export function enforceHermesSecretBoundaryOnRunningGateway(
       `  ${R}Hermes agent definition could not be loaded for sandbox '${sandboxName}'.${R}`,
     );
     console.error("  Refusing recovery to keep the validator-enforced boundary intact.");
-    return { refused: true, reason: "inconclusive", stderr: "" };
+    return { refused: true, reason: "agent-missing", stderr: "" };
   }
   const script = buildHermesEnvFileBoundaryStandaloneCheck();
   const result = executeSandboxExecCommand(sandboxName, script, 30000);
@@ -92,7 +97,7 @@ export function enforceHermesSecretBoundaryOnRunningGateway(
     console.error(
       "  Refusing recovery because /sandbox/.hermes/.env could not be re-evaluated. Re-image the sandbox with a current Hermes build.",
     );
-    return { refused: true, reason: "inconclusive", stderr: result.stderr };
+    return { refused: true, reason: "validator-missing", stderr: result.stderr };
   }
   printValidatorStderr(result.stderr);
   console.error("");
@@ -102,5 +107,5 @@ export function enforceHermesSecretBoundaryOnRunningGateway(
   console.error(
     "  Refusing recovery; inspect the validator output above before re-running `nemoclaw <sandbox> recover`.",
   );
-  return { refused: true, reason: "inconclusive", stderr: result.stderr };
+  return { refused: true, reason: "unexpected-marker", stderr: result.stderr };
 }

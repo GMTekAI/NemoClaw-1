@@ -62,7 +62,7 @@ describe("enforceHermesSecretBoundaryOnRunningGateway", () => {
 
     const result = enforceHermesSecretBoundaryOnRunningGateway(SANDBOX, null, exec);
 
-    expect(result).toEqual({ refused: true, reason: "inconclusive", stderr: "" });
+    expect(result).toEqual({ refused: true, reason: "agent-missing", stderr: "" });
     expect(exec).not.toHaveBeenCalled();
     expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("could not be loaded"));
   });
@@ -114,8 +114,24 @@ describe("enforceHermesSecretBoundaryOnRunningGateway", () => {
 
     const result = enforceHermesSecretBoundaryOnRunningGateway(SANDBOX, HERMES_AGENT, exec);
 
-    expect(result).toEqual({ refused: true, reason: "inconclusive", stderr: "missing\n" });
+    expect(result).toEqual({ refused: true, reason: "validator-missing", stderr: "missing\n" });
     expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("validator missing"));
     expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("Re-image the sandbox"));
+  });
+
+  it("distinguishes unrecognized validator output from infrastructure failures", () => {
+    mockSandboxAgent("hermes");
+    const exec = vi.fn(() => makeExecResult("unexpected output\n", "validator failed\n", 1));
+
+    const result = enforceHermesSecretBoundaryOnRunningGateway(SANDBOX, HERMES_AGENT, exec);
+
+    expect(result).toEqual({
+      refused: true,
+      reason: "unexpected-marker",
+      stderr: "validator failed\n",
+    });
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("did not complete cleanly"),
+    );
   });
 });

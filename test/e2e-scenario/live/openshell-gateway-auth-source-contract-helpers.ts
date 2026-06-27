@@ -130,6 +130,17 @@ export function assertOpenShellGatewayAuthArtifactsSafe(rootDir: string): void {
   visit(root);
 }
 
+export async function withOpenShellGatewayAuthArtifactSafety<T>(
+  rootDir: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await operation();
+  } finally {
+    assertOpenShellGatewayAuthArtifactsSafe(rootDir);
+  }
+}
+
 function resolveGatewayBin(): string | null {
   for (const candidate of [
     path.join(os.homedir(), ".local", "bin", "openshell-gateway"),
@@ -622,7 +633,7 @@ function createDockerBindableTempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(root, prefix));
 }
 
-export async function runOpenShellGatewayAuthSourceContractScenario({
+async function runOpenShellGatewayAuthSourceContractScenarioUnchecked({
   artifacts,
   cleanup,
   host,
@@ -793,5 +804,12 @@ export async function runOpenShellGatewayAuthSourceContractScenario({
   ).toBe(true);
 
   await artifacts.writeText("openshell-gateway.log", gatewayLog);
-  assertOpenShellGatewayAuthArtifactsSafe(artifacts.rootDir);
+}
+
+export async function runOpenShellGatewayAuthSourceContractScenario(
+  fixtures: ScenarioFixtures,
+): Promise<void> {
+  await withOpenShellGatewayAuthArtifactSafety(fixtures.artifacts.rootDir, () =>
+    runOpenShellGatewayAuthSourceContractScenarioUnchecked(fixtures),
+  );
 }

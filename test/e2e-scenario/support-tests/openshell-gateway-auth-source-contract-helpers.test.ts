@@ -11,6 +11,7 @@ import {
   assertOpenShellGatewayAuthArtifactsSafe,
   buildSandboxTokenContainerProbeDockerArgs,
   skipUnavailableProbeImage,
+  withOpenShellGatewayAuthArtifactSafety,
 } from "../live/openshell-gateway-auth-source-contract-helpers.ts";
 
 function valuesAfterFlag(args: string[], flag: string): string[] {
@@ -165,5 +166,19 @@ describe("OpenShell gateway auth source contract helpers", () => {
         /sensitive auth file name/,
       );
     });
+  });
+
+  it("scans artifacts in the failure path before a workflow upload can run", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-auth-artifact-scan-"));
+    try {
+      await expect(
+        withOpenShellGatewayAuthArtifactSafety(dir, async () => {
+          fs.writeFileSync(path.join(dir, "failed-probe.json"), '{"authorization":"redacted"}\n');
+          throw new Error("scenario failed");
+        }),
+      ).rejects.toThrow(/failed-probe\.json.*authorization header/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
