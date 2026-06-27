@@ -806,10 +806,13 @@ async function runOpenShellGatewayAuthSourceContractScenarioUnchecked({
   await artifacts.writeText("openshell-gateway.log", gatewayLog);
 }
 
-export async function runOpenShellGatewayAuthSourceContractScenario(
-  fixtures: ScenarioFixtures,
-): Promise<void> {
-  await withOpenShellGatewayAuthArtifactSafety(fixtures.artifacts.rootDir, () =>
-    runOpenShellGatewayAuthSourceContractScenarioUnchecked(fixtures),
+export async function runOpenShellGatewayAuthSourceContractScenario({
+  artifacts,
+  cleanup,
+  host,
+  skip,
+}: ScenarioFixtures): Promise<void> {
+  await withOpenShellGatewayAuthArtifactSafety(artifacts.rootDir, () =>
+    runOpenShellGatewayAuthSourceContractScenarioUnchecked({ artifacts, cleanup, host, skip }),
   );
 }
