@@ -31,13 +31,14 @@ function createExec(installed = true): { calls: RunCall[]; privileged: Privilege
     privileged: {
       run: (cmd, input) => {
         calls.push({ cmd, input });
-        if (cmd[0] === "test") {
-          return {
-            status: installed ? 0 : 1,
-            signal: null,
-            stdout: "",
-            stderr: "",
-          };
+        switch (cmd[0]) {
+          case "test":
+            return {
+              status: installed ? 0 : 1,
+              signal: null,
+              stdout: "",
+              stderr: "",
+            };
         }
         const pythonIndex = cmd.indexOf("python3");
         const action = cmd[pythonIndex + 3];
@@ -101,8 +102,9 @@ describe("recursive state-dir lock host wiring", () => {
   it("surfaces structured helper findings and rejects contradictory exit contracts", () => {
     const privileged: PrivilegedExec = {
       run: (cmd) => {
-        if (cmd[0] === "test") {
-          return { status: 0, signal: null, stdout: "", stderr: "" };
+        switch (cmd[0]) {
+          case "test":
+            return { status: 0, signal: null, stdout: "", stderr: "" };
         }
         return {
           status: 0,

@@ -77,15 +77,22 @@ function createDestroyHarness(options: DestroyHarnessOptions = {}): DestroyHarne
   vi.spyOn(onboardSession, "loadSession").mockReturnValue({ sandboxName: "alpha" });
   vi.spyOn(onboardSession, "updateSession").mockImplementation((mutator: unknown) => {
     const session = { sandboxName: "alpha" };
-    if (typeof mutator === "function") (mutator as (value: typeof session) => void)(session);
+    typeof mutator === "function" && (mutator as (value: typeof session) => void)(session);
     return session;
   });
   const runOpenshellSpy = vi.spyOn(runtime, "runOpenshell").mockImplementation((args: unknown) => {
     const argv = Array.isArray(args) ? args : [];
-    if (argv[0] === "sandbox" && argv[1] === "exec") events.push("wipe");
-    if (argv[0] === "sandbox" && argv[1] === "delete") {
-      events.push("delete");
-      return { status: options.deleteStatus ?? 0, stdout: options.deleteOutput ?? "", stderr: "" };
+    switch (`${String(argv[0])} ${String(argv[1])}`) {
+      case "sandbox exec":
+        events.push("wipe");
+        break;
+      case "sandbox delete":
+        events.push("delete");
+        return {
+          status: options.deleteStatus ?? 0,
+          stdout: options.deleteOutput ?? "",
+          stderr: "",
+        };
     }
     return { status: 0, stdout: "", stderr: "" };
   });
@@ -127,7 +134,13 @@ function createDestroyHarness(options: DestroyHarnessOptions = {}): DestroyHarne
   );
   const shieldsUpSpy = vi.spyOn(shields, "shieldsUp").mockImplementation(() => {
     events.push("harden");
-    if (options.shieldsUpError) throw options.shieldsUpError;
+    const shieldsUpError = options.shieldsUpError;
+    switch (shieldsUpError) {
+      case undefined:
+        break;
+      default:
+        throw shieldsUpError;
+    }
   });
   const killTimerSpy = vi.spyOn(timerControl, "killTimer").mockImplementation(() => {
     events.push("timer-cleanup");

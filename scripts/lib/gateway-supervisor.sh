@@ -251,8 +251,9 @@ gateway_control_stop_tracked_pid() {
   state="$(gateway_control_pid_state "$pid")" || return 0
   case "$state" in
     Z*)
-      gateway_control_pid_matches_start_identity "$pid" "$expected_start_identity" \
-        && wait "$pid" 2>/dev/null || true
+      if gateway_control_pid_matches_start_identity "$pid" "$expected_start_identity"; then
+        wait "$pid" 2>/dev/null || true
+      fi
       return 0
       ;;
   esac
@@ -266,8 +267,9 @@ gateway_control_stop_tracked_pid() {
     state="$(gateway_control_pid_state "$pid")" || return 0
     case "$state" in
       Z*)
-        gateway_control_pid_matches_start_identity "$pid" "$expected_start_identity" \
-          && wait "$pid" 2>/dev/null || true
+        if gateway_control_pid_matches_start_identity "$pid" "$expected_start_identity"; then
+          wait "$pid" 2>/dev/null || true
+        fi
         return 0
         ;;
     esac
@@ -278,8 +280,9 @@ gateway_control_stop_tracked_pid() {
   state="$(gateway_control_pid_state "$pid")" || return 0
   case "$state" in
     Z*)
-      gateway_control_pid_matches_start_identity "$pid" "$expected_start_identity" \
-        && wait "$pid" 2>/dev/null || true
+      if gateway_control_pid_matches_start_identity "$pid" "$expected_start_identity"; then
+        wait "$pid" 2>/dev/null || true
+      fi
       return 0
       ;;
   esac
@@ -292,8 +295,9 @@ gateway_control_stop_tracked_pid() {
     state="$(gateway_control_pid_state "$pid")" || return 0
     case "$state" in
       Z*)
-        gateway_control_pid_matches_start_identity "$pid" "$expected_start_identity" \
-          && wait "$pid" 2>/dev/null || true
+        if gateway_control_pid_matches_start_identity "$pid" "$expected_start_identity"; then
+          wait "$pid" 2>/dev/null || true
+        fi
         return 0
         ;;
     esac

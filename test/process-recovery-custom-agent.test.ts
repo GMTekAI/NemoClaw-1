@@ -111,15 +111,15 @@ describe("checkAndRecoverSandboxProcesses custom agent recovery", () => {
       output: "Host openshell-custom-box\n  HostName 127.0.0.1\n",
     } as never);
     vi.spyOn(childProcess, "spawnSync").mockImplementation((command: unknown, rawArgs: unknown) => {
-      if (String(command).endsWith("openshell")) {
-        return { status: 1, stdout: "", stderr: "sandbox exec unavailable" } as never;
-      }
-      if (command === "ssh") {
-        const sshCommand = getSandboxExecShellCommand(rawArgs);
-        sshCommands.push(sshCommand);
-        return { status: 0, stdout: "RUNNING\n", stderr: "" } as never;
-      }
-      return { status: 1, stdout: "", stderr: "" } as never;
+      const sshCommand = getSandboxExecShellCommand(rawArgs);
+      sshCommands.push(...(command === "ssh" ? [sshCommand] : []));
+      return (
+        String(command).endsWith("openshell")
+          ? { status: 1, stdout: "", stderr: "sandbox exec unavailable" }
+          : command === "ssh"
+            ? { status: 0, stdout: "RUNNING\n", stderr: "" }
+            : { status: 1, stdout: "", stderr: "" }
+      ) as never;
     });
     vi.spyOn(agentRuntime, "getSessionAgent").mockReturnValue({
       name: "custom-agent",

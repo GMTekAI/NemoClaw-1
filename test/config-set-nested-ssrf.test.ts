@@ -9,6 +9,11 @@ const requireCache: Record<string, unknown> = require.cache as any;
 
 type MockGuardRestore = (() => void) & { guardSpy: ReturnType<typeof vi.fn> };
 
+function restoreCachedModule(modulePath: string, previous: unknown): void {
+  Reflect.deleteProperty(requireCache, modulePath);
+  Object.assign(requireCache, previous === undefined ? {} : { [modulePath]: previous });
+}
+
 function installMockPrivilegedExec(privilegedExecPath: string): MockGuardRestore {
   const priorPrivilegedExec = require.cache[privilegedExecPath];
   const timerBoundLockPath = require.resolve("../dist/lib/shields/timer-bound-lock");
@@ -64,12 +69,9 @@ function installMockPrivilegedExec(privilegedExecPath: string): MockGuardRestore
   } as any;
 
   const restore = (() => {
-    if (priorPrivilegedExec) requireCache[privilegedExecPath] = priorPrivilegedExec;
-    else delete requireCache[privilegedExecPath];
-    if (priorTimerBoundLock) requireCache[timerBoundLockPath] = priorTimerBoundLock;
-    else delete requireCache[timerBoundLockPath];
-    if (priorOpenClawConfigLock) requireCache[openClawConfigLockPath] = priorOpenClawConfigLock;
-    else delete requireCache[openClawConfigLockPath];
+    restoreCachedModule(privilegedExecPath, priorPrivilegedExec);
+    restoreCachedModule(timerBoundLockPath, priorTimerBoundLock);
+    restoreCachedModule(openClawConfigLockPath, priorOpenClawConfigLock);
   }) as MockGuardRestore;
   restore.guardSpy = guardSpy;
   return restore;

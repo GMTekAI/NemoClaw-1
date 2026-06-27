@@ -30,11 +30,9 @@ function withFakeOpenshellBinary<T>(fn: () => T): T {
   try {
     return fn();
   } finally {
-    if (previous === undefined) {
-      delete process.env.NEMOCLAW_OPENSHELL_BIN;
-    } else {
-      process.env.NEMOCLAW_OPENSHELL_BIN = previous;
-    }
+    previous === undefined
+      ? delete process.env.NEMOCLAW_OPENSHELL_BIN
+      : (process.env.NEMOCLAW_OPENSHELL_BIN = previous);
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }

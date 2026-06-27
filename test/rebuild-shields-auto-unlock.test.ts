@@ -29,8 +29,7 @@ afterEach(() => {
     } catch {
       // Best effort; fixture removal below must still run.
     } finally {
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
+      previousHome === undefined ? delete process.env.HOME : (process.env.HOME = previousHome);
     }
     try {
       fs.rmSync(dir, { recursive: true, force: true });

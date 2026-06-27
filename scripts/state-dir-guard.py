@@ -1083,6 +1083,7 @@ def _copy_stable_file_to_temp(
                     try:
                         _set_inode_flags(source_fd, source_flags)
                     except OSError:
+                        # Best effort: preserve the original operation failure.
                         pass
                 os.close(source_fd)
             if temp_fd >= 0:
@@ -1091,6 +1092,7 @@ def _copy_stable_file_to_temp(
                 try:
                     os.unlink(temp_name, dir_fd=parent_fd)
                 except FileNotFoundError:
+                    # Replacement or concurrent cleanup already removed it.
                     pass
     raise GuardOperationError(
         Issue(

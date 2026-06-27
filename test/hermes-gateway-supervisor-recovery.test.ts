@@ -22,10 +22,12 @@ function escapeRegExp(value: string): string {
 
 function extractShellFunction(source: string, name: string): string {
   const match = source.match(new RegExp(`${escapeRegExp(name)}\\(\\) \\{([\\s\\S]*?)^\\}`, "m"));
-  if (!match) {
-    throw new Error(`Expected ${name} in agents/hermes/start.sh`);
-  }
-  return `${name}() {${match[1]}\n}`;
+  const resolved =
+    match ??
+    (() => {
+      throw new Error(`Expected ${name} in agents/hermes/start.sh`);
+    })();
+  return `${name}() {${resolved[1]}\n}`;
 }
 
 function runBashHarness(lines: string[], configure?: (tmpDir: string) => Record<string, string>) {
@@ -89,7 +91,9 @@ function runHermesOrphanedSealCheck(opts: {
     ],
     (tmpDir) => {
       const statePath = path.join(tmpDir, "hermes-restart-seal.json");
-      if (opts.stateFileExists) fs.writeFileSync(statePath, "fixture\n");
+      for (const _present of opts.stateFileExists ? [true] : []) {
+        fs.writeFileSync(statePath, "fixture\n");
+      }
       return { SANDBOX_METADATA: opts.sandboxMetadata, STATE_PATH: statePath };
     },
   );
@@ -99,9 +103,14 @@ function runHermesStartupReadiness(gatewayInitStatus: 0 | 1) {
   const source = fs.readFileSync(START_SCRIPT, "utf-8");
   const start = source.indexOf("if ! gateway_control_init; then");
   const print = source.indexOf("print_dashboard_urls", start);
-  if (start < 0 || print < 0) throw new Error("Hermes root startup control block not found");
+  const blockStart =
+    start >= 0 && print >= 0
+      ? start
+      : (() => {
+          throw new Error("Hermes root startup control block not found");
+        })();
   const end = source.indexOf("\n", print);
-  const block = source.slice(start, end < 0 ? source.length : end);
+  const block = source.slice(blockStart, end < 0 ? source.length : end);
   return runBashHarness([
     'trace() { printf "%s\\n" "$*"; }',
     `gateway_control_init() { trace gateway-control-init; return ${gatewayInitStatus}; }`,

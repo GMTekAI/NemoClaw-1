@@ -394,9 +394,8 @@ describe("shields timer authorization", () => {
     const originalRename = fs.renameSync.bind(fs);
     const renameSpy = vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
       originalRename(source, destination);
-      if (String(source) === markerPath) {
+      String(source) === markerPath &&
         fs.writeFileSync(markerPath, JSON.stringify(replacementMarker));
-      }
     });
     try {
       expect(timer.cleanupOwnedTimerMarker(args!)).toBe(true);
@@ -485,10 +484,12 @@ describe("shields timer authorization", () => {
 
     const originalRename = fs.renameSync.bind(fs);
     const renameSpy = vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
-      if (String(destination) === stateFile) {
-        const error = new Error("simulated state commit failure") as NodeJS.ErrnoException;
-        error.code = "EIO";
-        throw error;
+      switch (String(destination)) {
+        case stateFile: {
+          const error = new Error("simulated state commit failure") as NodeJS.ErrnoException;
+          error.code = "EIO";
+          throw error;
+        }
       }
       return originalRename(source, destination);
     });

@@ -42,7 +42,7 @@ esac
 [ "$(stat -c '%U:%G %a' "$CONTROL_DIR" 2>/dev/null || true)" = "root:root 700" ] \
   || fail "SUPERVISOR_UNSAFE_CONTROL_DIR"
 mkdir "$LOCK_DIR" 2>/dev/null || fail "SUPERVISOR_BUSY"
-# shellcheck disable=SC2329  # invoked by the trap below
+# shellcheck disable=SC2317,SC2329  # invoked by the trap below
 cleanup() {
   [ -z "${REQUEST_TMP:-}" ] || rm -f "$REQUEST_TMP" 2>/dev/null || true
   rmdir "$LOCK_DIR" 2>/dev/null || true

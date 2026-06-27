@@ -119,18 +119,20 @@ describe("legacy Hermes shields compatibility", () => {
 
   function installExecResponses(help: string): void {
     dockerExecSpy.mockImplementation((cmd: string[]) => {
-      if (cmd.includes(HERMES_GUARD) && cmd.includes("--help")) return help;
-      if (isGuardAction(cmd, "begin-shields-transition")) {
-        return `lock_token=${LOCK_TOKEN} original_locked=1`;
+      switch (true) {
+        case cmd.includes(HERMES_GUARD) && cmd.includes("--help"):
+          return help;
+        case isGuardAction(cmd, "begin-shields-transition"):
+          return `lock_token=${LOCK_TOKEN} original_locked=1`;
+        case isGuardAction(cmd, "apply-shields-transition"):
+          return "shields_mode=mutable chattr_applied=0";
+        case cmd[0] === "stat":
+          return cmd.at(-1) === "/sandbox/.hermes" ? "3770 sandbox:sandbox" : "640 sandbox:sandbox";
+        case cmd[0] === "lsattr":
+          return `---------------- ${cmd.at(-1)}`;
+        default:
+          return "";
       }
-      if (isGuardAction(cmd, "apply-shields-transition")) {
-        return "shields_mode=mutable chattr_applied=0";
-      }
-      if (cmd[0] === "stat") {
-        return cmd.at(-1) === "/sandbox/.hermes" ? "3770 sandbox:sandbox" : "640 sandbox:sandbox";
-      }
-      if (cmd[0] === "lsattr") return `---------------- ${cmd.at(-1)}`;
-      return "";
     });
   }
 
@@ -270,14 +272,22 @@ describe("legacy Hermes shields compatibility", () => {
 
   it("descriptor-safely protects and verifies the sandbox parent when a failed rebuild relocks an old image", () => {
     dockerExecSpy.mockImplementation((cmd: string[]) => {
-      if (cmd.includes(HERMES_GUARD) && cmd.includes("--help")) return OLD_GUARD_HELP;
-      if (cmd[0] === "stat") {
-        if (cmd.at(-1) === "/sandbox") return "1775 root:sandbox";
-        return cmd.at(-1) === "/sandbox/.hermes" ? "755 root:root" : "444 root:root";
+      switch (true) {
+        case cmd.includes(HERMES_GUARD) && cmd.includes("--help"):
+          return OLD_GUARD_HELP;
+        case cmd[0] === "stat":
+          return cmd.at(-1) === "/sandbox"
+            ? "1775 root:sandbox"
+            : cmd.at(-1) === "/sandbox/.hermes"
+              ? "755 root:root"
+              : "444 root:root";
+        case cmd[0] === "lsattr":
+          return `----i----------- ${cmd.at(-1)}`;
+        case cmd[0] === "sha256sum":
+          return `${"b".repeat(64)}  ${cmd.at(-1)}`;
+        default:
+          return "";
       }
-      if (cmd[0] === "lsattr") return `----i----------- ${cmd.at(-1)}`;
-      if (cmd[0] === "sha256sum") return `${"b".repeat(64)}  ${cmd.at(-1)}`;
-      return "";
     });
 
     expect(() =>
@@ -301,14 +311,22 @@ describe("legacy Hermes shields compatibility", () => {
 
   it("refuses to report a legacy relock when sandbox parent protection did not hold", () => {
     dockerExecSpy.mockImplementation((cmd: string[]) => {
-      if (cmd.includes(HERMES_GUARD) && cmd.includes("--help")) return OLD_GUARD_HELP;
-      if (cmd[0] === "stat") {
-        if (cmd.at(-1) === "/sandbox") return "755 sandbox:sandbox";
-        return cmd.at(-1) === "/sandbox/.hermes" ? "755 root:root" : "444 root:root";
+      switch (true) {
+        case cmd.includes(HERMES_GUARD) && cmd.includes("--help"):
+          return OLD_GUARD_HELP;
+        case cmd[0] === "stat":
+          return cmd.at(-1) === "/sandbox"
+            ? "755 sandbox:sandbox"
+            : cmd.at(-1) === "/sandbox/.hermes"
+              ? "755 root:root"
+              : "444 root:root";
+        case cmd[0] === "lsattr":
+          return `----i----------- ${cmd.at(-1)}`;
+        case cmd[0] === "sha256sum":
+          return `${"b".repeat(64)}  ${cmd.at(-1)}`;
+        default:
+          return "";
       }
-      if (cmd[0] === "lsattr") return `----i----------- ${cmd.at(-1)}`;
-      if (cmd[0] === "sha256sum") return `${"b".repeat(64)}  ${cmd.at(-1)}`;
-      return "";
     });
 
     expect(() => shields.lockAgentConfig("legacy-hermes", hermesTarget(), false, true)).toThrow(
@@ -318,10 +336,12 @@ describe("legacy Hermes shields compatibility", () => {
 
   it("does not reinterpret a failed capability probe as permission to use the legacy path", () => {
     dockerExecSpy.mockImplementation((cmd: string[]) => {
-      if (cmd.includes(HERMES_GUARD) && cmd.includes("--help")) {
-        throw new Error("temporary Docker exec failure");
+      switch (cmd.includes(HERMES_GUARD) && cmd.includes("--help")) {
+        case true:
+          throw new Error("temporary Docker exec failure");
+        default:
+          return "";
       }
-      return "";
     });
 
     expect(() =>

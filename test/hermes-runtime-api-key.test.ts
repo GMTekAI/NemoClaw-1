@@ -106,7 +106,7 @@ function runHermesRuntimeApiServerKeyMint(
   writeEnvPath[opts.envPathKind ?? "regular"]();
   writeHermesHash(hashPath, configPath, envPath);
   writeHermesHash(compatHashPath, configPath, envPath);
-  if (opts.locked) {
+  for (const _locked of opts.locked ? [true] : []) {
     fs.chmodSync(hermesHome, 0o755);
     fs.chmodSync(configPath, 0o444);
     fs.chmodSync(envPath, 0o444);

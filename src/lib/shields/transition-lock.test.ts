@@ -18,6 +18,10 @@ const SELF_IDENTITY = "proc:self-start";
 const TAKEOVER_TOKEN = "a".repeat(32);
 const OTHER_TAKEOVER_TOKEN = "b".repeat(32);
 
+function runWhen(condition: boolean, action: () => void): void {
+  condition && action();
+}
+
 function owner(
   sandboxName: string,
   pid: number,
@@ -185,11 +189,11 @@ describe("host shields transition lock", () => {
     const originalOpenSync = fs.openSync;
     let swapped = false;
     vi.spyOn(fs, "openSync").mockImplementation(((file, flags, mode) => {
-      if (String(file) === lockPath && !swapped) {
+      runWhen(String(file) === lockPath && !swapped, () => {
         swapped = true;
         fs.renameSync(lockPath, displacedPath);
         fs.writeFileSync(lockPath, JSON.stringify(replacement), { mode: 0o600 });
-      }
+      });
       return originalOpenSync(file, flags, mode);
     }) as typeof fs.openSync);
 
@@ -217,10 +221,8 @@ describe("host shields transition lock", () => {
     const lockPath = writeOwner("alpha", recorded);
     const locker = manager({
       isProcessAlive: (pid) => pid === SELF_PID || pid === 202,
-      readProcessStartIdentity: (pid) => {
-        if (pid === SELF_PID) return SELF_IDENTITY;
-        return pid === 202 ? "proc:owner" : null;
-      },
+      readProcessStartIdentity: (pid) =>
+        pid === SELF_PID ? SELF_IDENTITY : pid === 202 ? "proc:owner" : null,
     });
 
     expect(
@@ -234,10 +236,8 @@ describe("host shields transition lock", () => {
     const lockPath = writeOwner("alpha", recorded);
     const locker = manager({
       isProcessAlive: (pid) => pid === SELF_PID || pid === 202,
-      readProcessStartIdentity: (pid) => {
-        if (pid === SELF_PID) return SELF_IDENTITY;
-        return pid === 202 ? "proc:reused" : null;
-      },
+      readProcessStartIdentity: (pid) =>
+        pid === SELF_PID ? SELF_IDENTITY : pid === 202 ? "proc:reused" : null,
     });
 
     expect(
@@ -266,10 +266,8 @@ describe("host shields transition lock", () => {
     );
     const locker = manager({
       isProcessAlive: (pid) => pid === SELF_PID || pid === 202,
-      readProcessStartIdentity: (pid) => {
-        if (pid === SELF_PID) return SELF_IDENTITY;
-        return pid === 202 ? "proc:reused" : null;
-      },
+      readProcessStartIdentity: (pid) =>
+        pid === SELF_PID ? SELF_IDENTITY : pid === 202 ? "proc:reused" : null,
     });
 
     expect(
@@ -292,19 +290,17 @@ describe("host shields transition lock", () => {
     const originalRenameSync = fs.renameSync;
     let raced = false;
     vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
-      if (String(source) === lockPath && !raced) {
+      runWhen(String(source) === lockPath && !raced, () => {
         raced = true;
         originalRenameSync(lockPath, displacedPath);
         fs.writeFileSync(lockPath, JSON.stringify(replacement), { mode: 0o600 });
-      }
+      });
       originalRenameSync(source, destination);
     });
     const locker = manager({
       isProcessAlive: (pid) => pid === SELF_PID || pid === 303,
-      readProcessStartIdentity: (pid) => {
-        if (pid === SELF_PID) return SELF_IDENTITY;
-        return pid === 303 ? "proc:replacement" : null;
-      },
+      readProcessStartIdentity: (pid) =>
+        pid === SELF_PID ? SELF_IDENTITY : pid === 303 ? "proc:replacement" : null,
     });
 
     const result = locker.takeoverShieldsTransitionLock("alpha", 202, "proc:owner", TAKEOVER_TOKEN);
@@ -330,10 +326,8 @@ describe("host shields transition lock", () => {
         fs.unlinkSync(lockPath);
       },
       isProcessAlive: (pid) => pid === holderPid || pid === SELF_PID,
-      readProcessStartIdentity: (pid) => {
-        if (pid === SELF_PID) return SELF_IDENTITY;
-        return pid === holderPid ? holderIdentity : null;
-      },
+      readProcessStartIdentity: (pid) =>
+        pid === SELF_PID ? SELF_IDENTITY : pid === holderPid ? holderIdentity : null,
     });
 
     expect(
@@ -403,10 +397,8 @@ describe("host shields transition lock", () => {
         nowMs += milliseconds;
       },
       isProcessAlive: (pid) => pid === holderPid || pid === SELF_PID,
-      readProcessStartIdentity: (pid) => {
-        if (pid === SELF_PID) return SELF_IDENTITY;
-        return pid === holderPid ? "proc:reused" : null;
-      },
+      readProcessStartIdentity: (pid) =>
+        pid === SELF_PID ? SELF_IDENTITY : pid === holderPid ? "proc:reused" : null,
     });
 
     expect(() =>
@@ -533,11 +525,14 @@ describe("host shields transition lock", () => {
     const originalRename = fs.renameSync.bind(fs);
     let armRace = false;
     vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
-      if (armRace && String(source) === lockPath && String(destination).includes(".release-")) {
-        armRace = false;
-        originalRename(lockPath, displacedPath);
-        fs.writeFileSync(lockPath, JSON.stringify(replacement), { mode: 0o600 });
-      }
+      runWhen(
+        armRace && String(source) === lockPath && String(destination).includes(".release-"),
+        () => {
+          armRace = false;
+          originalRename(lockPath, displacedPath);
+          fs.writeFileSync(lockPath, JSON.stringify(replacement), { mode: 0o600 });
+        },
+      );
       return originalRename(source, destination);
     });
 

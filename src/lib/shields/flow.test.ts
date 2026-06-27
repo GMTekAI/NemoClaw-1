@@ -61,7 +61,7 @@ function createHarness(options: HarnessOptions = {}): ShieldsHarness {
   const runSpy = vi.spyOn(runner, "run").mockImplementation((cmd: unknown) => {
     return options.run ? options.run(cmd) : { status: 0 };
   });
-  if (options.fork) vi.spyOn(childProcess, "fork").mockImplementation(options.fork);
+  options.fork && vi.spyOn(childProcess, "fork").mockImplementation(options.fork);
   vi.spyOn(policy, "buildPolicyGetCommand").mockReturnValue(["openshell", "policy", "get"]);
   vi.spyOn(policy, "buildPolicySetCommand").mockReturnValue(["openshell", "policy", "set"]);
   vi.spyOn(policy, "parseCurrentPolicy").mockImplementation((raw: unknown) => String(raw));
@@ -91,8 +91,12 @@ function createHarness(options: HarnessOptions = {}): ShieldsHarness {
     const args = Array.isArray(argv) ? argv.map(String) : [];
     const action = ["preflight", "lock", "unlock"].find((candidate) => args.includes(candidate));
     const openClawGuard = args.some((arg) => arg.endsWith("openclaw-config-guard.py"));
-    if (openClawGuard && action === "lock") openClawPosture = "locked";
-    if (openClawGuard && action === "unlock") openClawPosture = "mutable";
+    openClawPosture =
+      openClawGuard && action === "lock"
+        ? "locked"
+        : openClawGuard && action === "unlock"
+          ? "mutable"
+          : openClawPosture;
     return {
       status: 0,
       signal: null,
@@ -116,23 +120,24 @@ function createHarness(options: HarnessOptions = {}): ShieldsHarness {
     } as never;
   });
   vi.spyOn(dockerExec, "dockerExecFileSync").mockImplementation((argv: unknown) => {
-    if (options.dockerExecFileSync) return options.dockerExecFileSync(argv);
     const args = Array.isArray(argv) ? argv.map(String) : [];
-    return args.includes("sha256sum")
-      ? "a".repeat(64) + "  /sandbox/.openclaw/openclaw.json\n"
-      : args.includes("stat")
-        ? args.at(-1) === "/sandbox"
-          ? openClawPosture === "locked"
-            ? "1775 root:sandbox\n"
-            : "755 sandbox:sandbox\n"
-          : args.at(-1) === "/sandbox/.openclaw"
+    return options.dockerExecFileSync
+      ? options.dockerExecFileSync(argv)
+      : args.includes("sha256sum")
+        ? "a".repeat(64) + "  /sandbox/.openclaw/openclaw.json\n"
+        : args.includes("stat")
+          ? args.at(-1) === "/sandbox"
             ? openClawPosture === "locked"
-              ? "755 root:root\n"
-              : "2770 sandbox:sandbox\n"
-            : openClawPosture === "locked"
-              ? "444 root:root\n"
-              : "660 sandbox:sandbox\n"
-        : "";
+              ? "1775 root:sandbox\n"
+              : "755 sandbox:sandbox\n"
+            : args.at(-1) === "/sandbox/.openclaw"
+              ? openClawPosture === "locked"
+                ? "755 root:root\n"
+                : "2770 sandbox:sandbox\n"
+              : openClawPosture === "locked"
+                ? "444 root:root\n"
+                : "660 sandbox:sandbox\n"
+          : "";
   });
   const auditSpy = vi.spyOn(audit, "appendAuditEntry").mockImplementation(() => undefined);
 
@@ -229,16 +234,20 @@ describe("shields command flow", () => {
       },
       dockerExecFileSync: (argv: unknown) => {
         const args = Array.isArray(argv) ? argv.map(String) : [];
-        if (args.includes("sha256sum")) {
-          return `${"a".repeat(64)}  ${String(args.at(-1))}\n`;
+        switch (true) {
+          case args.includes("sha256sum"):
+            return `${"a".repeat(64)}  ${String(args.at(-1))}\n`;
+          case args.includes("lsattr"):
+            return `----i---------e----- ${String(args.at(-1))}\n`;
+          case args.includes("stat"):
+            return args.at(-1) === "/sandbox"
+              ? "1775 root:sandbox\n"
+              : args.at(-1) === "/sandbox/.openclaw"
+                ? "755 root:root\n"
+                : "444 root:root\n";
+          default:
+            return "";
         }
-        if (args.includes("lsattr")) return `----i---------e----- ${String(args.at(-1))}\n`;
-        if (args.includes("stat")) {
-          if (args.at(-1) === "/sandbox") return "1775 root:sandbox\n";
-          if (args.at(-1) === "/sandbox/.openclaw") return "755 root:root\n";
-          return "444 root:root\n";
-        }
-        return "";
       },
     });
     harness.shieldsUp(sandboxName, { throwOnError: true });
@@ -504,17 +513,18 @@ describe("shields command flow", () => {
       dockerExecFileSync: (argv: unknown) => {
         const args = Array.isArray(argv) ? argv.map(String) : [];
         observedPreparingDuringUnlock ||= readOnlyTransition().phase === "preparing";
-        if (args.includes("sha256sum")) {
-          return `${"a".repeat(64)}  /sandbox/.openclaw/openclaw.json\n`;
+        switch (true) {
+          case args.includes("sha256sum"):
+            return `${"a".repeat(64)}  /sandbox/.openclaw/openclaw.json\n`;
+          case args.includes("stat"):
+            return args.at(-1) === "/sandbox"
+              ? "755 sandbox:sandbox\n"
+              : args.at(-1) === "/sandbox/.openclaw"
+                ? "2770 sandbox:sandbox\n"
+                : "660 sandbox:sandbox\n";
+          default:
+            return "";
         }
-        if (args.includes("stat")) {
-          return args.at(-1) === "/sandbox"
-            ? "755 sandbox:sandbox\n"
-            : args.at(-1) === "/sandbox/.openclaw"
-              ? "2770 sandbox:sandbox\n"
-              : "660 sandbox:sandbox\n";
-        }
-        return "";
       },
     });
 

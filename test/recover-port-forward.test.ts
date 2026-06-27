@@ -48,10 +48,11 @@ function startReachableForward(port: string): void {
     "s.on('error',()=>process.exit(1));" +
     "s.on('timeout',()=>{s.destroy();process.exit(1)});";
   const deadline = Date.now() + 2000;
-  while (Date.now() < deadline) {
-    if (spawnSync(process.execPath, ["-e", probe], { stdio: "ignore" }).status === 0) return;
+  let listenerReady = false;
+  while (Date.now() < deadline && !listenerReady) {
+    listenerReady = spawnSync(process.execPath, ["-e", probe], { stdio: "ignore" }).status === 0;
   }
-  throw new Error(`test forward listener failed to bind port ${port}`);
+  expect(listenerReady, `test forward listener failed to bind port ${port}`).toBe(true);
 }
 
 interface Fixture {
@@ -206,7 +207,8 @@ process.exit(0);
   // A running OpenShell row is only healthy when its local socket also
   // answers. Keep the listener alive in a separate process because runRecover
   // uses spawnSync and blocks this Vitest worker's event loop.
-  if (opts.forwardStartHeals !== false) startReachableForward(port);
+  const reachablePorts = opts.forwardStartHeals !== false ? [port] : [];
+  reachablePorts.forEach(startReachableForward);
 
   return {
     tmpDir,

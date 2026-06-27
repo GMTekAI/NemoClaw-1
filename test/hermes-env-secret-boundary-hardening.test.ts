@@ -33,8 +33,12 @@ function runValidator(envPath: string) {
 function extractShellFunction(source: string, name: string): string {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = source.match(new RegExp(`${escaped}\\(\\) \\{([\\s\\S]*?)^\\}`, "m"));
-  if (!match) throw new Error(`Missing ${name} in start.sh`);
-  return `${name}() {${match[1]}\n}`;
+  const resolved =
+    match ??
+    (() => {
+      throw new Error(`Missing ${name} in start.sh`);
+    })();
+  return `${name}() {${resolved[1]}\n}`;
 }
 
 function runStartEnvValidation(hermesDir: string) {

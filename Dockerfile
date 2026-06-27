@@ -919,14 +919,20 @@ RUN set -eu; \
     done; \
     rm -rf /root/.npm /sandbox/.npm
 
-# Stale-base fallback for the gateway-in-sandbox-group setup (#2681).
-# Newer base images already add the gateway user to the sandbox group, but
-# the derived image must remain build-clean against older sandbox-base:latest
-# tags too. The `id -nG` check makes this idempotent.
+# Stale-base fallback for the gateway/root-in-sandbox-group setup (#2681).
+# Newer base images already add both users to the sandbox group, but the
+# derived image must remain build-clean against older sandbox-base:latest
+# tags too. Root membership preserves PID 1 access when CAP_DAC_OVERRIDE is
+# dropped. The `id -nG` checks make this idempotent.
 # hadolint ignore=DL4006
 RUN if id gateway >/dev/null 2>&1 && id sandbox >/dev/null 2>&1; then \
         if ! id -nG gateway | tr ' ' '\n' | grep -qx sandbox; then \
             usermod -aG sandbox gateway; \
+        fi; \
+    fi \
+    && if id root >/dev/null 2>&1 && id sandbox >/dev/null 2>&1; then \
+        if ! id -nG root | tr ' ' '\n' | grep -qx sandbox; then \
+            usermod -aG sandbox root; \
         fi; \
     fi
 

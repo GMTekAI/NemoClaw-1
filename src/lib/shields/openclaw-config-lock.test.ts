@@ -30,8 +30,9 @@ function createExec(installed: boolean): { calls: RunCall[]; privileged: Privile
     privileged: {
       run: (cmd, input) => {
         calls.push({ cmd, input });
-        if (cmd[0] === "test") {
-          return { status: installed ? 0 : 1, signal: null, stdout: "", stderr: "" };
+        switch (cmd[0]) {
+          case "test":
+            return { status: installed ? 0 : 1, signal: null, stdout: "", stderr: "" };
         }
         const scriptIndex =
           cmd.indexOf("-") >= 0

@@ -16,10 +16,12 @@ const fixtures: string[] = [];
 function legacyTransitionScriptForCurrentUser(): string {
   const source = fs.readFileSync(SOURCE_PATH, "utf-8");
   const start = source.indexOf(SCRIPT_MARKER);
-  if (start < 0) throw new Error("legacy Hermes transition script marker is missing");
+  expect(start, "legacy Hermes transition script marker is missing").toBeGreaterThanOrEqual(0);
   const bodyStart = start + SCRIPT_MARKER.length;
   const bodyEnd = source.indexOf("`;", bodyStart);
-  if (bodyEnd < 0) throw new Error("legacy Hermes transition script terminator is missing");
+  expect(bodyEnd, "legacy Hermes transition script terminator is missing").toBeGreaterThanOrEqual(
+    0,
+  );
 
   // Production deliberately resolves the in-container sandbox identity and
   // root. The behavioral fixture runs unprivileged on the host, so substitute

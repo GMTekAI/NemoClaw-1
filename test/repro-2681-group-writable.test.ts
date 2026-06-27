@@ -86,16 +86,20 @@ function withMockedDockerExecFileSync<T>(
     const command = separator >= 0 ? args.slice(separator + 1) : [...args];
     calls.push(command);
     const hermesGuardIndex = command.indexOf(HERMES_RUNTIME_CONFIG_GUARD);
-    if (hermesGuardIndex >= 0) {
-      const action = command[hermesGuardIndex + 1];
-      if (action === "--help") return HERMES_SEALED_GUARD_HELP;
-      if (action === "begin-shields-transition") {
-        return `lock_token=${HERMES_LOCK_TOKEN} original_locked=0`;
-      }
-      if (action === "apply-shields-transition") {
-        return "shields_mode=mutable chattr_applied=0";
-      }
-      return "";
+    const hermesAction = command[hermesGuardIndex + 1] ?? "";
+    const hermesResponse =
+      hermesGuardIndex < 0
+        ? undefined
+        : (new Map<string, string>([
+            ["--help", HERMES_SEALED_GUARD_HELP],
+            ["begin-shields-transition", `lock_token=${HERMES_LOCK_TOKEN} original_locked=0`],
+            ["apply-shields-transition", "shields_mode=mutable chattr_applied=0"],
+          ]).get(hermesAction) ?? "");
+    switch (hermesResponse) {
+      case undefined:
+        break;
+      default:
+        return hermesResponse;
     }
     if (command[0] === "python3" && command[1] === "-c") {
       for (const target of command.slice(6)) {
@@ -107,9 +111,14 @@ function withMockedDockerExecFileSync<T>(
     }
     if (command[0] === "stat" && command[1] === "-c") {
       const target = command.at(-1);
-      if (target === "/sandbox") return "755 sandbox:sandbox\n";
-      if (target === "/sandbox/.openclaw") return "2770 sandbox:sandbox\n";
-      if (target === "/sandbox/.hermes") return "3770 sandbox:sandbox\n";
+      switch (target) {
+        case "/sandbox":
+          return "755 sandbox:sandbox\n";
+        case "/sandbox/.openclaw":
+          return "2770 sandbox:sandbox\n";
+        case "/sandbox/.hermes":
+          return "3770 sandbox:sandbox\n";
+      }
       if (typeof target === "string" && target.startsWith("/sandbox/.hermes/")) {
         return "640 sandbox:sandbox\n";
       }
@@ -126,84 +135,81 @@ function withMockedDockerExecFileSync<T>(
     const command = separator >= 0 ? args.slice(separator + 1) : [...args];
     calls.push(command);
 
-    if (
-      command[0] === "test" &&
-      command[1] === "-r" &&
-      (command[2] === OPENCLAW_CONFIG_GUARD || command[2] === STATE_DIR_GUARD)
-    ) {
-      return {
-        status: 0,
-        signal: null,
-        stdout: "",
-        stderr: "",
-        pid: 0,
-        output: [],
-      } as never;
-    }
-
     const openClawGuardIndex = command.indexOf(OPENCLAW_CONFIG_GUARD);
-    if (openClawGuardIndex >= 0) {
-      const action = command[openClawGuardIndex + 1];
-      const symlinkedTarget = [...(options.symlinkedPaths ?? [])].find((target) =>
-        target.startsWith("/sandbox/.openclaw/"),
-      );
-      const refused = action === "preflight" && symlinkedTarget !== undefined;
-      const records = refused
-        ? [
-            {
-              type: "issue",
-              code: "unsafe-path",
-              path: symlinkedTarget,
-              detail: `refusing symlink path: ${symlinkedTarget}`,
-            },
-            { type: "result", action, status: "failed" },
-          ]
-        : [
-            {
-              type: "result",
-              action,
-              status: "ok",
-              configDir: "/sandbox/.openclaw",
-              files: ["openclaw.json", ".config-hash"],
-              chattrApplied: action === "lock",
-            },
-          ];
-      return {
-        status: refused ? 1 : 0,
-        signal: null,
-        stdout: `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
-        stderr: "",
-        pid: 0,
-        output: [],
-      } as never;
-    }
-
     const stateDirGuardIndex = command.indexOf(STATE_DIR_GUARD);
-    if (stateDirGuardIndex >= 0) {
-      const action = command[stateDirGuardIndex + 1];
-      return {
-        status: 0,
-        signal: null,
-        stdout: `${JSON.stringify({
-          type: "result",
-          action,
-          status: "ok",
-          issueCount: 0,
-        })}\n`,
-        stderr: "",
-        pid: 0,
-        output: [],
-      } as never;
+    switch (true) {
+      case command[0] === "test" &&
+        command[1] === "-r" &&
+        (command[2] === OPENCLAW_CONFIG_GUARD || command[2] === STATE_DIR_GUARD):
+        return {
+          status: 0,
+          signal: null,
+          stdout: "",
+          stderr: "",
+          pid: 0,
+          output: [],
+        } as never;
+      case openClawGuardIndex >= 0: {
+        const action = command[openClawGuardIndex + 1];
+        const symlinkedTarget = [...(options.symlinkedPaths ?? [])].find((target) =>
+          target.startsWith("/sandbox/.openclaw/"),
+        );
+        const refused = action === "preflight" && symlinkedTarget !== undefined;
+        const records = refused
+          ? [
+              {
+                type: "issue",
+                code: "unsafe-path",
+                path: symlinkedTarget,
+                detail: `refusing symlink path: ${symlinkedTarget}`,
+              },
+              { type: "result", action, status: "failed" },
+            ]
+          : [
+              {
+                type: "result",
+                action,
+                status: "ok",
+                configDir: "/sandbox/.openclaw",
+                files: ["openclaw.json", ".config-hash"],
+                chattrApplied: action === "lock",
+              },
+            ];
+        return {
+          status: refused ? 1 : 0,
+          signal: null,
+          stdout: `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+          stderr: "",
+          pid: 0,
+          output: [],
+        } as never;
+      }
+      case stateDirGuardIndex >= 0: {
+        const action = command[stateDirGuardIndex + 1];
+        return {
+          status: 0,
+          signal: null,
+          stdout: `${JSON.stringify({
+            type: "result",
+            action,
+            status: "ok",
+            issueCount: 0,
+          })}\n`,
+          stderr: "",
+          pid: 0,
+          output: [],
+        } as never;
+      }
+      default:
+        return {
+          status: 0,
+          signal: null,
+          stdout: "",
+          stderr: "",
+          pid: 0,
+          output: [],
+        } as never;
     }
-
-    return {
-      status: 0,
-      signal: null,
-      stdout: "",
-      stderr: "",
-      pid: 0,
-      output: [],
-    } as never;
   });
 
   try {

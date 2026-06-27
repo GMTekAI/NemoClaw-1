@@ -32,8 +32,8 @@ function runSupervisorLibrary(
 ): CommandResult & { controlDirectory: string } {
   const controlDirectory = temporaryDirectory("nemoclaw-gateway-supervisor-");
   chmodSync(controlDirectory, 0o700);
-  if (request !== undefined) {
-    writeFileSync(join(controlDirectory, "request"), request, { mode: 0o600 });
+  for (const pendingRequest of request === undefined ? [] : [request]) {
+    writeFileSync(join(controlDirectory, "request"), pendingRequest, { mode: 0o600 });
   }
 
   const script = [

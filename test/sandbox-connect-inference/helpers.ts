@@ -5,7 +5,7 @@ import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { expect } from "vitest";
+import { afterEach, expect } from "vitest";
 import { execTimeout } from "../helpers/timeouts";
 
 /**
@@ -39,6 +39,8 @@ export type SetupFixtureOptions = {
 
 const fixtureForwardListeners = new Map<string, ChildProcess>();
 
+// A fixture can invoke runConnect more than once. Keep its advertised forward
+// live for the whole test, then tear down the child and temp tree together.
 function startFixtureForwardListener(tmpDir: string): number {
   const readyPath = path.join(tmpDir, "forward-listener-ready");
   const errorPath = path.join(tmpDir, "forward-listener-error");
@@ -62,6 +64,7 @@ function startFixtureForwardListener(tmpDir: string): number {
     ],
     { stdio: "ignore" },
   );
+  fixtureForwardListeners.set(tmpDir, listener);
 
   const waitCell = new Int32Array(new SharedArrayBuffer(4));
   const deadline = Date.now() + 5_000;
@@ -79,15 +82,35 @@ function startFixtureForwardListener(tmpDir: string): number {
     listener.kill("SIGTERM");
     throw new Error(`Fixture forward listener returned invalid port: ${String(port)}`);
   }
-  fixtureForwardListeners.set(tmpDir, listener);
   return port;
 }
 
-function stopFixtureForwardListener(tmpDir: string): void {
+async function stopFixtureForwardListener(tmpDir: string): Promise<void> {
   const listener = fixtureForwardListeners.get(tmpDir);
   fixtureForwardListeners.delete(tmpDir);
-  if (listener && listener.exitCode === null) listener.kill("SIGTERM");
+  if (!listener || listener.exitCode !== null) return;
+
+  await new Promise<void>((resolve) => {
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(forceTimer);
+      clearTimeout(abandonTimer);
+      resolve();
+    };
+    const forceTimer = setTimeout(() => listener.kill("SIGKILL"), 1_000);
+    const abandonTimer = setTimeout(finish, 3_000);
+    listener.once("exit", finish);
+    listener.kill("SIGTERM");
+  });
 }
+
+afterEach(async () => {
+  const fixtureDirs = [...fixtureForwardListeners.keys()];
+  await Promise.all(fixtureDirs.map((tmpDir) => stopFixtureForwardListener(tmpDir)));
+  for (const tmpDir of fixtureDirs) fs.rmSync(tmpDir, { recursive: true, force: true });
+});
 
 export function isHostWsl() {
   return (
@@ -446,9 +469,11 @@ export function setupFixture(
   const curlPath = path.join(homeLocalBin, "curl");
   const psPath = path.join(homeLocalBin, "ps");
   const sandboxName = String(sandboxEntry.name);
-  const dashboardPort = options.gatewaySupervisorRecovery
-    ? startFixtureForwardListener(tmpDir)
-    : 18789;
+  // The OpenShell stub advertises this forward as running. Back that claim
+  // with a real listener so probe-only forward ownership checks behave the
+  // same on Linux and macOS, not according to whether a host happens to have
+  // the historical default port open.
+  const dashboardPort = startFixtureForwardListener(tmpDir);
 
   fs.mkdirSync(homeLocalBin, { recursive: true });
   fs.mkdirSync(registryDir, { recursive: true });
@@ -512,30 +537,26 @@ export function runConnect(
         NEMOCLAW_GATEWAY_RECOVERY_SETTLE_SECONDS: "0",
       }
     : {};
-  try {
-    return spawnSync(
-      process.execPath,
-      [path.join(repoRoot, "bin", "nemoclaw.js"), sandboxName, "connect", ...connectArgs],
-      {
-        cwd: repoRoot,
-        encoding: "utf-8",
-        env: {
-          HOME: tmpDir,
-          PATH: `${path.join(tmpDir, ".local", "bin")}:/usr/bin:/bin`,
-          NEMOCLAW_DISABLE_GATEWAY_DRIFT_PREFLIGHT: "1",
-          NEMOCLAW_NO_CONNECT_HINT: "1",
-          NEMOCLAW_OLLAMA_PORT: "11434",
-          NEMOCLAW_OLLAMA_PROXY_PORT: "11435",
-          VITEST: "true",
-          ...recoveryEnv,
-          ...extraEnv,
-        },
-        timeout: execTimeout(15_000),
+  return spawnSync(
+    process.execPath,
+    [path.join(repoRoot, "bin", "nemoclaw.js"), sandboxName, "connect", ...connectArgs],
+    {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      env: {
+        HOME: tmpDir,
+        PATH: `${path.join(tmpDir, ".local", "bin")}:/usr/bin:/bin`,
+        NEMOCLAW_DISABLE_GATEWAY_DRIFT_PREFLIGHT: "1",
+        NEMOCLAW_NO_CONNECT_HINT: "1",
+        NEMOCLAW_OLLAMA_PORT: "11434",
+        NEMOCLAW_OLLAMA_PROXY_PORT: "11435",
+        VITEST: "true",
+        ...recoveryEnv,
+        ...extraEnv,
       },
-    );
-  } finally {
-    stopFixtureForwardListener(tmpDir);
-  }
+      timeout: execTimeout(15_000),
+    },
+  );
 }
 
 export function extractApprovalPassScript(stateFile: string, sandboxName: string): string {

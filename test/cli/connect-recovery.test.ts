@@ -117,12 +117,12 @@ async function startForwardListeners(ports: number[]): Promise<() => Promise<voi
       () => reject(new Error(`forward listener startup timed out: ${stderr}`)),
       2000,
     );
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      if (!chunk.includes("ready")) return;
+    const markReady = (): void => {
       clearTimeout(timer);
       resolve();
-    });
+    };
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => (chunk.includes("ready") ? markReady() : undefined));
     child.once("exit", (code) => {
       clearTimeout(timer);
       reject(new Error(`forward listener exited with ${code}: ${stderr}`));
@@ -130,15 +130,16 @@ async function startForwardListeners(ports: number[]): Promise<() => Promise<voi
   });
 
   return async () => {
-    if (child.exitCode !== null) return;
-    child.kill("SIGTERM");
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, 1500);
-      child.once("exit", () => {
-        clearTimeout(timer);
-        resolve();
-      });
-    });
+    await (child.exitCode !== null
+      ? Promise.resolve()
+      : new Promise<void>((resolve) => {
+          child.kill("SIGTERM");
+          const timer = setTimeout(resolve, 1500);
+          child.once("exit", () => {
+            clearTimeout(timer);
+            resolve();
+          });
+        }));
   };
 }
 

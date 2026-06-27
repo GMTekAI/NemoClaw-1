@@ -24,6 +24,8 @@ import pwd
 import re
 import stat
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Iterable
 
 SECRET_KEY_RE = re.compile(r"(^|_)(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL|API)(_|$)")
@@ -95,6 +97,7 @@ def _allowed_path_owner_uids() -> frozenset[int]:
     try:
         allowed.add(pwd.getpwnam("sandbox").pw_uid)
     except KeyError:
+        # Minimal development images may not define the sandbox account.
         pass
     return frozenset(allowed)
 
@@ -179,16 +182,19 @@ def _validate_directory_descriptor(path: str, fd: int) -> tuple[int, int, int, i
     return _directory_identity(st)
 
 
+@contextmanager
 def _open_env_path(
     path: str,
-) -> tuple[
-    int,
-    tuple[int, int, int, int, int, int, int, int, int],
-    list[int],
-    list[tuple[int, str, int, tuple[int, int, int, int, int]]],
-    str,
+) -> Iterator[
+    tuple[
+        int,
+        tuple[int, int, int, int, int, int, int, int, int],
+        list[int],
+        list[tuple[int, str, int, tuple[int, int, int, int, int]]],
+        str,
+    ]
 ]:
-    """Open an absolute env path without following any ancestor symlink."""
+    """Yield an env path opened without following any ancestor symlink."""
 
     if not os.path.isabs(path):
         raise UnsafeEnvInputError("Hermes env path must be absolute")
@@ -236,13 +242,12 @@ def _open_env_path(
             raise UnsafeEnvInputError(
                 f"Hermes env path exceeds the {MAX_ENV_BYTES}-byte limit"
             )
-        return file_fd, _file_identity(file_st), directory_fds, chain, basename
-    except Exception:
+        yield file_fd, _file_identity(file_st), directory_fds, chain, basename
+    finally:
         if file_fd != -1:
             os.close(file_fd)
         for fd in reversed(directory_fds):
             os.close(fd)
-        raise
 
 
 def _read_bounded_env(fd: int, expected_identity: tuple[int, ...]) -> bytes:
@@ -330,10 +335,25 @@ def _emit_violations(
 
 
 def validate_env_file(path: str) -> int:
-    file_fd = -1
-    directory_fds: list[int] = []
     try:
-        file_fd, file_identity, directory_fds, chain, basename = _open_env_path(path)
+        with _open_env_path(path) as (
+            file_fd,
+            file_identity,
+            directory_fds,
+            chain,
+            basename,
+        ):
+            try:
+                raw = _read_bounded_env(file_fd, file_identity)
+                _verify_env_path_chain(
+                    file_fd, file_identity, directory_fds[-1], chain, basename
+                )
+            except (OSError, UnsafeEnvInputError) as exc:
+                print(
+                    f"[SECURITY] Refusing Hermes startup because the env path could not be read safely: {exc}",
+                    file=sys.stderr,
+                )
+                return 1
     except FileNotFoundError:
         print(
             "[SECURITY] Refusing Hermes startup because the expected env path disappeared",
@@ -354,23 +374,6 @@ def validate_env_file(path: str) -> int:
     except UnsafeEnvInputError as exc:
         print(f"[SECURITY] Refusing Hermes startup because {exc}", file=sys.stderr)
         return 1
-
-    try:
-        raw = _read_bounded_env(file_fd, file_identity)
-        _verify_env_path_chain(
-            file_fd, file_identity, directory_fds[-1], chain, basename
-        )
-    except (OSError, UnsafeEnvInputError) as exc:
-        print(
-            f"[SECURITY] Refusing Hermes startup because the env path could not be read safely: {exc}",
-            file=sys.stderr,
-        )
-        return 1
-    finally:
-        if file_fd != -1:
-            os.close(file_fd)
-        for directory_fd in reversed(directory_fds):
-            os.close(directory_fd)
 
     try:
         text = raw.decode("utf-8")

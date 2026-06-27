@@ -119,9 +119,7 @@ function runGuard(action: "seal-restart" | "unseal-restart", fixture: RestartFix
     "--state-file",
     fixture.statePath,
   ];
-  if (action === "seal-restart") {
-    args.push("--hash-file", fixture.hashPath);
-  }
+  args.push(...(action === "seal-restart" ? ["--hash-file", fixture.hashPath] : []));
   return spawnSync("python3", args, {
     encoding: "utf-8",
     timeout: 5000,
@@ -132,19 +130,38 @@ function runShieldsTransition(fixture: RestartFixture, shieldsMode: "locked" | "
   const begun = runShieldsTransactionAction(fixture, "begin-shields-transition", {
     mode: shieldsMode,
   });
-  if (begun.status !== 0) return begun;
+  switch (begun.status) {
+    case 0:
+      break;
+    default:
+      return begun;
+  }
   const token = shieldsTransactionToken(begun.stdout);
-  if (!token) return begun;
-  if (shieldsMode === "locked") {
-    // The production host restores 0755 only after the recursive state guard's
-    // independent verification pass. This focused top-guard fixture has no
-    // recursive state, so model that successful handoff explicitly.
-    fs.chmodSync(fixture.hermesDir, 0o755);
+  switch (token) {
+    case undefined:
+      return begun;
+    default:
+      break;
+  }
+  switch (shieldsMode) {
+    case "locked":
+      // The production host restores 0755 only after the recursive state guard's
+      // independent verification pass. This focused top-guard fixture has no
+      // recursive state, so model that successful handoff explicitly.
+      fs.chmodSync(fixture.hermesDir, 0o755);
+      break;
+    case "mutable":
+      break;
   }
   const applied = runShieldsTransactionAction(fixture, "apply-shields-transition", {
     token,
   });
-  if (applied.status !== 0) return applied;
+  switch (applied.status) {
+    case 0:
+      break;
+    default:
+      return applied;
+  }
   return runShieldsTransactionAction(fixture, "finish-shields-transition", {
     token,
   });
@@ -173,12 +190,14 @@ function runShieldsTransactionAction(
     "--state-file",
     fixture.statePath,
   ];
-  if (action === "begin-shields-transition" || action === "finish-shields-transition") {
-    args.push("--hash-file", fixture.hashPath);
-  }
-  if (options.mode) args.push("--shields-mode", options.mode);
-  if (options.rollbackMode) args.push("--rollback-shields-mode", options.rollbackMode);
-  if (options.token) args.push("--lock-token", options.token);
+  args.push(
+    ...(action === "begin-shields-transition" || action === "finish-shields-transition"
+      ? ["--hash-file", fixture.hashPath]
+      : []),
+    ...(options.mode ? ["--shields-mode", options.mode] : []),
+    ...(options.rollbackMode ? ["--rollback-shields-mode", options.rollbackMode] : []),
+    ...(options.token ? ["--lock-token", options.token] : []),
+  );
   return spawnSync("python3", args, { encoding: "utf-8", timeout: 5000 });
 }
 
@@ -775,9 +794,11 @@ describe.skipIf(process.platform === "win32")("Hermes mutable restart input seal
       expect(mode(fixture.configPath)).toBe(0o444);
       expect(strictHashIsValid(fixture)).toBe(true);
     } finally {
-      if (staleFd !== undefined) fs.closeSync(staleFd);
+      for (const openFd of staleFd === undefined ? [] : [staleFd]) fs.closeSync(openFd);
       fs.chmodSync(fixture.sandboxDir, 0o700);
-      if (fs.existsSync(fixture.hermesDir)) fs.chmodSync(fixture.hermesDir, 0o700);
+      for (const existingHermesDir of fs.existsSync(fixture.hermesDir) ? [fixture.hermesDir] : []) {
+        fs.chmodSync(existingHermesDir, 0o700);
+      }
       fs.rmSync(fixture.root, { recursive: true, force: true });
     }
   });
@@ -885,13 +906,15 @@ describe.skipIf(process.platform === "win32")("Hermes mutable restart input seal
     it(`seals a hostile ${hostileKind} config entry into a root-only unavailable posture`, () => {
       const fixture = createRestartFixture();
       fs.unlinkSync(fixture.configPath);
-      if (hostileKind === "symlink") {
-        const victim = path.join(fixture.root, "victim");
-        fs.writeFileSync(victim, "victim stays untouched\n");
-        fs.symlinkSync(victim, fixture.configPath);
-      } else {
-        expect(spawnSync("mkfifo", [fixture.configPath]).status).toBe(0);
-      }
+      const arrangeHostileConfig = {
+        symlink: () => {
+          const victim = path.join(fixture.root, "victim");
+          fs.writeFileSync(victim, "victim stays untouched\n");
+          fs.symlinkSync(victim, fixture.configPath);
+        },
+        fifo: () => expect(spawnSync("mkfifo", [fixture.configPath]).status).toBe(0),
+      } satisfies Record<typeof hostileKind, () => void>;
+      arrangeHostileConfig[hostileKind]();
       try {
         const begun = runShieldsTransactionAction(fixture, "begin-shields-transition", {
           mode: "locked",
@@ -924,13 +947,15 @@ describe.skipIf(process.platform === "win32")("Hermes mutable restart input seal
       const fixture = createRestartFixture();
       fs.rmSync(fixture.hermesDir, { recursive: true, force: true });
       const victim = path.join(fixture.root, "outer-victim");
-      if (hostileKind === "symlink") {
-        fs.mkdirSync(victim);
-        fs.writeFileSync(path.join(victim, "proof"), "untouched\n");
-        fs.symlinkSync(victim, fixture.hermesDir);
-      } else {
-        expect(spawnSync("mkfifo", [fixture.hermesDir]).status).toBe(0);
-      }
+      const arrangeHostileHome = {
+        symlink: () => {
+          fs.mkdirSync(victim);
+          fs.writeFileSync(path.join(victim, "proof"), "untouched\n");
+          fs.symlinkSync(victim, fixture.hermesDir);
+        },
+        fifo: () => expect(spawnSync("mkfifo", [fixture.hermesDir]).status).toBe(0),
+      } satisfies Record<typeof hostileKind, () => void>;
+      arrangeHostileHome[hostileKind]();
       try {
         const begun = runShieldsTransactionAction(fixture, "begin-shields-transition", {
           mode: "locked",
@@ -941,8 +966,8 @@ describe.skipIf(process.platform === "win32")("Hermes mutable restart input seal
         expect(mode(fixture.hermesDir)).toBe(0o500);
         const transition = JSON.parse(fs.readFileSync(fixture.statePath, "utf-8"));
         expect(transition.shields_transition.unavailable).toBe(true);
-        if (hostileKind === "symlink") {
-          expect(fs.readFileSync(path.join(victim, "proof"), "utf-8")).toBe("untouched\n");
+        for (const proofPath of hostileKind === "symlink" ? [path.join(victim, "proof")] : []) {
+          expect(fs.readFileSync(proofPath, "utf-8")).toBe("untouched\n");
         }
       } finally {
         fs.chmodSync(fixture.sandboxDir, 0o700);
@@ -1145,7 +1170,7 @@ describe.skipIf(process.platform === "win32")("Hermes mutable restart input seal
       expect(strictHashIsValid(fixture)).toBe(true);
       expect(fs.existsSync(fixture.statePath)).toBe(false);
     } finally {
-      if (mutableFd !== undefined) fs.closeSync(mutableFd);
+      for (const openFd of mutableFd === undefined ? [] : [mutableFd]) fs.closeSync(openFd);
       fs.rmSync(fixture.root, { recursive: true, force: true });
     }
   });

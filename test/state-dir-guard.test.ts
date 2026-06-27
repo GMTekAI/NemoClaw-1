@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { testTimeoutOptions } from "./helpers/timeouts";
 
 const GUARD_PATH = path.resolve("scripts/state-dir-guard.py");
 const fixtures: string[] = [];
@@ -128,7 +129,9 @@ afterEach(() => {
   for (const root of fixtures.splice(0)) {
     fs.chmodSync(root, 0o700);
     const configDir = path.join(root, ".agent");
-    if (fs.existsSync(configDir)) fs.chmodSync(configDir, 0o700);
+    for (const existingConfigDir of fs.existsSync(configDir) ? [configDir] : []) {
+      fs.chmodSync(existingConfigDir, 0o700);
+    }
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
@@ -245,49 +248,53 @@ describe("state-dir-guard", () => {
     }
   });
 
-  it("fresh-seals a file even while an attacker continuously writes an old descriptor", async () => {
-    const { root, configDir } = fixture();
-    const pluginDir = path.join(configDir, "plugins");
-    const pluginPath = path.join(pluginDir, "racing.bin");
-    const readyPath = path.join(root, "writer-ready");
-    fs.mkdirSync(pluginDir);
-    fs.writeFileSync(pluginPath, Buffer.alloc(8 * 1024 * 1024, 0x41), { mode: 0o660 });
-    const oldInode = fs.statSync(pluginPath).ino;
-    const writer = spawn(
-      process.execPath,
-      [
-        "-e",
+  it(
+    "fresh-seals a file even while an attacker continuously writes an old descriptor",
+    testTimeoutOptions(20_000),
+    async () => {
+      const { root, configDir } = fixture();
+      const pluginDir = path.join(configDir, "plugins");
+      const pluginPath = path.join(pluginDir, "racing.bin");
+      const readyPath = path.join(root, "writer-ready");
+      fs.mkdirSync(pluginDir);
+      fs.writeFileSync(pluginPath, Buffer.alloc(8 * 1024 * 1024, 0x41), { mode: 0o660 });
+      const oldInode = fs.statSync(pluginPath).ino;
+      const writer = spawn(
+        process.execPath,
         [
-          "const fs=require('fs')",
-          "const file=process.argv[1]",
-          "const ready=process.argv[2]",
-          "const fd=fs.openSync(file,'r+')",
-          "const chunk=Buffer.alloc(1024*1024,0x5a)",
-          "fs.writeFileSync(ready,'ready')",
-          "setInterval(()=>{try{fs.writeSync(fd,chunk,0,chunk.length,0)}catch{}},0)",
-        ].join(";"),
-        pluginPath,
-        readyPath,
-      ],
-      { stdio: "ignore" },
-    );
+          "-e",
+          [
+            "const fs=require('fs')",
+            "const file=process.argv[1]",
+            "const ready=process.argv[2]",
+            "const fd=fs.openSync(file,'r+')",
+            "const chunk=Buffer.alloc(1024*1024,0x5a)",
+            "fs.writeFileSync(ready,'ready')",
+            "setInterval(()=>{try{fs.writeSync(fd,chunk,0,chunk.length,0)}catch{}},0)",
+          ].join(";"),
+          pluginPath,
+          readyPath,
+        ],
+        { stdio: "ignore" },
+      );
 
-    try {
-      const deadline = Date.now() + 5_000;
-      while (!fs.existsSync(readyPath) && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 10));
+      try {
+        const deadline = Date.now() + 5_000;
+        while (!fs.existsSync(readyPath) && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        expect(fs.existsSync(readyPath)).toBe(true);
+
+        const result = runGuard("lock", configDir);
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(fs.statSync(pluginPath).ino).not.toBe(oldInode);
+        expect(mode(pluginPath)).toBe(0o640);
+      } finally {
+        writer.kill("SIGKILL");
       }
-      expect(fs.existsSync(readyPath)).toBe(true);
-
-      const result = runGuard("lock", configDir);
-
-      expect(result.status, result.stderr).toBe(0);
-      expect(fs.statSync(pluginPath).ino).not.toBe(oldInode);
-      expect(mode(pluginPath)).toBe(0o640);
-    } finally {
-      writer.kill("SIGKILL");
-    }
-  });
+    },
+  );
 
   it("streams a large file into a fresh inode while preserving read and execute bits", () => {
     const { configDir } = fixture();

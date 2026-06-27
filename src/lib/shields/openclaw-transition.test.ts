@@ -50,14 +50,20 @@ describe("OpenClaw shields top-config transaction", () => {
 
     dockerExecSpy = vi.spyOn(dockerExec, "dockerExecFileSync").mockImplementation((cmd) => {
       const argv = cmd as string[];
-      if (argv[0] === "stat") {
-        if (argv.at(-1) === "/sandbox") return "1775 root:sandbox";
-        if (argv.at(-1) === "/sandbox/.openclaw") return "755 root:root";
-        return "444 root:root";
+      switch (argv[0]) {
+        case "stat":
+          return argv.at(-1) === "/sandbox"
+            ? "1775 root:sandbox"
+            : argv.at(-1) === "/sandbox/.openclaw"
+              ? "755 root:root"
+              : "444 root:root";
+        case "lsattr":
+          return `---------------- ${String(argv.at(-1))}`;
+        case "sha256sum":
+          return `${"a".repeat(64)}  ${String(argv.at(-1))}`;
+        default:
+          return "";
       }
-      if (argv[0] === "lsattr") return `---------------- ${String(argv.at(-1))}`;
-      if (argv[0] === "sha256sum") return `${"a".repeat(64)}  ${String(argv.at(-1))}`;
-      return "";
     });
     guardSpy = vi
       .spyOn(openClawLock, "runOpenClawConfigGuard")
@@ -129,13 +135,18 @@ describe("OpenClaw shields top-config transaction", () => {
   it("keeps the protected top binding until recursive unlock is ready", () => {
     dockerExecSpy.mockImplementation((cmd) => {
       const argv = cmd as string[];
-      if (argv[0] === "stat") {
-        if (argv.at(-1) === "/sandbox") return "755 sandbox:sandbox";
-        if (argv.at(-1) === "/sandbox/.openclaw") return "2770 sandbox:sandbox";
-        return "660 sandbox:sandbox";
+      switch (argv[0]) {
+        case "stat":
+          return argv.at(-1) === "/sandbox"
+            ? "755 sandbox:sandbox"
+            : argv.at(-1) === "/sandbox/.openclaw"
+              ? "2770 sandbox:sandbox"
+              : "660 sandbox:sandbox";
+        case "lsattr":
+          return `---------------- ${String(argv.at(-1))}`;
+        default:
+          return "";
       }
-      if (argv[0] === "lsattr") return `---------------- ${String(argv.at(-1))}`;
-      return "";
     });
 
     expect(() => shields.unlockAgentConfig("openclaw", openClawTarget(), true)).not.toThrow();

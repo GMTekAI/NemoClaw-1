@@ -148,7 +148,7 @@ function runOpenclawRepairLayoutCase(legacy: boolean) {
   const cleanupBlock = dockerRunCommandBetween(
     dockerfile,
     "# Flatten stale published base images",
-    "# Stale-base fallback for the gateway-in-sandbox-group setup",
+    "# Stale-base fallback for the gateway/root-in-sandbox-group setup",
   );
   const permissionBlock = dockerRunCommandBetween(
     dockerfile,
@@ -223,6 +223,39 @@ function runOpenclawRepairLayoutCase(legacy: boolean) {
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+function runOpenclawUserSetupBlock() {
+  const dockerfile = fs.readFileSync(DOCKERFILE_BASE, "utf-8");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-openclaw-users-"));
+  const sandboxRoot = path.join(tmp, "sandbox");
+  const command = dockerRunCommandBetween(
+    dockerfile,
+    "# Create sandbox user (matches OpenShell convention)",
+    "# Create .openclaw with all state subdirs directly",
+  ).replaceAll("/sandbox", sandboxRoot);
+  const result = runLoggedDockerShell(command, tmp, [
+    'groupadd() { printf "groupadd %s\\n" "$*" >> "$call_log"; }',
+    'useradd() { printf "useradd %s\\n" "$*" >> "$call_log"; }',
+    'usermod() { printf "usermod %s\\n" "$*" >> "$call_log"; }',
+    'chown() { printf "chown %s\\n" "$*" >> "$call_log"; }',
+  ]);
+  return { ...result, tmp, sandboxRoot };
+}
+
+function runOpenclawStaleGroupFallback() {
+  const dockerfile = fs.readFileSync(DOCKERFILE, "utf-8");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-openclaw-groups-"));
+  const command = dockerRunCommandBetween(
+    dockerfile,
+    "# Stale-base fallback for the gateway/root-in-sandbox-group setup",
+    "# Keep the image readable to the root entrypoint",
+  );
+  const result = runLoggedDockerShell(command, tmp, [
+    'id() { case "$*" in "gateway"|"sandbox"|"root") return 0 ;; "-nG gateway") printf "gateway\\n" ;; "-nG root") printf "root\\n" ;; *) return 1 ;; esac; }',
+    'usermod() { printf "usermod %s\\n" "$*" >> "$call_log"; }',
+  ]);
+  return { ...result, tmp };
 }
 
 describe("sandbox provisioning: runtime npm online state", () => {
@@ -455,14 +488,15 @@ describe("sandbox provisioning: image health checks (#1430)", () => {
       if (gatewayLocalMarker) {
         fs.writeFileSync(markerPath, "");
       }
-      if (pgrepExit === 0) {
-        fs.mkdirSync(path.join(procRoot, "4242"), { recursive: true });
+      const liveGatewayPids = pgrepExit === 0 ? ["4242"] : [];
+      liveGatewayPids.forEach((pid) => {
+        fs.mkdirSync(path.join(procRoot, pid), { recursive: true });
         fs.writeFileSync(
-          path.join(procRoot, "4242", "stat"),
-          linuxProcStat("4242", observedStartIdentity),
+          path.join(procRoot, pid, "stat"),
+          linuxProcStat(pid, observedStartIdentity),
         );
-        fs.writeFileSync(pidPath, `4242 ${recordedStartIdentity}\n`);
-      }
+        fs.writeFileSync(pidPath, `${pid} ${recordedStartIdentity}\n`);
+      });
 
       try {
         const probe = runLoggedDockerShell(command, tmp, [
@@ -790,6 +824,22 @@ describe("sandbox provisioning: image health checks (#1430)", () => {
 });
 
 describe("sandbox provisioning: unified .openclaw layout (#2227)", () => {
+  it("keeps root in the sandbox group for capability-dropped lifecycle guards", () => {
+    const base = runOpenclawUserSetupBlock();
+    const fallback = runOpenclawStaleGroupFallback();
+    try {
+      expect(base.result.status, base.result.stderr).toBe(0);
+      expect(base.calls).toContain("usermod -aG sandbox gateway");
+      expect(base.calls).toContain("usermod -aG sandbox root");
+      expect(fallback.result.status, fallback.result.stderr).toBe(0);
+      expect(fallback.calls).toContain("usermod -aG sandbox gateway");
+      expect(fallback.calls).toContain("usermod -aG sandbox root");
+    } finally {
+      fs.rmSync(base.tmp, { recursive: true, force: true });
+      fs.rmSync(fallback.tmp, { recursive: true, force: true });
+    }
+  });
+
   it("uses targeted permission repair unless legacy migration ran", () => {
     const modern = runOpenclawRepairLayoutCase(false);
     expect(modern.cleanup.result.status).toBe(0);

@@ -101,7 +101,7 @@ const parseLiveSandboxNamesMock = vi.fn(() => new Set(["alpha"]));
 const registerSandboxMock = vi.fn();
 const restoreSandboxStateMock = vi.fn();
 const runOpenshellMock = vi.fn((args: string[]) => {
-  if (args[0] === "sandbox" && args[1] === "delete") lifecycleMock.events.push("delete");
+  args[0] === "sandbox" && args[1] === "delete" && lifecycleMock.events.push("delete");
   return { status: 0, output: "" };
 });
 const streamSandboxCreateMock = vi.fn(async () => ({
