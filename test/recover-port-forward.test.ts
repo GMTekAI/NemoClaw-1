@@ -220,7 +220,7 @@ describe("nemoclaw <name> recover", () => {
 
       const combined = (result.stdout || "") + (result.stderr || "");
       expect(combined).toContain("gateway is running in 'stuck-sandbox'");
-      expect(combined).toContain("dashboard/API host forward could not be restored");
+      expect(combined).toContain("primary dashboard/API host forward could not be re-established");
       expect(combined).not.toContain("restored dashboard port forward");
     },
   );
