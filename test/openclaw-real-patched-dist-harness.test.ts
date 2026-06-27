@@ -219,14 +219,7 @@ describe.skipIf(process.env.NEMOCLAW_REAL_OPENCLAW_DIST_HARNESS !== "1")(
         );
         expect(issue4434Audit.status, issue4434Audit.stderr || issue4434Audit.stdout).toBe(0);
         expect(issue4434Audit.stdout).toContain("assistant error formatter:");
-        expect(issue4434Audit.stdout).toContain("already-applied");
-
-        const issue4434Marker = grepRealDist(
-          dist,
-          "nemoclaw: #4434 structured unreachable-inference diagnostic",
-        );
-        expect(issue4434Marker.status, issue4434Marker.stderr).toBe(0);
-        expect(issue4434Marker.stdout.trim()).not.toBe("");
+        expect(issue4434Audit.stdout).toContain("issue-4434-diagnostics: already-applied");
       } finally {
         fs.rmSync(tmp, { recursive: true, force: true });
       }

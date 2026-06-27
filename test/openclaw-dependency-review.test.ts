@@ -32,13 +32,6 @@ const ISSUE_4434_PATCH = path.join(
   "scripts",
   "patch-openclaw-issue-4434-diagnostics.ts",
 );
-const TEAMS_LIVE_TEST = path.join(
-  REPO_ROOT,
-  "test",
-  "e2e-scenario",
-  "live",
-  "teams-message-round-trip.test.ts",
-);
 const REBUILD_RESUME_SESSION = path.join(
   REPO_ROOT,
   "src",
@@ -100,7 +93,8 @@ describe("OpenClaw 2026.6.9 dependency review contract", () => {
     );
     expect(review).toContain("unsafe reported archive filenames");
     expect(review).toContain("no installer code consumes raw `npm pack --json` filenames");
-    expect(review).toContain("`PRA-5` #4434 partial acceptance is explicitly accepted");
+    expect(review).toContain("The #4434 compatibility-shim disposition is explicitly accepted");
+    expect(review).not.toContain("PRA-5");
     expect(review).toContain("3/3 fields are present in the NemoClaw-patched runtime output");
     expect(review).toContain(
       "3/3 fields are missing in the upstream-shaped `openclaw@2026.6.9` output",
@@ -147,12 +141,10 @@ describe("OpenClaw 2026.6.9 dependency review contract", () => {
     expect(review).toContain("contains no `web_fetch`, `fetchWithSsrFGuard`");
 
     expect(review).toContain("Microsoft Teams Live E2E Disposition");
-    expect(review).toContain("MSTEAMS_E2E=1");
-    expect(review).toContain("MSTEAMS_PUBLIC_WEBHOOK_URL");
-    expect(review).toContain("MSTEAMS_E2E_ACTIVITY_JSON");
-    expect(review).toContain("teams-message-round-trip-driver.ts");
-    expect(review).toContain("allowlisted environment");
-    expect(review).toContain("test/e2e-scenario/live/teams-message-round-trip.test.ts");
+    expect(review).toContain("No real Microsoft Teams tenant proof is included in this PR");
+    expect(review).toContain("tracked as a follow-up outside this dependency bump");
+    expect(review).toContain("must not be described as a Teams round trip");
+    expect(review).not.toContain("teams-message-round-trip");
 
     expect(review).toContain("Advisor Disposition");
     expect(review).toContain("Release Checklist for Accepted Residual Risk");
@@ -166,6 +158,10 @@ describe("OpenClaw 2026.6.9 dependency review contract", () => {
     expect(review).toContain("code-backed for the reviewed `openclaw@2026.6.9` artifact");
     expect(review).toContain("src/lib/messaging/channels/manifests.test.ts");
     expect(review).toContain("npm audit result in this note is a manual snapshot");
+    expect(review).toContain("Advisory audit revalidated: 2026-06-26");
+    expect(review).toContain("0` critical vulnerabilities across `763` total dependencies");
+    expect(review).toContain("Node `v22.22.2`");
+    expect(review).toContain("engine requirement of `>=22.19.0`");
     expect(review).toContain(
       "CI job for `npm install --package-lock-only --ignore-scripts && npm audit --omit=dev --json`",
     );
@@ -284,29 +280,6 @@ grep -Fq -- '--phase post-agent-install' Dockerfile
     );
 
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-  });
-
-  it("keeps the Teams live scenario explicit and credential gated", () => {
-    const teamsLiveTest = readFileSync(TEAMS_LIVE_TEST, "utf-8");
-
-    expect(teamsLiveTest).toContain("test.skipIf(");
-    expect(teamsLiveTest).toContain('process.env.MSTEAMS_E2E !== "1"');
-    expect(teamsLiveTest).toContain("missingTeamsEnvKeys.length > 0");
-    expect(teamsLiveTest).toContain("shouldRunLiveE2EScenarios()");
-    expect(teamsLiveTest).toContain("NVIDIA_INFERENCE_API_KEY");
-    expect(teamsLiveTest).toContain("MSTEAMS_APP_ID");
-    expect(teamsLiveTest).toContain("MSTEAMS_APP_PASSWORD");
-    expect(teamsLiveTest).toContain("MSTEAMS_TENANT_ID");
-    expect(teamsLiveTest).toContain("MSTEAMS_ALLOWED_USERS");
-    expect(teamsLiveTest).toContain("MSTEAMS_PUBLIC_WEBHOOK_URL");
-    expect(teamsLiveTest).toContain("MSTEAMS_E2E_ACTIVITY_JSON");
-    expect(teamsLiveTest).toContain("teams-message-round-trip-driver.ts");
-    expect(teamsLiveTest).toContain("--experimental-strip-types");
-    expect(teamsLiveTest).toContain("buildTeamsDriverEnv");
-    expect(teamsLiveTest).not.toContain('host.command("bash", ["-lc"');
-    expect(teamsLiveTest).not.toContain("env: process.env");
-    expect(teamsLiveTest).toContain("real Microsoft tenant, Bot Framework credentials");
-    expect(teamsLiveTest).toContain("toMatch(");
   });
 
   it("keeps the rebuild-resume compatibility shim tied to its removal tracker", () => {

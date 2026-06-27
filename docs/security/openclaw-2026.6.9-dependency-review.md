@@ -2,6 +2,8 @@
 
 Review date: 2026-06-22
 
+Advisory audit revalidated: 2026-06-26
+
 Scope: NemoClaw runtime pin `openclaw@2026.6.9`, runtime helper pin `@zed-industries/codex-acp@0.11.1`, optional OpenClaw plugins, and built-in messaging OpenClaw plugins.
 
 ## Package Identity
@@ -49,8 +51,8 @@ npm install --package-lock-only --ignore-scripts --no-fund --no-audit \
 npm audit --omit=dev --json
 ```
 
-Result: npm audit exited `0` and reported `0` info, `0` low, `0` moderate, `0` high, and `0` critical vulnerabilities across `763` total dependencies.
-The local install emitted npm `EBADENGINE` warnings under Node `22.16.0` for packages that require newer Node `22.x` builds; the audit still completed and is used here only as advisory vulnerability evidence for the locked dependency graph.
+Revalidated on 2026-06-26: npm audit exited `0` and reported `0` info, `0` low, `0` moderate, `0` high, and `0` critical vulnerabilities across `763` total dependencies.
+The audit host used Node `22.16.0` and emitted npm `EBADENGINE` warnings for packages that require newer Node `22.x` builds. Production NemoClaw images use the digest-pinned `node:22-trixie-slim` image, which currently runs Node `v22.22.2` and satisfies the `openclaw@2026.6.9` engine requirement of `>=22.19.0`. The audit remains advisory vulnerability evidence for the locked dependency graph; the audit-host warning does not describe the production runtime.
 
 This review is an advisory snapshot for the direct OpenClaw runtime package, Codex ACP runtime helper, optional plugins, messaging plugins, and their npm dependency graphs at review time. It complements, but does not replace, the committed npm integrity pins, Dockerfile install-time registry integrity checks, and plugin install-time registry integrity checks.
 
@@ -144,7 +146,7 @@ Merge disposition for this OpenClaw 2026.6.9 bump: #4434 TUI unreachable-inferen
 
 The Teams manifest is intentionally documented as experimental channel support. Full Teams onboarding and message round-trip proof requires a real Microsoft tenant, Bot Framework app credentials, an app password, allowed user object IDs, and a public HTTPS webhook that forwards to the sandbox `/api/messages` endpoint. Those prerequisites cannot run in default PR CI without tenant-owned secrets and public ingress.
 
-Follow-up lane: `test/e2e-scenario/live/teams-message-round-trip.test.ts` is a credential-gated live skeleton. It skips unless `MSTEAMS_E2E=1`, `NEMOCLAW_RUN_E2E_SCENARIOS=1`, `NVIDIA_INFERENCE_API_KEY`, `MSTEAMS_APP_ID`, `MSTEAMS_APP_PASSWORD`, `MSTEAMS_TENANT_ID`, `MSTEAMS_ALLOWED_USERS`, `MSTEAMS_PUBLIC_WEBHOOK_URL`, and tenant-owned `MSTEAMS_E2E_ACTIVITY_JSON` are present. The scenario invokes the checked-in TypeScript driver `test/e2e-scenario/live/teams-message-round-trip-driver.ts` with an allowlisted environment containing only those `NVIDIA_*` and `MSTEAMS_*` variables; it does not pass the full runner environment or execute env-provided shell text. The skeleton records the expected proof boundary and keeps default CI from pretending that manifest rendering, package integrity, or local port-forward checks prove a real Teams tenant round trip.
+No real Microsoft Teams tenant proof is included in this PR. The work remains tracked as a follow-up outside this dependency bump: provision tenant-owned credentials and ingress, originate an authenticated Bot Framework activity from the tenant, observe the sandbox reply in Teams, and retain sanitized evidence. Until that proof exists, manifest rendering, package-integrity checks, local port-forward tests, or replaying a captured activity must not be described as a Teams round trip or counted as Teams runtime proof.
 
 ### Release Checklist for Accepted Residual Risk
 
@@ -154,7 +156,7 @@ Follow-up lane: `test/e2e-scenario/live/teams-message-round-trip.test.ts` is a c
 
 ### Advisor Disposition
 
-- `PRA-5` #4434 partial acceptance is explicitly accepted for this OpenClaw 2026.6.9 PR only: `test/issue-4434-error-fields.test.ts` verifies 3/3 fields are present in the NemoClaw-patched runtime output and 3/3 fields are missing in the upstream-shaped `openclaw@2026.6.9` output. On the next OpenClaw bump that emits equivalent fields upstream, remove `scripts/patch-openclaw-issue-4434-diagnostics.ts` in the same change and keep the full live assertions.
+- The #4434 compatibility-shim disposition is explicitly accepted for this OpenClaw 2026.6.9 PR only: `test/issue-4434-error-fields.test.ts` verifies 3/3 fields are present in the NemoClaw-patched runtime output and 3/3 fields are missing in the upstream-shaped `openclaw@2026.6.9` output. On the next OpenClaw bump that emits equivalent fields upstream, remove `scripts/patch-openclaw-issue-4434-diagnostics.ts` in the same change and keep the full live assertions.
 - The transitive npm graph warning is dispositioned by package evidence rather than a new NemoClaw-owned lockfile in this dependency bump: the reviewed OpenClaw runtime and `@openclaw/*` plugin artifacts ship package-internal `npm-shrinkwrap.json` files with integrity metadata, `@zed-industries/codex-acp@0.11.1` has no npm dependency tree, and the only reviewed non-shrinkwrapped plugin is the pre-existing Tencent WeChat package whose top-level SRI is now enforced. A future installer-policy PR should add a NemoClaw-owned lock/audit gate for third-party messaging plugins without package-internal shrinkwraps.
 - `src/lib/messaging/channels/manifests.test.ts` remains below the shared `test-size:check` threshold and does not need extraction in this dependency bump.
 - The npm audit result in this note is a manual snapshot for the reviewed lock-only graph. It is not a new CI gate; rerun the command in the Advisory Check section on the next OpenClaw/plugin bump or if npm advisory state changes before merge. Follow-up automation should add a CI job for `npm install --package-lock-only --ignore-scripts && npm audit --omit=dev --json` on the reviewed OpenClaw/plugin graph.

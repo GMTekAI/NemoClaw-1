@@ -96,7 +96,8 @@ describe("issue #4434 full OpenClaw TUI error guard", () => {
     expect(review).toContain("test/issue-4434-error-fields.test.ts");
     expect(review).toContain("scripts/patch-openclaw-issue-4434-diagnostics.ts");
     expect(review).toContain("Issue #4434 full live acceptance");
-    expect(review).toContain("`PRA-5` #4434 partial acceptance is explicitly accepted");
+    expect(review).toContain("The #4434 compatibility-shim disposition is explicitly accepted");
+    expect(review).not.toContain("`PRA-5`");
     expect(review).toContain("3/3 fields are present in the NemoClaw-patched runtime output");
     expect(review).toContain(
       "3/3 fields are missing in the upstream-shaped `openclaw@2026.6.9` output",
