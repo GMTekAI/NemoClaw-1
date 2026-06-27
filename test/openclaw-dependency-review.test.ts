@@ -132,6 +132,10 @@ describe("OpenClaw 2026.6.9 dependency review contract", () => {
     expect(review).toContain("test/e2e-scenario/live/teams-message-round-trip.test.ts");
 
     expect(review).toContain("Advisor Disposition");
+    expect(review).toContain("Release Checklist for Accepted Residual Risk");
+    expect(review).toContain("OpenClaw patched-dist runtime harness gap");
+    expect(review).toContain("Issue #4434 partial acceptance");
+    expect(review).toContain("This PR must not claim full #4434 closure");
     expect(review).toContain("src/lib/messaging/channels/manifests.test.ts");
     expect(review).toContain("npm audit result in this note is a manual snapshot");
     expect(review).toContain(
@@ -140,6 +144,8 @@ describe("OpenClaw 2026.6.9 dependency review contract", () => {
     expect(review).toContain("stale nonterminal rebuild-resume repair");
     expect(review).toContain("tracked against #4533");
     expect(review).toContain("src/lib/actions/sandbox/rebuild-resume-session.test.ts");
+    expect(review).toContain("test/onboard-resume-provider-recovery.test.ts");
+    expect(review).toContain("machine.state='openclaw'");
     expect(review).toContain("scripts/check-production-build-args.sh");
     expect(review).toContain('OPENCLAW_VERSION="${OPENCLAW_VERSION}"');
     expect(review).toContain("test/messaging-build-applier-integrity.test.ts");
