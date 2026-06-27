@@ -2,23 +2,44 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SCOPE_UPGRADE_SCRIPT = path.resolve(HERE, "e2e/test-issue-4462-scope-upgrade-approval.sh");
 
+function requireNonNegative(value: number, message: string): number {
+  return value >= 0
+    ? value
+    : (() => {
+        throw new Error(message);
+      })();
+}
+
 function extractShellFunction(scriptPath: string, name: string): string {
   const body = readFileSync(scriptPath, "utf8");
   const startMarker = `${name}() {`;
-  const start = body.indexOf(startMarker);
-  if (start < 0) throw new Error(`function ${name} not found in ${scriptPath}`);
+  const start = requireNonNegative(
+    body.indexOf(startMarker),
+    `function ${name} not found in ${scriptPath}`,
+  );
   const lines = body.slice(start).split("\n");
-  const endIndex = lines.findIndex((line, index) => index > 0 && line === "}");
-  if (endIndex < 0) throw new Error(`function ${name} missing closing brace in ${scriptPath}`);
+  const endIndex = requireNonNegative(
+    lines.findIndex((line, index) => index > 0 && line === "}"),
+    `function ${name} missing closing brace in ${scriptPath}`,
+  );
   return lines.slice(0, endIndex + 1).join("\n");
 }
 
@@ -78,6 +99,171 @@ describe("Phase 7 Ollama pinned install SHA256 guard", () => {
     });
     expect(result.rc).toBe(1);
     expect(result.stderr.trim()).toMatch(/^OLLAMA_PIN_REQUIRES_SHA256 version=/);
+  });
+});
+
+function runLayoutValidator(tarball: string): { rc: number; stderr: string } {
+  const functionBody = extractShellFunction(SCOPE_UPGRADE_SCRIPT, "validate_ollama_tarball_layout");
+  const harness = `
+set -u
+fail() { printf 'FAIL: %s\\n' "$*" >&2; }
+redacted_excerpt() { printf '%s' "$1"; }
+${functionBody}
+validate_ollama_tarball_layout "$1"
+`;
+  const result = spawnSync("bash", ["-c", harness, "bash", tarball], {
+    encoding: "utf-8",
+    timeout: 20_000,
+  });
+  return {
+    rc: result.status ?? -1,
+    stderr: result.stderr ?? "",
+  };
+}
+
+function makeTarball(root: string, name: string, prepare: () => void, members: string[]): string {
+  prepare();
+  const tarball = path.join(root, name);
+  const tarRoot = path.join(root, "tar-src");
+  const result = spawnSync("tar", ["-czf", tarball, "-C", tarRoot, ...members], {
+    encoding: "utf-8",
+    timeout: 20_000,
+  });
+  const error = result.status !== 0 ? `tar failed: ${result.stderr}` : null;
+  rmSync(tarRoot, { recursive: true, force: true });
+  return error === null
+    ? tarball
+    : (() => {
+        throw new Error(error);
+      })();
+}
+
+describe("Phase 7 Ollama tarball layout validator (behavioural fixtures)", () => {
+  let tmpRoot: string;
+
+  beforeEach(() => {
+    tmpRoot = mkdtempSync(path.join(tmpdir(), "ollama-layout-"));
+  });
+
+  afterEach(() => {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  it("accepts a layout that matches the real release: bin/ + lib/ with sibling-relative symlinks", () => {
+    const tarball = makeTarball(
+      tmpRoot,
+      "good.tgz",
+      () => {
+        const src = path.join(tmpRoot, "tar-src");
+        mkdirSync(path.join(src, "bin"), { recursive: true });
+        mkdirSync(path.join(src, "lib", "ollama"), { recursive: true });
+        writeFileSync(path.join(src, "bin", "ollama"), "ELF stub\n");
+        chmodSync(path.join(src, "bin", "ollama"), 0o755);
+        writeFileSync(path.join(src, "lib", "ollama", "libggml-base.so.0.0.0"), "SO stub\n");
+        symlinkSync("libggml-base.so.0.0.0", path.join(src, "lib", "ollama", "libggml-base.so.0"));
+      },
+      ["bin", "lib"],
+    );
+    const result = runLayoutValidator(tarball);
+    expect(result.stderr).toBe("");
+    expect(result.rc).toBe(0);
+  });
+
+  it("rejects a tarball with an absolute-path entry", () => {
+    const tarball = path.join(tmpRoot, "abs.tgz");
+    const src = path.join(tmpRoot, "tar-src");
+    mkdirSync(path.join(src, "bin"), { recursive: true });
+    writeFileSync(path.join(src, "bin", "ollama"), "ELF stub\n");
+    const escapeFile = path.join(tmpRoot, "etc-passwd");
+    writeFileSync(escapeFile, "root:x:0:0\n");
+    const tarResult = spawnSync(
+      "tar",
+      [
+        "-czf",
+        tarball,
+        "-C",
+        src,
+        "bin/ollama",
+        "-C",
+        tmpRoot,
+        "--transform",
+        "s,^etc-passwd$,/etc/passwd,",
+        "etc-passwd",
+      ],
+      { encoding: "utf-8", timeout: 20_000 },
+    );
+    expect(tarResult.status).toBe(0);
+    rmSync(src, { recursive: true, force: true });
+    const result = runLayoutValidator(tarball);
+    expect(result.rc).toBe(1);
+    expect(result.stderr).toContain("absolute paths or parent traversal");
+  });
+
+  it("rejects a tarball with a parent-traversal entry", () => {
+    const tarball = path.join(tmpRoot, "trav.tgz");
+    const src = path.join(tmpRoot, "tar-src");
+    mkdirSync(path.join(src, "bin"), { recursive: true });
+    writeFileSync(path.join(src, "bin", "ollama"), "ELF stub\n");
+    const tarResult = spawnSync(
+      "tar",
+      ["-czf", tarball, "-C", src, "--transform", "s,^bin/ollama$,../escape,", "bin/ollama"],
+      { encoding: "utf-8", timeout: 20_000 },
+    );
+    expect(tarResult.status).toBe(0);
+    rmSync(src, { recursive: true, force: true });
+    const result = runLayoutValidator(tarball);
+    expect(result.rc).toBe(1);
+    expect(result.stderr).toContain("absolute paths or parent traversal");
+  });
+
+  it("rejects a tarball with members outside bin/ or lib/", () => {
+    const tarball = makeTarball(
+      tmpRoot,
+      "extra.tgz",
+      () => {
+        const src = path.join(tmpRoot, "tar-src");
+        mkdirSync(path.join(src, "bin"), { recursive: true });
+        mkdirSync(path.join(src, "extras"), { recursive: true });
+        writeFileSync(path.join(src, "bin", "ollama"), "ELF stub\n");
+        writeFileSync(path.join(src, "extras", "marker"), "x\n");
+      },
+      ["bin", "extras"],
+    );
+    const result = runLayoutValidator(tarball);
+    expect(result.rc).toBe(1);
+    expect(result.stderr).toContain("members outside bin/ or lib/");
+  });
+
+  it("rejects a tarball with a symlink whose target escapes via absolute path", () => {
+    const tarball = makeTarball(
+      tmpRoot,
+      "abs-link.tgz",
+      () => {
+        const src = path.join(tmpRoot, "tar-src");
+        mkdirSync(path.join(src, "lib", "ollama"), { recursive: true });
+        symlinkSync("/etc/passwd", path.join(src, "lib", "ollama", "escape.so"));
+      },
+      ["lib"],
+    );
+    const result = runLayoutValidator(tarball);
+    expect(result.rc).toBe(1);
+    expect(result.stderr).toContain("symlink with an absolute or parent-traversal target");
+  });
+
+  it("rejects a tarball with a symlink whose target escapes via parent traversal", () => {
+    const tarball = makeTarball(
+      tmpRoot,
+      "trav-link.tgz",
+      () => {
+        const src = path.join(tmpRoot, "tar-src");
+        mkdirSync(path.join(src, "lib", "ollama"), { recursive: true });
+        symlinkSync("../../../etc/passwd", path.join(src, "lib", "ollama", "escape.so"));
+      },
+      ["lib"],
+    );
+    const result = runLayoutValidator(tarball);
+    expect(result.rc).toBe(1);
+    expect(result.stderr).toContain("symlink with an absolute or parent-traversal target");
   });
 });
 

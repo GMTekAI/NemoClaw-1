@@ -199,12 +199,31 @@ extract_scope_request_id_from_output() {
   sed -nE 's/.*requestId: ([[:alnum:]_-]+).*/\1/p' | head -1
 }
 
-# Pipe arbitrary text through the standalone host-side token redactor so any
-# raw `openclaw devices approve` or `openclaw agent` output reaching
-# $APPROVAL_LOG / $AGENT_LOG / $STATE_LOG cannot carry bearer tokens, nvapi
-# keys, or similar credential-shaped substrings into uploaded artefacts. Pure
-# substitution: the redactor is deterministic, has no side effects, and
-# always exits 0 in normal operation.
+# SOURCE_OF_TRUTH_REVIEW (scope-upgrade artifact + job-log redaction):
+#
+#   * Source boundary: every byte of `openclaw devices approve` /
+#     `openclaw agent` / `openclaw devices list` / gateway / auto-pair
+#     output that reaches $APPROVAL_LOG / $AGENT_LOG / $STATE_LOG, OR
+#     appears in any `fail` / `info` excerpt, MUST first pass through
+#     `redact_text_for_log[_or_marker]` (full pipes) or `redacted_excerpt`
+#     (truncated fail-message excerpts). The single host-side redactor at
+#     `test/e2e/lib/redact-text.py` is the only place that knows the
+#     credential-shape catalogue.
+#   * Invalid state: any append-to-log or fail/info excerpt that consumes
+#     raw command output without going through the wrappers above. A
+#     regression of this kind would print bearer tokens / nvapi keys /
+#     etc. into uploaded job logs and CI run summaries.
+#   * Source-fix constraint: the redactor is deterministic and runs on
+#     host; it never inspects sandbox state and never writes outside its
+#     own stdout. New token shapes are added in one place
+#     (`redact-text.py`) and inherited by every caller automatically.
+#   * Regression test: `test/redact-text.test.ts` covers the redactor
+#     itself; the Phase 6 / approve / agent / multi-agent appends each
+#     assert their wrapper invocation; `test/ollama-pinned-install.test.ts`
+#     covers the `redacted_excerpt` fail-message wiring through pinned
+#     assertions over the script body.
+#   * Removal condition: when OpenClaw stops emitting bearer-token /
+#     nvapi-key shaped substrings in any of the consumed command outputs.
 redact_text_for_log() {
   python3 "${E2E_DIR}/lib/redact-text.py"
 }
@@ -1133,17 +1152,17 @@ openclaw agent --agent main --json --session-id "$session_id" \
   } >>"$AGENT_LOG"
   reply=$(printf '%s' "$final_output" | parse_openclaw_agent_text 2>/dev/null) || reply=""
   if grep -Eiq 'EMBEDDED FALLBACK|scope upgrade pending approval|pairing required|fallbackFrom[": ]+gateway|transport[": ]+embedded' <<<"$final_output"; then
-    last_agent_detail="agent output contained fallback or pairing marker: ${final_output:0:500}"
+    last_agent_detail="agent output contained fallback or pairing marker: $(redacted_excerpt "$final_output" 500)"
   elif [ "$final_rc" -ne 0 ]; then
-    last_agent_detail="agent exited ${final_rc}: ${final_output:0:500}"
+    last_agent_detail="agent exited ${final_rc}: $(redacted_excerpt "$final_output" 500)"
   elif ! grep -q '^__URL_FOR_FINAL_AGENT__=ws://' <<<"$final_output"; then
-    last_agent_detail="agent command did not preserve OPENCLAW_GATEWAY_URL: ${final_output:0:500}"
+    last_agent_detail="agent command did not preserve OPENCLAW_GATEWAY_URL: $(redacted_excerpt "$final_output" 500)"
   elif e2e_text_contains_integer_42 "$reply"; then
     agent_ok=1
     pass "approved openclaw agent turn answered through gateway mode"
     break
   else
-    last_agent_detail="expected reply 42, got reply='${reply:0:200}', raw='${final_output:0:400}'"
+    last_agent_detail="expected reply 42, got reply='$(redacted_excerpt "$reply" 200)', raw='$(redacted_excerpt "$final_output" 400)'"
   fi
   sleep 5
 done
@@ -1276,35 +1295,49 @@ fi
 
 section "Phase 7 (CPU-substitute lane): Verify two-sandbox concurrent differing-provider gateway-backed agent turns"
 
-# Sandbox A keeps the NVIDIA Cloud provider configured by Phase 1; sandbox B
-# is onboarded against a host-side Ollama daemon that serves a small local
-# model. The differing-provider gate of #5343 is the route assertion (sandbox
-# A on NVIDIA Cloud vs sandbox B on Ollama-local, both via inference.local
-# concurrently) and the absence of scope-upgrade / pairing / embedded-
-# fallback markers on either turn — neither of which depends on the absolute
-# model size. The default model qwen3:0.6b is therefore a CPU-lane substitute
-# for the issue-spec qwen3.5:9b, sized to fit shared CI runners; the literal
-# 9B-parameter sandbox-B model identity from #5343 is only validated when
-# NEMOCLAW_CLI_SCOPE_OLLAMA_MODEL is overridden on a GPU-provisioned lane,
-# and the result summary surfaces which lane ran so reviewers cannot mistake
-# this run for full literal-model coverage.
-# This default lane therefore proves differing-provider isolation and the
-# `inference.local` route on a CPU-sized substitute; it does not assert the
-# literal #5343 sandbox-B model identity. Both sandboxes run concurrent
-# allowlisted CLI clients through their per-sandbox OpenShell gateways and
-# must each get their late scope upgrade approved by their own in-sandbox
-# auto-pair watcher with no scope-upgrade, pairing, or embedded-fallback
-# markers. The recorded provider/model in `/sandbox/.openclaw/openclaw.json`
-# must differ between the two sandboxes (NVIDIA Cloud vs Ollama-local) and
-# each must route inference through `inference.local`, while per-sandbox
-# gateway URL pinning (sandbox A → :18789, sandbox B → :18790) keeps the
-# routing isolation intact under concurrency.
+# Sandbox A keeps the NVIDIA Cloud provider configured by Phase 1; sandbox
+# B is onboarded against a host-side Ollama daemon serving a small local
+# model. The #5343 contract proven here is two-part: (a) differing-provider
+# isolation under concurrent agent turns and (b) both routes still go
+# through `inference.local`. Neither depends on the absolute size of
+# sandbox B's model — the default `qwen3:0.6b` is a CPU-lane substitute
+# for the issue-spec `qwen3.5:9b`, sized to fit shared CI runners, while
+# the literal 9B sandbox-B model identity is validated only when
+# `NEMOCLAW_CLI_SCOPE_OLLAMA_MODEL` is overridden on a GPU-provisioned
+# lane. The final summary surfaces which lane ran so reviewers cannot
+# mistake this run for full literal-model coverage. Per-sandbox gateway
+# URL pinning (sandbox A → :18789, sandbox B → :18790) keeps routing
+# isolation intact under concurrency.
 
 OLLAMA_TWO_PROVIDER_MODEL="${NEMOCLAW_CLI_SCOPE_OLLAMA_MODEL:-qwen3:0.6b}"
 OLLAMA_SPEC_MODEL_5343="qwen3.5:9b"
-# Pin Ollama to a real upstream release whose linux-amd64 tarball checksum
-# is committed below. Override the version only when overriding the sha256
-# in lockstep.
+# SOURCE_OF_TRUTH_REVIEW (Phase 7 Ollama installer):
+#
+#   * Source boundary: a single committed `<version, sha256>` pair below.
+#     The tarball URL is reconstructed from the pinned version; the SHA256
+#     is verified against the downloaded bytes before any privileged tar
+#     extraction; the archive layout is validated by
+#     `validate_ollama_tarball_layout` (bin/+lib/ only, regular file or
+#     directory or relative-target symlink). Overriding the version
+#     requires overriding the SHA256 in lockstep
+#     (`ollama_pinned_install_sha256_ok`) so an unpinned binary cannot
+#     reach `sudo tar`.
+#   * Invalid state: an Ollama install that runs `sudo tar -xzf` on a
+#     tarball whose contents have not been (a) byte-pinned via SHA256 or
+#     (b) layout-validated against the documented release shape.
+#   * Source-fix constraint: only this script reaches for Ollama; if a
+#     future lane needs the same pin model, the same three guards
+#     (sha256_ok, computed_sha match, layout validate) must apply in the
+#     same order — they are intentionally collected adjacent to each
+#     other below for ease of audit.
+#   * Regression test: `test/ollama-pinned-install.test.ts` exercises the
+#     SHA256 guard with a runtime harness and the layout validator with
+#     six hostile-fixture cases (absolute path, parent traversal, members
+#     outside bin/+lib/, abs-target symlink, traversal-target symlink,
+#     good baseline).
+#   * Removal condition: when NemoClaw vendors its own Ollama distro and
+#     the second sandbox no longer needs a host-side install, the entire
+#     block goes away.
 OLLAMA_PINNED_VERSION_DEFAULT="0.13.5"
 OLLAMA_PINNED_SHA256_DEFAULT="41fb93ff8be35e4d2d22bafd1c42b487efb15b766076d976766bd1ee4db3f8e2"
 OLLAMA_PINNED_VERSION="${NEMOCLAW_CLI_SCOPE_OLLAMA_VERSION:-$OLLAMA_PINNED_VERSION_DEFAULT}"
@@ -1325,6 +1358,62 @@ fi
 ollama_pinned_install_sha256_ok() {
   if [ -z "${OLLAMA_PINNED_SHA256:-}" ]; then
     printf 'OLLAMA_PIN_REQUIRES_SHA256 version=%s\n' "${OLLAMA_PINNED_VERSION:-unset}" >&2
+    return 1
+  fi
+  return 0
+}
+
+# Refuse to hand any tarball to `sudo tar -xzf` whose member list, member
+# types, or symlink targets are outside the legitimate Ollama release
+# layout. Extracted so a behavioural vitest fixture can craft hostile
+# tarballs (absolute paths, parent traversal, escaping symlinks, devices)
+# and assert this guard rejects them before the privileged extract step
+# ever runs. Allow only:
+#   * members under bin/ or lib/
+#   * regular files (`-`), directories (`d`), and symlinks (`l`)
+#   * symlink targets that are relative and never contain a `..` segment
+# A single hostile member shape — symlink, hardlink, device, FIFO, socket
+# with an unsafe target — can otherwise redirect the privileged extractor
+# anywhere on the host filesystem.
+validate_ollama_tarball_layout() {
+  local tarball="$1"
+  local tar_listing tar_long_listing
+  if ! tar_listing=$(tar -tzf "$tarball" 2>&1); then
+    fail "Ollama tarball listing failed: $(redacted_excerpt "$tar_listing" 300)"
+    return 1
+  fi
+  if printf '%s\n' "$tar_listing" | grep -E '(^|/)(\.\.)(/|$)|^/' >/dev/null; then
+    fail "Ollama tarball contains absolute paths or parent traversal entries; refusing privileged extract"
+    return 1
+  fi
+  if printf '%s\n' "$tar_listing" | grep -vE '^(bin|lib)(/|$)' >/dev/null; then
+    fail "Ollama tarball contains members outside bin/ or lib/; refusing privileged extract"
+    return 1
+  fi
+  if ! tar_long_listing=$(tar -tvzf "$tarball" 2>&1); then
+    fail "Ollama tarball long listing failed: $(redacted_excerpt "$tar_long_listing" 300)"
+    return 1
+  fi
+  if printf '%s\n' "$tar_long_listing" | awk '$1 != "" && $1 !~ /^[-dl]/ {found=1} END {exit !found}'; then
+    fail "Ollama tarball contains non-file/non-directory/non-symlink entries (hardlink, device, fifo, or socket); refusing privileged extract"
+    return 1
+  fi
+  if printf '%s\n' "$tar_long_listing" | awk '
+    /^l/ {
+      target = ""
+      for (i = NF; i >= 1; i--) {
+        if ($i == "->") {
+          target = $(i + 1)
+          break
+        }
+      }
+      if (target == "" || target ~ /^\// || target ~ /(^|\/)\.\.(\/|$)/) {
+        found = 1
+      }
+    }
+    END { exit !found }
+  '; then
+    fail "Ollama tarball contains a symlink with an absolute or parent-traversal target; refusing privileged extract"
     return 1
   fi
   return 0
@@ -1357,54 +1446,7 @@ if ! command -v ollama >/dev/null 2>&1; then
   # this guard refuses any member outside the documented release layout
   # (bin/, lib/) so a misaligned override cannot escape /usr/local via an
   # absolute path or parent-traversal entry.
-  if ! tar_listing=$(tar -tzf "${install_tmp}/ollama.tgz" 2>&1); then
-    fail "Ollama tarball listing failed: $(redacted_excerpt "$tar_listing" 300)"
-    rm -rf "$install_tmp"
-    exit 1
-  fi
-  if printf '%s\n' "$tar_listing" | grep -E '(^|/)(\.\.)(/|$)|^/' >/dev/null; then
-    fail "Ollama tarball contains absolute paths or parent traversal entries; refusing privileged extract"
-    rm -rf "$install_tmp"
-    exit 1
-  fi
-  if printf '%s\n' "$tar_listing" | grep -vE '^(bin|lib)(/|$)' >/dev/null; then
-    fail "Ollama tarball contains members outside bin/ or lib/; refusing privileged extract"
-    rm -rf "$install_tmp"
-    exit 1
-  fi
-  # Reject archive members whose entry type is not a regular file,
-  # directory, or relative-target symlink. `tar -tvzf` prints the type
-  # letter as the first column character. Allow `-` (file), `d`
-  # (directory), `l` (symlink); reject hardlinks, devices, FIFOs, sockets,
-  # and any symlink whose target is absolute or contains `..`. The Ollama
-  # release tarball ships sibling-only relative symlinks for SO version
-  # aliases, which is the only legitimate symlink shape on this lane.
-  if ! tar_long_listing=$(tar -tvzf "${install_tmp}/ollama.tgz" 2>&1); then
-    fail "Ollama tarball long listing failed: $(redacted_excerpt "$tar_long_listing" 300)"
-    rm -rf "$install_tmp"
-    exit 1
-  fi
-  if printf '%s\n' "$tar_long_listing" | awk '$1 != "" && $1 !~ /^[-dl]/ {found=1} END {exit !found}'; then
-    fail "Ollama tarball contains non-file/non-directory/non-symlink entries (hardlink, device, fifo, or socket); refusing privileged extract"
-    rm -rf "$install_tmp"
-    exit 1
-  fi
-  if printf '%s\n' "$tar_long_listing" | awk '
-    /^l/ {
-      target = ""
-      for (i = NF; i >= 1; i--) {
-        if ($i == "->") {
-          target = $(i + 1)
-          break
-        }
-      }
-      if (target == "" || target ~ /^\// || target ~ /(^|\/)\.\.(\/|$)/) {
-        found = 1
-      }
-    }
-    END { exit !found }
-  '; then
-    fail "Ollama tarball contains a symlink with an absolute or parent-traversal target; refusing privileged extract"
+  if ! validate_ollama_tarball_layout "${install_tmp}/ollama.tgz"; then
     rm -rf "$install_tmp"
     exit 1
   fi
@@ -1480,33 +1522,31 @@ if [ "$onboard_b_rc" -ne 0 ]; then
 fi
 pass "second sandbox onboarded with Ollama provider"
 
+# SOURCE_OF_TRUTH_REVIEW (Phase 7 / #5343 dual-source route verification):
+# Phase 7's "two sandboxes, two providers, both via inference.local" contract
+# reads from two authoritative sources because neither alone is sufficient.
+#
+#   * provider + model — host-side NemoClaw registry
+#     (~/.nemoclaw/sandboxes.json) via test/e2e/lib/read-host-registry.py.
+#     This file records the user-facing onboard intent and is the only
+#     place that retains human-readable provider labels such as
+#     "nvidia-prod" or "ollama-local"; the in-sandbox OpenClaw config
+#     flattens every managed provider to providerKey="inference" via
+#     patchOpenClawInferenceConfig.
+#   * effective base_url — in-sandbox openclaw.json via
+#     read_sandbox_openclaw_route below. This is the literal URL the
+#     next openclaw agent turn will hand to its HTTP client; the registry
+#     does not carry a route field.
+#
+# The dual-source read therefore proves both halves of the contract
+# (differing providers + inference.local route) from the canonical source
+# of each fact. Fail closed at either reader. The shell merger below
+# performs no parsing of its own — it forwards the two readers' JSON into
+# a single Phase 7-shaped object so the assertion sites can stay simple.
+# Removal condition: when NemoClaw exposes a single read-only API that
+# returns both fields per sandbox, both readers collapse into one call.
 read_host_registry_provider_model() {
-  # Host-side NemoClaw registry (~/.nemoclaw/sandboxes.json) records the
-  # requested provider / model intent per sandbox. The differing-providers
-  # half of #5343 needs human-readable labels ("nvidia-prod" vs "ollama-local")
-  # that the in-sandbox OpenClaw config does not carry —
-  # patchOpenClawInferenceConfig normalises every managed route to
-  # providerKey="inference", so both sandboxes look identical in
-  # openclaw.json regardless of upstream.
-  python3 - "$1" <<'PY'
-import json
-import os
-import sys
-
-sandbox_name = sys.argv[1]
-registry_file = os.path.join(os.environ.get("HOME", "/tmp"), ".nemoclaw", "sandboxes.json")
-try:
-    with open(registry_file, encoding="utf-8") as fh:
-        data = json.load(fh)
-except Exception as exc:
-    sys.stderr.write(f"registry-read-failed: {exc}\n")
-    raise SystemExit(2)
-
-entry = (data.get("sandboxes") or {}).get(sandbox_name) or {}
-provider = str(entry.get("provider") or "").strip()
-model = str(entry.get("model") or "").strip()
-print(json.dumps({"provider": provider, "model": model}, sort_keys=True))
-PY
+  python3 "${E2E_DIR}/lib/read-host-registry.py" "$1"
 }
 
 read_sandbox_openclaw_route() {
@@ -1547,14 +1587,8 @@ PY
 }
 
 extract_openclaw_upstream() {
-  # Verify Phase 7's "two sandboxes, two providers, both via inference.local"
-  # contract from authoritative sources only — provider+model from the
-  # host-side NemoClaw registry (intent), base_url from the in-sandbox
-  # OpenClaw config (effective route). Combining the two is necessary
-  # because each source on its own is insufficient: the registry has no
-  # route field, and the in-sandbox config flattens every managed provider
-  # to providerKey="inference". The merge happens here in shell so the two
-  # readers stay single-purpose and reusable.
+  # Merge the two single-source readers documented under
+  # SOURCE_OF_TRUTH_REVIEW above into a single Phase 7-shaped object.
   local sandbox="$1"
   local registry_json route_json
   registry_json="$(read_host_registry_provider_model "$sandbox")" || return $?
@@ -1709,11 +1743,11 @@ multi_marker_re='EMBEDDED FALLBACK|scope upgrade pending approval|pairing requir
 
 multi_pass=1
 if [ "$multi_rc_a" -ne 0 ]; then
-  fail "sandbox A concurrent agent exited ${multi_rc_a}: $(head -c 400 "$multi_out_a")"
+  fail "sandbox A concurrent agent exited ${multi_rc_a}: $(redacted_excerpt "$(cat "$multi_out_a")" 400)"
   multi_pass=0
 fi
 if [ "$multi_rc_b" -ne 0 ]; then
-  fail "sandbox B concurrent agent exited ${multi_rc_b}: $(head -c 400 "$multi_out_b")"
+  fail "sandbox B concurrent agent exited ${multi_rc_b}: $(redacted_excerpt "$(cat "$multi_out_b")" 400)"
   multi_pass=0
 fi
 if grep -Eiq "$multi_marker_re" "$multi_out_a"; then
