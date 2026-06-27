@@ -31,6 +31,7 @@ import { OPENSHELL_PROBE_TIMEOUT_MS } from "../adapters/openshell/timeouts.js";
 import type { AgentStateFile } from "../agent/defs.js";
 import { loadAgent } from "../agent/defs.js";
 import { isRecord, type UnknownRecord } from "../core/json-types.js";
+import { listOpenClawPluginExtensionIds } from "../messaging/channels/metadata.js";
 import { shellQuote } from "../runner.js";
 import { createTempSshConfig } from "../sandbox/temp-ssh-config.js";
 import { isSensitiveFile, sanitizeConfigFile } from "../security/credential-filter.js";
@@ -576,7 +577,15 @@ const EXTENSION_NPM_BIN_RE = /^extensions\/[^/]+\/node_modules\/\.bin\/[^/]+$/;
 // target; source-only matching would permit repointing it to an arbitrary file.
 const OPENCLAW_EXTENSION_PEER_LINK_RE = /^extensions\/[^/]+\/node_modules\/openclaw$/;
 const OPENCLAW_GLOBAL_PACKAGE_PATH = "/usr/local/lib/node_modules/openclaw";
-const OPENCLAW_IMAGE_MANAGED_EXTENSION_DIRS = ["nemoclaw", "openclaw-weixin"] as const;
+// Preserve extensions baked into the freshly rebuilt image instead of
+// replacing them with archived copies. Messaging IDs come from the reviewed
+// channel manifests; the remaining entries are installed by Dockerfile.base.
+const OPENCLAW_IMAGE_MANAGED_EXTENSION_DIRS = [
+  "nemoclaw",
+  "diagnostics-otel",
+  "brave",
+  ...listOpenClawPluginExtensionIds(),
+] as const;
 
 function isAllowedExtensionNpmBinSymlink(relPath: string, linkTarget: string): boolean {
   const normalizedRelPath = relPath.split(path.sep).join("/");

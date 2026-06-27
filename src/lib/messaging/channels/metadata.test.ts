@@ -12,13 +12,14 @@ import {
   getMessagingPolicyKeysByChannel,
   getMessagingPolicyPresetValidationWarnings,
   getMessagingProviderSuffixesByChannel,
-  listBuiltInMessagingChannelManifests,
   listAvailableMessagingChannelIds,
+  listBuiltInMessagingChannelManifests,
   listMessagingChannelsWithoutCredentials,
   listMessagingConfigEnvKeys,
   listMessagingPackageInstallSpecs,
   listMessagingProviderNamesForChannel,
   listOpenClawManagedChannelNames,
+  listOpenClawPluginExtensionIds,
   listOpenClawRuntimeChannelMetadata,
   listRequiredCreateTimeMessagingPolicyPresetNames,
 } from "./metadata";
@@ -122,6 +123,13 @@ describe("built-in messaging channel metadata", () => {
     );
     expect(listOpenClawManagedChannelNames()).toEqual([
       "telegram",
+      "discord",
+      "openclaw-weixin",
+      "slack",
+      "whatsapp",
+      "msteams",
+    ]);
+    expect(listOpenClawPluginExtensionIds()).toEqual([
       "discord",
       "openclaw-weixin",
       "slack",
