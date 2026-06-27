@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -61,36 +62,30 @@ process.stdout.write("RESULT " + JSON.stringify({ kid, signingKeyHash }) + "\n")
   );
   let stdout = "";
   let stderr = "";
-  let readySettled = false;
-  let resolveReady!: () => void;
-  let rejectReady!: (error: Error) => void;
-  const ready = new Promise<void>((resolve, reject) => {
-    resolveReady = resolve;
-    rejectReady = reject;
-  });
-  const readyTimeout = setTimeout(() => {
-    if (!readySettled) rejectReady(new Error(`JWT child did not become ready: ${stderr}`));
-  }, 15_000);
   child.stdout.on("data", (chunk: Buffer) => {
     stdout += chunk.toString("utf8");
-    if (!readySettled && stdout.includes("READY\n")) {
-      readySettled = true;
-      clearTimeout(readyTimeout);
-      resolveReady();
-    }
   });
   child.stderr.on("data", (chunk: Buffer) => {
     stderr += chunk.toString("utf8");
   });
+  let readyTimeout!: NodeJS.Timeout;
+  const ready = Promise.race([
+    once(child.stdout, "data").then(() => undefined),
+    once(child, "close").then(() => {
+      throw new Error(`JWT child exited before ready: ${stderr}`);
+    }),
+    new Promise<void>((_resolve, reject) => {
+      readyTimeout = setTimeout(
+        () => reject(new Error(`JWT child did not become ready: ${stderr}`)),
+        15_000,
+      );
+    }),
+  ]).finally(() => clearTimeout(readyTimeout));
   const done = new Promise<{ code: number | null; stderr: string; stdout: string }>(
     (resolve, reject) => {
       child.once("error", reject);
       child.once("close", (code) => {
         clearTimeout(readyTimeout);
-        if (!readySettled) {
-          readySettled = true;
-          rejectReady(new Error(`JWT child exited before ready: ${stderr}`));
-        }
         resolve({ code, stderr, stdout });
       });
     },

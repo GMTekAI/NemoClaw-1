@@ -351,21 +351,24 @@ describe("docker-driver gateway runtime helpers", () => {
     const originalExistsSync = fs.existsSync.bind(fs);
     const originalReadFileSync = fs.readFileSync.bind(fs);
     const originalReadlinkSync = fs.readlinkSync.bind(fs);
-    vi.spyOn(fs, "existsSync").mockImplementation(((candidate) => {
-      if (String(candidate) === `/proc/${pid}/environ`) return true;
-      if (String(candidate) === `/proc/${pid}/exe`) return true;
-      return originalExistsSync(candidate);
-    }) as typeof fs.existsSync);
-    vi.spyOn(fs, "readFileSync").mockImplementation(((candidate, options) => {
-      if (String(candidate) === `/proc/${pid}/environ`) {
-        return "OPENSHELL_DRIVERS=docker\0";
-      }
-      return originalReadFileSync(candidate, options as never);
-    }) as typeof fs.readFileSync);
-    vi.spyOn(fs, "readlinkSync").mockImplementation(((candidate, options) => {
-      if (String(candidate) === `/proc/${pid}/exe`) return replacementGatewayBin;
-      return originalReadlinkSync(candidate, options as never);
-    }) as typeof fs.readlinkSync);
+    const existingProcPaths = new Set([`/proc/${pid}/environ`, `/proc/${pid}/exe`]);
+    const procFileContents = new Map([[`/proc/${pid}/environ`, "OPENSHELL_DRIVERS=docker\0"]]);
+    const procLinks = new Map([[`/proc/${pid}/exe`, replacementGatewayBin]]);
+    vi.spyOn(fs, "existsSync").mockImplementation(
+      ((candidate) =>
+        existingProcPaths.has(String(candidate)) ||
+        originalExistsSync(candidate)) as typeof fs.existsSync,
+    );
+    vi.spyOn(fs, "readFileSync").mockImplementation(
+      ((candidate, options) =>
+        procFileContents.get(String(candidate)) ??
+        originalReadFileSync(candidate, options as never)) as typeof fs.readFileSync,
+    );
+    vi.spyOn(fs, "readlinkSync").mockImplementation(
+      ((candidate, options) =>
+        procLinks.get(String(candidate)) ??
+        originalReadlinkSync(candidate, options as never)) as typeof fs.readlinkSync,
+    );
 
     expect(
       helpers.getDockerDriverGatewayRuntimeDrift(pid, desiredEnv, identityGatewayBin, "linux")
