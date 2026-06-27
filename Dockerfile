@@ -610,11 +610,12 @@ RUN node /usr/local/lib/nemoclaw/patch-openclaw-chat-send.js \
 
 # Patch OpenClaw TUI unreachable-inference diagnostics for #4434.
 #
-# OpenClaw 2026.6.9 formats sandbox inference egress failures as a generic
-# `TypeError: fetch failed`, which leaves the TUI without the required
-# HTTP/cause, gateway/upstream reporting layer, and recovery hint fields. This
-# version-scoped shim enriches only that fetch-failed formatter path, and only
-# inside OpenShell sandboxes where OPENSHELL_SANDBOX=1 is supplied at runtime.
+# OpenClaw 2026.6.9 formats sandbox inference egress failures as either generic
+# `TypeError: fetch failed` or `LLM request timed out.` messages, which leave the
+# TUI without the required HTTP/cause, gateway/upstream reporting layer, and
+# recovery hint fields. This version-scoped shim enriches only those reviewed
+# formatter paths, and only inside OpenShell sandboxes where
+# OPENSHELL_SANDBOX=1 is supplied at runtime.
 #
 # Removal criteria: drop when upstream OpenClaw emits these structured fields
 # from its assistant error formatter for unreachable inference failures.

@@ -22,16 +22,15 @@ const LIVE_VITEST_GUARD = path.join(
 
 const CURRENT_REVIEWED_OPENCLAW_VERSION = "2026.6.9";
 const PATCHED_OPENCLAW_2026_6_9_ISSUE_4434_TUI_ERROR_OUTPUT = [
-  "run error: TypeError: fetch failed",
-  "Cause: fetch failed while reaching the upstream API.",
+  "run error: LLM request timed out.",
+  "Cause: timed out while reaching the upstream API.",
   "Reporting layer: gateway proxy / upstream API.",
   "Recovery hint: check sandbox egress and provider reachability, then retry.",
   "1m 04s | error",
 ].join("\n");
 
 const UPSTREAM_OPENCLAW_2026_6_9_ISSUE_4434_TUI_ERROR_OUTPUT = [
-  "run error:",
-  "TypeError: fetch failed",
+  "run error: LLM request timed out.",
   "1m 04s | error",
 ].join("\n");
 

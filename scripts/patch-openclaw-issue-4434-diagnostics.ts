@@ -5,7 +5,7 @@
 /*
  * Temporary NemoClaw compatibility shim for OpenClaw 2026.6.9 TUI error output.
  * Remove this when upstream OpenClaw reports structured unreachable-inference
- * diagnostics for sandbox fetch failures.
+ * diagnostics for sandbox fetch failures and inference timeouts.
  */
 
 const fs = require("node:fs");
@@ -15,7 +15,8 @@ const AUDIT_FLAG = "--audit";
 const EXIT_APPLY_FAILURE = 1;
 const EXIT_USAGE = 2;
 const EXIT_AUDIT_FAILURE = 3;
-const PATCH_MARKER = "nemoclaw: #4434 structured unreachable-inference diagnostic";
+const LEGACY_PATCH_MARKER = "nemoclaw: #4434 structured unreachable-inference diagnostic";
+const PATCH_MARKER = `${LEGACY_PATCH_MARKER} (timeout-shape-v2)`;
 
 type DirentLike = {
   isFile(): boolean;
@@ -55,13 +56,15 @@ const helperSource = [
   "const NEMOCLAW_ISSUE_4434_HTTP_STATUS_OR_CAUSE_RE = /\\b(?:HTTP\\s+\\d{3}|status(?:\\s+code)?\\s*[:=]\\s*\\d{3}|cause\\s*[:=]\\s*\\S+)/i;",
   "const NEMOCLAW_ISSUE_4434_REPORTING_LAYER_RE = /\\b(?:gateway proxy|gateway layer|reported by gateway|upstream API|from upstream)\\b/i;",
   "const NEMOCLAW_ISSUE_4434_RECOVERY_HINT_RE = /\\b(?:recovery hint|hint\\s*[:=]|check (?:egress|network|provider)|retry)\\b/i;",
-  "function formatNemoClawIssue4434FetchFailure(raw) {",
+  "function formatNemoClawIssue4434UnreachableInference(raw) {",
   '  const trimmed = (raw ?? "").trim();',
   "  if (!trimmed) return null;",
   '  if (typeof process === "undefined" || process.env?.OPENSHELL_SANDBOX !== "1") return null;',
-  "  if (!/\\b(?:TypeError:\\s*)?fetch failed\\b/i.test(trimmed)) return null;",
+  "  const isFetchFailure = /\\b(?:TypeError:\\s*)?fetch failed\\b/i.test(trimmed);",
+  "  const isInferenceTimeout = /^LLM request timed out\\.$/i.test(trimmed);",
+  "  if (!isFetchFailure && !isInferenceTimeout) return null;",
   "  const lines = [trimmed];",
-  '  if (!NEMOCLAW_ISSUE_4434_HTTP_STATUS_OR_CAUSE_RE.test(trimmed)) lines.push("Cause: fetch failed while reaching the upstream API.");',
+  '  if (!NEMOCLAW_ISSUE_4434_HTTP_STATUS_OR_CAUSE_RE.test(trimmed)) lines.push(isInferenceTimeout ? "Cause: timed out while reaching the upstream API." : "Cause: fetch failed while reaching the upstream API.");',
   '  if (!NEMOCLAW_ISSUE_4434_REPORTING_LAYER_RE.test(trimmed)) lines.push("Reporting layer: gateway proxy / upstream API.");',
   '  if (!NEMOCLAW_ISSUE_4434_RECOVERY_HINT_RE.test(trimmed)) lines.push("Recovery hint: check sandbox egress and provider reachability, then retry.");',
   '  return lines.length > 1 ? lines.join("\\n") : null;',
@@ -72,6 +75,13 @@ function patchAssistantErrorFormat(source: string, file: string): PatchResult {
   if (source.includes(PATCH_MARKER)) {
     return { nextSource: source, status: "already-applied" };
   }
+  if (source.includes(LEGACY_PATCH_MARKER)) {
+    return {
+      nextSource: source,
+      status: "no-match",
+      error: `OpenClaw assistant error formatter in ${file} contains the legacy fetch-only #4434 patch`,
+    };
+  }
 
   const pattern =
     /function formatRawAssistantErrorForUi\(raw\) \{\n(\s*)const trimmed = \(raw \?\? ""\)\.trim\(\);\n\1if \(!trimmed\) return "LLM request failed with an unknown error\.";/;
@@ -81,7 +91,7 @@ function patchAssistantErrorFormat(source: string, file: string): PatchResult {
       "function formatRawAssistantErrorForUi(raw) {",
       `${indent}const trimmed = (raw ?? "").trim();`,
       `${indent}if (!trimmed) return "LLM request failed with an unknown error.";`,
-      `${indent}const nemoclawIssue4434Diagnostic = formatNemoClawIssue4434FetchFailure(trimmed);`,
+      `${indent}const nemoclawIssue4434Diagnostic = formatNemoClawIssue4434UnreachableInference(trimmed);`,
       `${indent}if (nemoclawIssue4434Diagnostic) return nemoclawIssue4434Diagnostic; // ${PATCH_MARKER}`,
     ].join("\n");
   });

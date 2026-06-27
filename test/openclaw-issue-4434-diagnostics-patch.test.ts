@@ -87,7 +87,7 @@ function loadFormatter(source: string, env?: Record<string, string>): Formatter 
 }
 
 describe("OpenClaw #4434 diagnostics compatibility patch", () => {
-  it("enriches sandbox fetch failures with cause, reporting layer, and recovery hint", () => {
+  it("enriches sandbox fetch failures and timeouts with structured diagnostics", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-openclaw-4434-"));
     const dist = path.join(tmp, "dist");
     fs.mkdirSync(dist);
@@ -112,8 +112,21 @@ describe("OpenClaw #4434 diagnostics compatibility patch", () => {
           "Recovery hint: check sandbox egress and provider reachability, then retry.",
         ].join("\n"),
       );
+      expect(sandboxFormatter("LLM request timed out.")).toBe(
+        [
+          "LLM request timed out.",
+          "Cause: timed out while reaching the upstream API.",
+          "Reporting layer: gateway proxy / upstream API.",
+          "Recovery hint: check sandbox egress and provider reachability, then retry.",
+        ].join("\n"),
+      );
       expect(hostFormatter("TypeError: fetch failed")).toBe("TypeError: fetch failed");
+      expect(hostFormatter("LLM request timed out.")).toBe("LLM request timed out.");
       expect(noProcessFormatter("TypeError: fetch failed")).toBe("TypeError: fetch failed");
+      expect(noProcessFormatter("LLM request timed out.")).toBe("LLM request timed out.");
+      expect(sandboxFormatter("Authentication refresh timed out after 30 seconds.")).toBe(
+        "Authentication refresh timed out after 30 seconds.",
+      );
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
@@ -166,6 +179,22 @@ describe("OpenClaw #4434 diagnostics compatibility patch", () => {
       expect(appliedAudit.stdout).toContain("already-applied");
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
+    }
+
+    const legacyTmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-openclaw-4434-legacy-"));
+    const legacyDist = path.join(legacyTmp, "dist");
+    fs.mkdirSync(legacyDist);
+    const legacyFixture = writeAssistantErrorFormatFixture(legacyDist);
+    fs.appendFileSync(
+      legacyFixture,
+      "// nemoclaw: #4434 structured unreachable-inference diagnostic\n",
+    );
+    try {
+      const audit = runPatchAudit(legacyDist);
+      expect(audit.status, `${audit.stdout}${audit.stderr}`).toBe(3);
+      expect(audit.stdout).toContain("legacy fetch-only #4434 patch");
+    } finally {
+      fs.rmSync(legacyTmp, { recursive: true, force: true });
     }
 
     const missingTmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-openclaw-4434-missing-"));

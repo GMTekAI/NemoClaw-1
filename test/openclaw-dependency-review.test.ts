@@ -115,7 +115,7 @@ describe("OpenClaw 2026.6.9 dependency review contract", () => {
       [
         "Patch 7:",
         [
-          "#4434 TUI fetch-failed diagnostic enrichment",
+          "#4434 TUI unreachable-inference diagnostic enrichment",
           "OPENSHELL_SANDBOX=1",
           "formatRawAssistantErrorForUi",
         ],
