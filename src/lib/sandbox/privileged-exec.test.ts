@@ -16,10 +16,6 @@ function withPrivilegedExecMocks<T>(
   deps: {
     dockerCapture: (args: readonly string[]) => string;
     getSandbox: (name: string) => { name?: string; openshellDriver?: string | null } | null;
-    listSandboxes: () => {
-      sandboxes?: Array<{ name?: string | null }>;
-      defaultSandbox?: string | null;
-    };
   },
   run: (helper: typeof import("../../../dist/lib/sandbox/privileged-exec")) => T,
 ): T {
@@ -38,10 +34,7 @@ function withPrivilegedExecMocks<T>(
     id: registryPath,
     filename: registryPath,
     loaded: true,
-    exports: {
-      getSandbox: deps.getSandbox,
-      listSandboxes: deps.listSandboxes,
-    },
+    exports: { getSandbox: deps.getSandbox },
   } as any;
 
   try {
@@ -66,59 +59,51 @@ describe("privileged sandbox exec routing", () => {
     expect(containerNameMatchesSandbox("openshell-gateway-nemoclaw", "demo")).toBe(false);
   });
 
-  it("prefers the exact direct sandbox container when present", () => {
-    const selected = selectDirectSandboxContainer(
-      "demo",
-      "openshell-demo-helper\nopenshell-demo\n",
-      ["demo"],
-    );
-
-    expect(selected).toBe("openshell-demo");
+  it("selects the immutable id of one labeled direct sandbox container", () => {
+    expect(selectDirectSandboxContainer("demo", "abc123\topenshell-demo-2026\n")).toBe("abc123");
   });
 
-  it("falls back to a generated direct sandbox container suffix", () => {
-    const selected = selectDirectSandboxContainer(
-      "demo",
-      "openshell-other\nopenshell-demo-abc123\n",
-      ["demo"],
-    );
-
-    expect(selected).toBe("openshell-demo-abc123");
+  it("rejects ambiguous labeled running containers", () => {
+    expect(() =>
+      selectDirectSandboxContainer(
+        "demo",
+        "abc123\topenshell-demo-one\ndef456\topenshell-demo-two\n",
+      ),
+    ).toThrow(/Multiple running OpenShell containers.*refusing ambiguous/);
   });
 
-  it("uses the longest registered sandbox-name match to avoid prefix collisions", () => {
-    const containerNames = [
-      "openshell-alpha-child",
-      "openshell-alpha-child-2026",
-      "openshell-alpha-abc123",
-    ].join("\n");
-
-    expect(selectDirectSandboxContainer("alpha", containerNames, ["alpha", "alpha-child"])).toBe(
-      "openshell-alpha-abc123",
+  it("rejects malformed Docker metadata", () => {
+    expect(() => selectDirectSandboxContainer("demo", "openshell-demo\n")).toThrow(
+      /malformed OpenShell sandbox container metadata/,
     );
-    expect(
-      selectDirectSandboxContainer("alpha-child", containerNames, ["alpha", "alpha-child"]),
-    ).toBe("openshell-alpha-child");
   });
 
-  it("does not consider unrelated OpenShell containers direct sandbox matches", () => {
-    expect(
-      selectDirectSandboxContainer("alpha", "openshell-gateway-nemoclaw\nopenshell-alpha-child\n", [
+  it("rejects an authoritative label/name mismatch", () => {
+    expect(() =>
+      selectDirectSandboxContainer(
         "alpha",
-        "alpha-child",
-      ]),
-    ).toBeNull();
+        "gateway-id\topenshell-gateway-nemoclaw\nchild-id\topenshell-alpha-child\n",
+      ),
+    ).toThrow(/labels and names disagree.*refusing lifecycle execution/);
   });
 
-  it("builds privileged docker exec argv through the registered direct sandbox container", () => {
+  it("builds privileged argv from authoritative labels", () => {
     withPrivilegedExecMocks(
       {
-        getSandbox: () => ({ name: "alpha", openshellDriver: "vm" }),
-        listSandboxes: () => ({
-          sandboxes: [{ name: "alpha" }, { name: "alpha-child" }],
-          defaultSandbox: "alpha",
-        }),
-        dockerCapture: () => "openshell-alpha-child\nopenshell-alpha-abc123\n",
+        getSandbox: () => ({ name: "alpha", openshellDriver: "docker" }),
+        dockerCapture: (args) => {
+          expect(args).toEqual([
+            "ps",
+            "--no-trunc",
+            "--filter",
+            "label=openshell.ai/managed-by=openshell",
+            "--filter",
+            "label=openshell.ai/sandbox-name=alpha",
+            "--format",
+            "{{.ID}}\t{{.Names}}",
+          ]);
+          return "immutable-alpha-id\topenshell-alpha-abc123\n";
+        },
       },
       ({ privilegedSandboxExecArgv }) => {
         expect(privilegedSandboxExecArgv("alpha", ["id"], true)).toEqual([
@@ -126,24 +111,23 @@ describe("privileged sandbox exec routing", () => {
           "-i",
           "--user",
           "root",
-          "openshell-alpha-abc123",
+          "immutable-alpha-id",
           "id",
         ]);
       },
     );
   });
 
-  it("fails before docker discovery when the sandbox registry entry is unavailable", () => {
+  it("fails before Docker discovery when the sandbox registry entry is unavailable", () => {
     let dockerPsCalls = 0;
     withPrivilegedExecMocks(
       {
         getSandbox: () => {
           throw new Error("registry corrupt");
         },
-        listSandboxes: () => ({ sandboxes: [], defaultSandbox: null }),
         dockerCapture: () => {
           dockerPsCalls += 1;
-          return "openshell-alpha-child\n";
+          return "alpha-id\topenshell-alpha-abc123\n";
         },
       },
       ({ privilegedSandboxExecArgv }) => {
@@ -153,33 +137,10 @@ describe("privileged sandbox exec routing", () => {
     expect(dockerPsCalls).toBe(0);
   });
 
-  it("fails before docker discovery when registry disambiguation is unavailable", () => {
-    let dockerPsCalls = 0;
+  it("surfaces Docker discovery failures instead of reporting a missing container", () => {
     withPrivilegedExecMocks(
       {
-        getSandbox: () => ({ name: "alpha", openshellDriver: "vm" }),
-        listSandboxes: () => {
-          throw new Error("registry list unavailable");
-        },
-        dockerCapture: () => {
-          dockerPsCalls += 1;
-          return "openshell-alpha-child\n";
-        },
-      },
-      ({ privilegedSandboxExecArgv }) => {
-        expect(() => privilegedSandboxExecArgv("alpha", ["id"])).toThrow(
-          "registry list unavailable",
-        );
-      },
-    );
-    expect(dockerPsCalls).toBe(0);
-  });
-
-  it("surfaces docker discovery failures instead of reporting a missing container", () => {
-    withPrivilegedExecMocks(
-      {
-        getSandbox: () => ({ name: "alpha", openshellDriver: "vm" }),
-        listSandboxes: () => ({ sandboxes: [{ name: "alpha" }], defaultSandbox: "alpha" }),
+        getSandbox: () => ({ name: "alpha", openshellDriver: "docker" }),
         dockerCapture: () => {
           throw new Error("docker daemon unavailable");
         },
@@ -192,15 +153,11 @@ describe("privileged sandbox exec routing", () => {
     );
   });
 
-  it("fails clearly when no matching direct sandbox container is running", () => {
+  it("fails clearly when no matching labeled direct sandbox container is running", () => {
     withPrivilegedExecMocks(
       {
-        getSandbox: () => ({ name: "alpha", openshellDriver: "vm" }),
-        listSandboxes: () => ({
-          sandboxes: [{ name: "alpha" }, { name: "alpha-child" }],
-          defaultSandbox: "alpha",
-        }),
-        dockerCapture: () => "openshell-alpha-child\n",
+        getSandbox: () => ({ name: "alpha", openshellDriver: "docker" }),
+        dockerCapture: () => "",
       },
       ({ privilegedSandboxExecArgv }) => {
         expect(() => privilegedSandboxExecArgv("alpha", ["id"])).toThrow(

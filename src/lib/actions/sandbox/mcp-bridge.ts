@@ -739,7 +739,7 @@ function pythonJsonLiteral(value: unknown): string {
 export function buildHermesMcpRegisterCommand(
   entry: McpBridgeEntry,
   replaceExisting = false,
-): string {
+): string[] {
   const payload = {
     server: entry.server,
     url: entry.url,
@@ -751,11 +751,11 @@ export function buildHermesMcpRegisterCommand(
     "/usr/local/lib/nemoclaw/hermes-mcp-config-transaction.py",
     "add",
     "--payload",
-    shellQuote(JSON.stringify(payload)),
-  ].join(" ");
+    JSON.stringify(payload),
+  ];
 }
 
-function buildHermesMcpRemoveCommand(entry: McpBridgeEntry, force = false): string {
+function buildHermesMcpRemoveCommand(entry: McpBridgeEntry, force = false): string[] {
   const payload = {
     server: entry.server,
     url: entry.url,
@@ -767,8 +767,15 @@ function buildHermesMcpRemoveCommand(entry: McpBridgeEntry, force = false): stri
     "/usr/local/lib/nemoclaw/hermes-mcp-config-transaction.py",
     "remove",
     "--payload",
-    shellQuote(JSON.stringify(payload)),
-  ].join(" ");
+    JSON.stringify(payload),
+  ];
+}
+
+export function buildHermesMcpLifecycleExecArgs(
+  sandboxName: string,
+  command: readonly string[],
+): string[] {
+  return ["sandbox", "exec", "--name", sandboxName, "--no-tty", "--", ...command];
 }
 
 function hermesManagedServerConfig(entry: McpBridgeEntry): Record<string, unknown> {
@@ -1107,7 +1114,7 @@ function parseLastJsonObject(output: string): Record<string, unknown> | null {
 function runHermesAdapterCommand(
   sandboxName: string,
   entry: McpBridgeEntry,
-  command: string,
+  command: readonly string[],
   failureMessage: string,
   options: {
     bestEffort?: boolean;
@@ -1115,20 +1122,39 @@ function runHermesAdapterCommand(
     requireReload?: boolean;
   } = {},
 ): void {
-  // Hermes can spend up to 180s draining before the in-sandbox service
-  // manager relaunches it, followed by a 60s health window. The lifecycle
-  // helper owns that reload and returns only after the replacement is ready.
-  const result = executeSandboxExecCommand(sandboxName, command, 645_000);
+  // OpenShell current main runs this one-shot command with the sandbox's
+  // configured workload uid and network namespace. That is the same identity
+  // and loopback namespace as Hermes, without a listener, proxy, or persistent
+  // privileged service. The argv carries only an OpenShell placeholder.
+  let result: ReturnType<typeof runOpenshellProviderCommand>;
+  try {
+    result = runOpenshellProviderCommand(buildHermesMcpLifecycleExecArgs(sandboxName, command), {
+      ignoreError: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      // Hermes can spend up to 180s draining, followed by a 60s health window.
+      timeout: 645_000,
+    });
+  } catch (error) {
+    if (options.bestEffort) return;
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new McpBridgeError(
+      redactBridgeSecretsForDisplay(detail, entry, options.envValues ?? {}) || failureMessage,
+    );
+  }
   const output = redactBridgeSecretsForDisplay(
-    [result?.stdout, result?.stderr].filter(Boolean).join("\n").trim(),
+    commandOutput(result, options.envValues ?? {}),
     entry,
     options.envValues ?? {},
   );
-  if (!result || result.status !== 0) {
+  if (result.status !== 0 || result.error) {
     if (options.bestEffort) return;
-    throw new McpBridgeError(output || failureMessage);
+    const errorDetail = result.error
+      ? redactBridgeSecretsForDisplay(result.error.message, entry, options.envValues ?? {})
+      : "";
+    throw new McpBridgeError(errorDetail || output || failureMessage);
   }
-  const response = parseLastJsonObject(result.stdout);
+  const stdout = result.stdout || "";
+  const response = parseLastJsonObject(stdout);
   if (
     response?.ok !== true ||
     typeof response.changed !== "boolean" ||
@@ -1136,7 +1162,7 @@ function runHermesAdapterCommand(
   ) {
     if (options.bestEffort) return;
     throw new McpBridgeError(
-      `Hermes MCP lifecycle control returned an invalid response for '${entry.server}'.`,
+      `Hermes MCP lifecycle command returned an invalid response for '${entry.server}'.`,
     );
   }
   if (options.requireReload && response.reloaded !== true) {
@@ -1781,12 +1807,6 @@ function removeBridgeEntry(sandboxName: string, server: string): void {
   setBridgeState(sandboxName, bridges);
 }
 
-function removeBridgeEntryIfPresent(sandboxName: string, server: string): void {
-  const sandbox = registry.getSandbox(sandboxName);
-  if (!sandbox || !bridgeState(sandbox)[server]) return;
-  removeBridgeEntry(sandboxName, server);
-}
-
 async function ensureSandboxGatewaySelected(sandboxName: string): Promise<void> {
   const gatewayName = getSandboxTargetGatewayName(sandboxName);
   const recovery = await recoverNamedGatewayRuntime({
@@ -2419,7 +2439,7 @@ export async function finalizeMcpBridgesAfterSandboxDelete(
   const entries = preparation.entries;
   if (entries.length === 0) return;
 
-  let sandbox = assertMcpDestroySnapshotCurrent(sandboxName, entries);
+  const sandbox = assertMcpDestroySnapshotCurrent(sandboxName, entries);
   if (!sandbox.mcp?.destroyPendingAt) {
     const marked = registry.updateSandbox(sandboxName, {
       mcp: {
@@ -2434,7 +2454,7 @@ export async function finalizeMcpBridgesAfterSandboxDelete(
         `Could not persist MCP destroy cleanup state for sandbox '${sandboxName}'. No MCP providers were deleted.`,
       );
     }
-    sandbox = assertMcpDestroySnapshotCurrent(sandboxName, entries);
+    assertMcpDestroySnapshotCurrent(sandboxName, entries);
   }
 
   // Inspect every provider before deleting any so ownership drift cannot
@@ -2458,9 +2478,9 @@ export async function finalizeMcpBridgesAfterSandboxDelete(
     }
   }
 
-  sandbox = assertMcpDestroySnapshotCurrent(sandboxName, entries);
+  const finalSandbox = assertMcpDestroySnapshotCurrent(sandboxName, entries);
   const ownedPolicyNames = new Set(entries.map((entry) => entry.policyName));
-  const remainingCustomPolicies = (sandbox.customPolicies ?? []).filter(
+  const remainingCustomPolicies = (finalSandbox.customPolicies ?? []).filter(
     (policy) =>
       !(ownedPolicyNames.has(policy.name) && policy.sourcePath === MCP_BRIDGE_POLICY_SOURCE),
   );

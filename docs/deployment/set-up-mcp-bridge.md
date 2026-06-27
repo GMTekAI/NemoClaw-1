@@ -121,12 +121,17 @@ mcp_servers:
       Authorization: Bearer openshell:resolve:env:GITHUB_TOKEN
 ```
 
-Hermes config changes and gateway reloads stay inside the sandbox. Rootless
-OpenShell drivers update and signal the sandbox-owned Hermes process directly.
-The root-started Docker fallback uses a root-owned Unix socket inside that same
-sandbox to validate and serialize config/hash updates before signaling Hermes.
-This lifecycle socket carries no MCP traffic and no service credential, and
-there is no host-side MCP process.
+Hermes config changes and gateway reloads stay inside the sandbox. NemoClaw
+invokes the validated transaction helper as a one-shot `openshell sandbox exec`
+command. OpenShell current main places that command in the same workload uid
+and network namespace as Hermes, so the helper can update the same-uid
+compatibility hash, signal the exact gateway PID, and verify its loopback health.
+The helper rejects non-root execution when the root-separated lifecycle marker
+or a separately owned gateway is present, and validates the PID against the
+trusted Hermes gateway launcher before signaling it. There is no persistent
+control socket or service. The command carries no MCP traffic or raw service
+credential; its payload contains only the endpoint definition and OpenShell
+placeholder.
 
 LangChain Deep Agents Code writes an HTTP entry under its user-level discovery
 path, `/sandbox/.deepagents/.mcp.json`. Deep Agents Code 0.1.12 treats the

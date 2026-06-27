@@ -74,8 +74,8 @@ function writeRegistry(entries) {
   );
 }
 
-function writeDockerPs(names) {
-  fs.writeFileSync(psFile, `${names.join("\n")}\n`);
+function writeDockerPs(rows) {
+  fs.writeFileSync(psFile, `${rows.map((row) => row.join("\t")).join("\n")}\n`);
 }
 
 function assertDirect(args, expectedContainer, label) {
@@ -98,40 +98,35 @@ writeRegistry([
   { name: "unknown-driver", openshellDriver: null },
 ]);
 
-writeDockerPs([
-  "openshell-gateway-nemoclaw",
-  "openshell-alpha-child",
-  "openshell-alpha-child-2026",
-  "openshell-alpha-abc123",
-  "openshell-dockerbox-987",
-  "openshell-unknown-driver",
-]);
-
 const helper = require(path.join(repo, "dist", "lib", "sandbox", "privileged-exec.js"));
 const cmd = ["stat", "-c", "%a", "/sandbox/.openclaw/openclaw.json"];
 
+writeDockerPs([["alpha-id", "openshell-alpha-abc123"]]);
 assertDirect(
   helper.privilegedSandboxExecArgv("alpha", cmd),
-  "openshell-alpha-abc123",
-  "VM driver with prefix collision",
+  "alpha-id",
+  "VM driver",
 );
+writeDockerPs([["alpha-child-id", "openshell-alpha-child-2026"]]);
 assertDirect(
   helper.privilegedSandboxExecArgv("alpha-child", cmd),
-  "openshell-alpha-child",
-  "VM driver with exact container",
+  "alpha-child-id",
+  "VM driver child",
 );
+writeDockerPs([["dockerbox-id", "openshell-dockerbox-987"]]);
 assertDirect(
   helper.privilegedSandboxExecArgv("dockerbox", cmd),
-  "openshell-dockerbox-987",
+  "dockerbox-id",
   "Docker driver",
 );
+writeDockerPs([["unknown-id", "openshell-unknown-driver"]]);
 assertDirect(
   helper.privilegedSandboxExecArgv("unknown-driver", cmd),
-  "openshell-unknown-driver",
+  "unknown-id",
   "registry entry without a recorded driver",
 );
 
-writeDockerPs(["openshell-gateway-nemoclaw", "openshell-other"]);
+writeDockerPs([]);
 assert.throws(
   () => helper.privilegedSandboxExecArgv("alpha", ["id"]),
   /No running direct OpenShell sandbox container found for 'alpha'.*driver: vm/,

@@ -32,9 +32,7 @@ function workflow(path: string): Workflow {
     ],
     { cwd: process.cwd(), encoding: "utf8", timeout: 5_000 },
   );
-  if (result.status !== 0) {
-    throw new Error(result.stderr || `Could not parse workflow ${path}`);
-  }
+  expect(result.status, result.stderr || `Could not parse workflow ${path}`).toBe(0);
   return JSON.parse(result.stdout) as Workflow;
 }
 

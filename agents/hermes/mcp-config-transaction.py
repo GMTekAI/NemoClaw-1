@@ -2,12 +2,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Transactional Hermes MCP config mutation and in-sandbox reload control.
+"""Transactional Hermes MCP config mutation and gateway reload control.
 
 This helper never proxies MCP traffic and never handles raw service
-credentials. The root entrypoint runs its small Unix control service only to
-serialize validated config/hash mutations and signal the Hermes gateway.
-Ordinary OpenShell sandbox exec remains privilege-dropped to the sandbox user.
+credentials. NemoClaw invokes it as a one-shot OpenShell sandbox command in the
+same workload identity and network namespace as Hermes; no persistent control
+listener is exposed to sandbox processes.
 """
 
 from __future__ import annotations
@@ -22,9 +22,7 @@ import grp
 import pwd
 import re
 import signal
-import socket
 import stat
-import struct
 import sys
 import time
 from types import ModuleType
@@ -37,13 +35,12 @@ CONFIG_PATH = "/sandbox/.hermes/config.yaml"
 HERMES_DIR = "/sandbox/.hermes"
 STRICT_HASH_PATH = "/etc/nemoclaw/hermes.config-hash"
 GUARD_PATH = "/usr/local/lib/nemoclaw/hermes-runtime-config-guard.py"
-CONTROL_DIR = "/run/nemoclaw"
-CONTROL_SOCKET_PATH = f"{CONTROL_DIR}/hermes-mcp-control.sock"
-MAX_REQUEST_BYTES = 64 * 1024
+ROOT_LIFECYCLE_MARKER = "/run/nemoclaw/hermes-root-lifecycle"
 RELOAD_TIMEOUT_SECONDS = 300
-CONTROL_REQUEST_TIMEOUT_SECONDS = RELOAD_TIMEOUT_SECONDS * 2 + 30
 SERVER_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
-ENV_PLACEHOLDER_RE = re.compile(r"^Bearer openshell:resolve:env:[A-Za-z_][A-Za-z0-9_]{0,127}$")
+ENV_PLACEHOLDER_RE = re.compile(
+    r"^Bearer openshell:resolve:env:[A-Za-z_][A-Za-z0-9_]{0,127}$"
+)
 BLOCKED_IPV4_NETWORKS = tuple(
     ipaddress.ip_network(cidr)
     for cidr in (
@@ -67,10 +64,16 @@ BLOCKED_IPV4_NETWORKS = tuple(
         "240.0.0.0/4",
     )
 )
+TRUSTED_HERMES_GATEWAY_LAUNCHERS = {
+    b"/usr/local/lib/nemoclaw/hermes",
+    b"/opt/hermes/.venv/bin/hermes",
+}
 
 
 def _load_guard() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("nemoclaw_hermes_runtime_guard", GUARD_PATH)
+    spec = importlib.util.spec_from_file_location(
+        "nemoclaw_hermes_runtime_guard", GUARD_PATH
+    )
     if spec is None or spec.loader is None:
         raise RuntimeError("Hermes runtime config guard could not be loaded")
     module = importlib.util.module_from_spec(spec)
@@ -294,8 +297,7 @@ def apply_transaction(action: str, payload: dict[str, object]) -> bool:
     original_text, original_snapshot = guard._read_text(CONFIG_PATH)
     _assert_mutable_snapshot(original_snapshot)
     hash_originals = {
-        path: guard._read_text(path)
-        for path in _managed_hash_paths(privileged)
+        path: guard._read_text(path) for path in _managed_hash_paths(privileged)
     }
     parsed = yaml.safe_load(original_text) or {}
     updated, changed = _mutate(parsed, action, payload)
@@ -352,8 +354,7 @@ def apply_transaction_and_reload(
     guard = _load_guard()
     original_text, original_snapshot = guard._read_text(CONFIG_PATH)
     hash_originals = {
-        path: guard._read_text(path)
-        for path in _managed_hash_paths(privileged)
+        path: guard._read_text(path) for path in _managed_hash_paths(privileged)
     }
     parsed = yaml.safe_load(original_text) or {}
     expected_data, expected_changed = _mutate(parsed, action, payload)
@@ -409,6 +410,19 @@ def apply_transaction_and_reload(
     return {"ok": True, "changed": changed, "reloaded": reloaded}
 
 
+def _is_trusted_gateway_process(pid: int) -> bool:
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as command_line:
+            arguments = command_line.read(16 * 1024).rstrip(b"\0").split(b"\0")
+    except FileNotFoundError:
+        return False
+    return any(
+        arguments[index] in TRUSTED_HERMES_GATEWAY_LAUNCHERS
+        and arguments[index + 1 : index + 3] == [b"gateway", b"run"]
+        for index in range(max(0, len(arguments) - 2))
+    )
+
+
 def _gateway_identity() -> tuple[int, object] | None:
     os.environ["HERMES_HOME"] = HERMES_DIR
     from gateway.status import get_process_start_time, get_running_pid
@@ -416,19 +430,22 @@ def _gateway_identity() -> tuple[int, object] | None:
     pid = get_running_pid(cleanup_stale=False)
     if not pid:
         return None
+    numeric_pid = int(pid)
     try:
-        owner_uid = os.stat(f"/proc/{int(pid)}").st_uid
+        owner_uid = os.stat(f"/proc/{numeric_pid}").st_uid
     except FileNotFoundError:
         return None
-    expected_uid = (
-        pwd.getpwnam("gateway").pw_uid if os.geteuid() == 0 else os.geteuid()
-    )
+    expected_uid = pwd.getpwnam("gateway").pw_uid if os.geteuid() == 0 else os.geteuid()
     if owner_uid != expected_uid:
         expected_identity = "gateway" if os.geteuid() == 0 else "sandbox"
         raise PermissionError(
             f"Hermes gateway is not owned by the expected {expected_identity} identity"
         )
-    return int(pid), get_process_start_time(pid)
+    if not _is_trusted_gateway_process(numeric_pid):
+        raise PermissionError(
+            "Hermes gateway PID does not identify the trusted launcher"
+        )
+    return numeric_pid, get_process_start_time(numeric_pid)
 
 
 def _gateway_healthy() -> bool:
@@ -464,188 +481,41 @@ def reload_gateway() -> bool:
     raise TimeoutError("Hermes gateway did not complete its managed MCP reload")
 
 
-def _receive_bounded(
-    connection: socket.socket, timeout_seconds: float | None = None
-) -> bytes:
-    chunks: list[bytes] = []
-    size = 0
-    deadline = (
-        time.monotonic() + timeout_seconds if timeout_seconds is not None else None
-    )
-    while True:
-        if deadline is not None:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError("Hermes MCP control request timed out")
-            connection.settimeout(remaining)
-        chunk = connection.recv(min(4096, MAX_REQUEST_BYTES + 1 - size))
-        if not chunk:
-            break
-        chunks.append(chunk)
-        size += len(chunk)
-        if size > MAX_REQUEST_BYTES:
-            raise ValueError("Hermes MCP control request is too large")
-    return b"".join(chunks)
+def _assert_non_root_lifecycle_identity() -> None:
+    """Allow only an active same-uid Hermes workload topology.
 
-
-def _sandbox_peer(connection: socket.socket) -> bool:
-    if not hasattr(socket, "SO_PEERCRED"):
-        raise RuntimeError("SO_PEERCRED is required for Hermes MCP control")
-    credentials = connection.getsockopt(
-        socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")
-    )
-    _, uid, gid = struct.unpack("3i", credentials)
-    sandbox = pwd.getpwnam("sandbox")
-    return uid == sandbox.pw_uid and gid in {
-        sandbox.pw_gid,
-        grp.getgrnam("sandbox").gr_gid,
-    }
-
-
-def _handle_control_request(raw: bytes) -> dict[str, object]:
-    request = json.loads(raw.decode("utf-8"))
-    if not isinstance(request, dict) or set(request) != {"action", "payload"}:
-        raise ValueError("Invalid Hermes MCP control request schema")
-    action = request.get("action")
-    payload = request.get("payload")
-    if action not in {"add", "remove"} or not isinstance(payload, dict):
-        raise ValueError("Invalid Hermes MCP control action")
-    return apply_transaction_and_reload(str(action), payload)
-
-
-def _prepare_control_socket() -> socket.socket:
-    sandbox = pwd.getpwnam("sandbox")
+    Root-started sandboxes stamp a root-owned read-only runtime marker and run
+    Hermes as the dedicated gateway uid. OpenShell current main starts the
+    workload and gateway as the sandbox uid. Direct sandbox execution cannot
+    cross from the former topology into the latter.
+    """
     try:
-        os.mkdir(CONTROL_DIR, 0o750)
-    except FileExistsError:
-        pass
-    directory = os.lstat(CONTROL_DIR)
-    if not stat.S_ISDIR(directory.st_mode) or directory.st_uid != 0:
-        raise RuntimeError(f"Unsafe Hermes MCP control directory: {CONTROL_DIR}")
-    os.chown(CONTROL_DIR, 0, sandbox.pw_gid)
-    os.chmod(CONTROL_DIR, 0o750)
-    try:
-        existing = os.lstat(CONTROL_SOCKET_PATH)
+        root_marker = os.lstat(ROOT_LIFECYCLE_MARKER)
     except FileNotFoundError:
-        existing = None
-    if existing is not None:
-        if not stat.S_ISSOCK(existing.st_mode) or existing.st_uid != 0:
-            raise RuntimeError(
-                f"Refusing unsafe Hermes MCP control socket: {CONTROL_SOCKET_PATH}"
-            )
-        os.unlink(CONTROL_SOCKET_PATH)
-
-    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    server.bind(CONTROL_SOCKET_PATH)
-    os.chown(CONTROL_SOCKET_PATH, 0, sandbox.pw_gid)
-    os.chmod(CONTROL_SOCKET_PATH, 0o660)
-    server.listen(4)
-    server.settimeout(1)
-    return server
-
-
-def serve() -> int:
-    if os.geteuid() != 0:
-        raise PermissionError("Hermes MCP control service must run as root")
-    server = _prepare_control_socket()
-    stopping = False
-
-    def stop(_signum: int, _frame: object) -> None:
-        nonlocal stopping
-        stopping = True
-
-    signal.signal(signal.SIGTERM, stop)
-    signal.signal(signal.SIGINT, stop)
-    try:
-        while not stopping:
-            try:
-                connection, _ = server.accept()
-            except TimeoutError:
-                continue
-            with connection:
-                response: dict[str, object]
-                try:
-                    if not _sandbox_peer(connection):
-                        raise PermissionError(
-                            "Hermes MCP control rejected a non-sandbox peer"
-                        )
-                    response = _handle_control_request(
-                        _receive_bounded(connection, timeout_seconds=5)
-                    )
-                except Exception as error:
-                    response = {"ok": False, "error": str(error)}
-                try:
-                    connection.sendall(
-                        json.dumps(response, sort_keys=True).encode("utf-8") + b"\n"
-                    )
-                except OSError:
-                    # A disconnected client must not terminate the root-owned
-                    # lifecycle service or strand future host operations.
-                    pass
-    finally:
-        server.close()
-        try:
-            socket_stat = os.lstat(CONTROL_SOCKET_PATH)
-            if stat.S_ISSOCK(socket_stat.st_mode) and socket_stat.st_uid == 0:
-                os.unlink(CONTROL_SOCKET_PATH)
-        except FileNotFoundError:
-            pass
-    return 0
-
-
-def request_control(action: str, payload: dict[str, object]) -> dict[str, object]:
-    request = json.dumps(
-        {"action": action, "payload": payload},
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    if len(request) > MAX_REQUEST_BYTES:
-        raise ValueError("Hermes MCP control request is too large")
-    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    # A failed forward reload performs one bounded old-config reload after
-    # restoring config+hashes, so the transport must cover both windows.
-    client.settimeout(CONTROL_REQUEST_TIMEOUT_SECONDS)
-    try:
-        client.connect(CONTROL_SOCKET_PATH)
-        client.sendall(request)
-        client.shutdown(socket.SHUT_WR)
-        raw = _receive_bounded(client)
-    finally:
-        client.close()
-    response = json.loads(raw.decode("utf-8"))
-    if not isinstance(response, dict) or response.get("ok") is not True:
-        detail = response.get("error") if isinstance(response, dict) else None
-        raise RuntimeError(str(detail or "Hermes MCP control request failed"))
-    return response
+        root_marker = None
+    if root_marker is not None:
+        if not stat.S_ISREG(root_marker.st_mode) or root_marker.st_uid != 0:
+            raise PermissionError("Hermes root lifecycle marker is unsafe")
+        raise PermissionError(
+            "Hermes MCP mutation requires NemoClaw privileged lifecycle execution"
+        )
+    if _gateway_identity() is None:
+        raise RuntimeError("Hermes gateway is not running for managed MCP reload")
 
 
 def execute(action: str, payload: dict[str, object]) -> dict[str, object]:
     _validate_payload(action, payload)
-    if os.geteuid() == 0:
-        return apply_transaction_and_reload(action, payload)
-    if os.path.exists(CONTROL_SOCKET_PATH):
-        return request_control(action, payload)
-    try:
-        control_dir = os.lstat(CONTROL_DIR)
-    except FileNotFoundError:
-        control_dir = None
-    if control_dir is not None and control_dir.st_uid == 0:
-        raise RuntimeError(
-            "Hermes MCP control service is unavailable in this root-managed sandbox"
-        )
+    if os.geteuid() != 0:
+        _assert_non_root_lifecycle_identity()
     return apply_transaction_and_reload(action, payload)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("add", "remove", "serve"))
+    parser.add_argument("action", choices=("add", "remove"))
     parser.add_argument("--payload")
     args = parser.parse_args()
     try:
-        if args.action == "serve":
-            if args.payload is not None:
-                raise ValueError("Hermes MCP control service takes no payload")
-            return serve()
         if args.payload is None:
             raise ValueError("Hermes MCP mutation requires --payload")
         result = execute(args.action, _parse_payload(args.payload))

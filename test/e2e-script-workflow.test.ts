@@ -989,7 +989,7 @@ describe("E2E reusable workflow contract", () => {
     const networkPolicyArtifactPath = nightlyWorkflow.jobs["network-policy-e2e"].with
       ?.artifact_path as string | undefined;
     expect(networkPolicyArtifactPath).toContain("test-network-policy-*.log");
-    expect(networkPolicyArtifactPath).toContain("/home/runner/.nemoclaw/onboard-failures/**");
+    expect(networkPolicyArtifactPath).not.toContain("onboard-failures");
   });
 
   it("exports checked-out commit SHAs for reusable public-installer jobs", () => {

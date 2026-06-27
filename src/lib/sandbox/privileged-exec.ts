@@ -1,22 +1,21 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-const { dockerCapture } = require("../adapters/docker/run");
-const registry = require("../state/registry") as {
-  getSandbox?: (name: string) => { name?: string; openshellDriver?: string | null } | null;
-  listSandboxes?: () => {
-    sandboxes?: Array<{ name?: string | null }>;
-    defaultSandbox?: string | null;
-  };
-  load?: () => {
-    sandboxes?: Record<string, { name?: string | null }>;
-    defaultSandbox?: string | null;
-  };
-};
+import { dockerCapture } from "../adapters/docker/run";
+import * as registry from "../state/registry";
+
+const OPENSHELL_MANAGED_BY_LABEL = "openshell.ai/managed-by";
+const OPENSHELL_MANAGED_BY_VALUE = "openshell";
+const OPENSHELL_SANDBOX_NAME_LABEL = "openshell.ai/sandbox-name";
 
 type SandboxEntry = {
   name?: string;
   openshellDriver?: string | null;
+};
+
+type LabeledSandboxContainer = {
+  id: string;
+  name: string;
 };
 
 function normalizeDriver(driver: unknown): string | null {
@@ -27,64 +26,43 @@ function readSandboxEntry(sandboxName: string): SandboxEntry | null {
   return registry.getSandbox?.(sandboxName) ?? null;
 }
 
-function registeredSandboxNames(sandboxName: string): string[] {
-  const names = new Set<string>([sandboxName]);
-
-  if (registry.listSandboxes) {
-    const listed = registry.listSandboxes?.();
-    if (Array.isArray(listed?.sandboxes)) {
-      for (const entry of listed.sandboxes) {
-        if (typeof entry.name === "string" && entry.name) names.add(entry.name);
-      }
-    }
-  } else {
-    const loaded = registry.load?.();
-    const sandboxes = loaded?.sandboxes;
-    if (sandboxes && typeof sandboxes === "object") {
-      for (const [key, entry] of Object.entries(sandboxes)) {
-        if (key) names.add(key);
-        if (typeof entry?.name === "string" && entry.name) names.add(entry.name);
-      }
-    }
-  }
-
-  return Array.from(names).sort((a, b) => b.length - a.length || a.localeCompare(b));
-}
-
 function containerNameMatchesSandbox(containerName: string, sandboxName: string): boolean {
   const exact = `openshell-${sandboxName}`;
   return containerName === exact || containerName.startsWith(`${exact}-`);
 }
 
-function owningRegisteredSandboxName(
-  containerName: string,
-  registeredNames: readonly string[],
-): string | null {
-  return registeredNames.find((name) => containerNameMatchesSandbox(containerName, name)) ?? null;
+function parseLabeledSandboxContainers(output: string): LabeledSandboxContainer[] {
+  return output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [id, name, ...unexpected] = line.split("\t");
+      if (!id || !name || unexpected.length > 0 || /\s/.test(id)) {
+        throw new Error("Docker returned malformed OpenShell sandbox container metadata.");
+      }
+      return { id, name };
+    });
 }
 
 function selectDirectSandboxContainer(
   sandboxName: string,
-  containerNames: string,
-  registeredNames: readonly string[] = [sandboxName],
+  labeledContainerRows: string,
 ): string | null {
-  const names = Array.from(new Set([...registeredNames, sandboxName])).sort(
-    (a, b) => b.length - a.length || a.localeCompare(b),
-  );
-  const candidates = containerNames
-    .split("\n")
-    .map((line: string) => line.trim())
-    .filter(Boolean)
-    .filter((containerName: string) => {
-      if (!containerNameMatchesSandbox(containerName, sandboxName)) return false;
-      return owningRegisteredSandboxName(containerName, names) === sandboxName;
-    });
-
-  return (
-    candidates.find((containerName: string) => containerName === `openshell-${sandboxName}`) ??
-    candidates[0] ??
-    null
-  );
+  const candidates = parseLabeledSandboxContainers(labeledContainerRows);
+  if (candidates.some((candidate) => !containerNameMatchesSandbox(candidate.name, sandboxName))) {
+    throw new Error(
+      `OpenShell container labels and names disagree for sandbox '${sandboxName}'; ` +
+        "refusing lifecycle execution.",
+    );
+  }
+  if (candidates.length > 1) {
+    throw new Error(
+      `Multiple running OpenShell containers are labeled for sandbox '${sandboxName}'; ` +
+        "refusing ambiguous lifecycle execution.",
+    );
+  }
+  return candidates[0]?.id ?? null;
 }
 
 function expectedDirectContainerPattern(sandboxName: string): string {
@@ -92,16 +70,25 @@ function expectedDirectContainerPattern(sandboxName: string): string {
 }
 
 function findDirectSandboxContainer(sandboxName: string): string | null {
-  const names = registeredSandboxNames(sandboxName);
-  const output = dockerCapture(["ps", "--format", "{{.Names}}"]);
-  return selectDirectSandboxContainer(sandboxName, output, names);
+  const output = dockerCapture([
+    "ps",
+    "--no-trunc",
+    "--filter",
+    `label=${OPENSHELL_MANAGED_BY_LABEL}=${OPENSHELL_MANAGED_BY_VALUE}`,
+    "--filter",
+    `label=${OPENSHELL_SANDBOX_NAME_LABEL}=${sandboxName}`,
+    "--format",
+    "{{.ID}}\t{{.Names}}",
+  ]);
+  return selectDirectSandboxContainer(sandboxName, output);
 }
 
 function missingDirectContainerError(sandboxName: string, driver: string | null): Error {
   const driverLabel = driver ?? "unspecified";
   return new Error(
     `No running direct OpenShell sandbox container found for '${sandboxName}' ` +
-      `(driver: ${driverLabel}). Expected a running container named ` +
+      `(driver: ${driverLabel}). Expected one OpenShell-managed container labeled ` +
+      `'${OPENSHELL_SANDBOX_NAME_LABEL}=${sandboxName}' and named ` +
       `${expectedDirectContainerPattern(sandboxName)}. Is the sandbox running?`,
   );
 }
@@ -109,7 +96,7 @@ function missingDirectContainerError(sandboxName: string, driver: string | null)
 function missingRegistryEntryError(sandboxName: string): Error {
   return new Error(
     `No NemoClaw registry entry found for '${sandboxName}'; ` +
-      "refusing privileged exec without a registered sandbox owner.",
+      "refusing lifecycle exec without a registered sandbox owner.",
   );
 }
 
@@ -119,25 +106,20 @@ function resolveDirectSandboxContainer(sandboxName: string, driver: string | nul
   throw missingDirectContainerError(sandboxName, driver);
 }
 
-function privilegedSandboxExecArgv(sandboxName: string, cmd: string[], stdin = false): string[] {
+function registeredDirectSandboxContainer(sandboxName: string): string {
   const entry = readSandboxEntry(sandboxName);
   if (!entry) throw missingRegistryEntryError(sandboxName);
-  const driver = normalizeDriver(entry?.openshellDriver);
+  return resolveDirectSandboxContainer(sandboxName, normalizeDriver(entry.openshellDriver));
+}
 
-  // Docker/direct-container is the only supported privileged mutation path.
-  // Try it even when older registry entries do not record a driver, then fail
-  // clearly if no matching sandbox container is running.
-  const container = findDirectSandboxContainer(sandboxName);
-  if (container) {
-    return ["exec", ...(stdin ? ["-i"] : []), "--user", "root", container, ...cmd];
-  }
-
-  throw missingDirectContainerError(sandboxName, driver);
+function privilegedSandboxExecArgv(sandboxName: string, cmd: string[], stdin = false): string[] {
+  const container = registeredDirectSandboxContainer(sandboxName);
+  return ["exec", ...(stdin ? ["-i"] : []), "--user", "root", container, ...cmd];
 }
 
 export {
   containerNameMatchesSandbox,
-  selectDirectSandboxContainer,
-  resolveDirectSandboxContainer,
   privilegedSandboxExecArgv,
+  resolveDirectSandboxContainer,
+  selectDirectSandboxContainer,
 };

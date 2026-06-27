@@ -135,6 +135,7 @@ sys.modules["gateway"] = gateway
 sys.modules["gateway.status"] = status
 module.os.geteuid = lambda: 0
 module.pwd.getpwnam = lambda name: types.SimpleNamespace(pw_uid=2000)
+module._is_trusted_gateway_process = lambda pid: True
 module.os.stat = lambda path: types.SimpleNamespace(st_uid=1000)
 try:
     module._gateway_identity()
@@ -145,10 +146,18 @@ else:
 module.os.stat = lambda path: types.SimpleNamespace(st_uid=2000)
 if module._gateway_identity() != (4242, 99):
     raise SystemExit(10)
+module._is_trusted_gateway_process = lambda pid: False
+try:
+    module._gateway_identity()
+except PermissionError as error:
+    print(str(error))
+else:
+    raise SystemExit(11)
 `);
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("expected gateway identity");
+    expect(result.stdout).toContain("does not identify the trusted launcher");
   });
 
   it("repairs and verifies strict and compatibility hashes on an unchanged retry", () => {
@@ -216,64 +225,56 @@ print(json.dumps({"changed": changed}))
     }
   });
 
-  it("uses direct same-uid mutation and reload in a rootless OpenShell sandbox", () => {
-    const temp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-hermes-mcp-rootless-"));
-    const hermesDir = path.join(temp, ".hermes");
-    const configPath = path.join(hermesDir, "config.yaml");
-    const envPath = path.join(hermesDir, ".env");
-    const compatHash = path.join(hermesDir, ".config-hash");
-    const strictHash = path.join(temp, "root-owned-image-hash");
-    const config = "model: test\n";
-    const env = "HERMES_TEST=1\n";
-    fs.mkdirSync(hermesDir);
-    fs.writeFileSync(configPath, config, { mode: 0o600 });
-    fs.writeFileSync(envPath, env, { mode: 0o600 });
-    fs.writeFileSync(
-      compatHash,
-      `${crypto.createHash("sha256").update(config).digest("hex")}  ${configPath}\n${crypto.createHash("sha256").update(env).digest("hex")}  ${envPath}\n`,
-      { mode: 0o600 },
-    );
-    fs.writeFileSync(strictHash, "ephemeral-root-anchor\n", { mode: 0o444 });
-
-    try {
-      const result = runPython(
-        `
-import importlib.util, json, os, sys
+  it("rejects sandbox-originated mutation in a root-separated lifecycle", () => {
+    const result = runPython(`
+import importlib.util, stat, sys, types
 spec = importlib.util.spec_from_file_location("mcp_tx", sys.argv[1])
 module = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = module
 spec.loader.exec_module(module)
-module.GUARD_PATH = sys.argv[2]
-module.HERMES_DIR = sys.argv[3]
-module.CONFIG_PATH = os.path.join(module.HERMES_DIR, "config.yaml")
-module.STRICT_HASH_PATH = sys.argv[4]
-module.CONTROL_DIR = os.path.join(sys.argv[5], "missing-control")
-module.CONTROL_SOCKET_PATH = os.path.join(module.CONTROL_DIR, "control.sock")
 module.os.geteuid = lambda: 1000
-module._assert_mutable_snapshot = lambda snapshot: None
-module.reload_gateway = lambda: True
-print(json.dumps(module.execute("add", {
+module.os.lstat = lambda path: types.SimpleNamespace(st_mode=stat.S_IFREG | 0o444, st_uid=0)
+try:
+    module.execute("add", {
+        "server": "fake",
+        "url": "https://mcp.example.test/mcp",
+        "headers": {"Authorization": "Bearer openshell:resolve:env:FAKE_TOKEN"},
+        "replace_existing": False,
+    })
+except PermissionError as error:
+    print(str(error))
+else:
+    raise SystemExit(9)
+`);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("requires NemoClaw privileged lifecycle execution");
+  });
+
+  it("runs one-shot mutation as the current-main same-uid Hermes workload", () => {
+    const result = runPython(`
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("mcp_tx", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+module.os.geteuid = lambda: 1000
+module.os.lstat = lambda path: (_ for _ in ()).throw(FileNotFoundError(path))
+module._gateway_identity = lambda: (4242, 99)
+module.apply_transaction_and_reload = lambda action, payload: {
+    "ok": True, "changed": True, "reloaded": True
+}
+result = module.execute("add", {
     "server": "fake",
     "url": "https://mcp.example.test/mcp",
     "headers": {"Authorization": "Bearer openshell:resolve:env:FAKE_TOKEN"},
     "replace_existing": False,
-})))
-`,
-        [hermesDir, strictHash, temp],
-      );
+})
+print(json.dumps(result, sort_keys=True))
+`);
 
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        ok: true,
-        changed: true,
-        reloaded: true,
-      });
-      expect(fs.readFileSync(configPath, "utf8")).toContain("mcp_servers:");
-      expect(fs.readFileSync(compatHash, "utf8")).not.toContain("stale");
-      expect(fs.readFileSync(strictHash, "utf8")).toBe("ephemeral-root-anchor\n");
-    } finally {
-      fs.rmSync(temp, { recursive: true, force: true });
-    }
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ changed: true, ok: true, reloaded: true });
   });
 
   it("restores config and hashes when runtime reload fails", () => {

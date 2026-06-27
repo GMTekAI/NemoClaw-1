@@ -259,25 +259,23 @@ ${openshellMarkers ? `# ${openshellMarkers}` : ""}
 exit 99`,
     );
 
-    if (options.driverBins !== false) {
+    const driverFixtures: Array<{ name: string; markers: string }> =
+      options.driverBins === false
+        ? []
+        : [
+            { name: "openshell-gateway", markers: gatewayMarkers },
+            ...(options.driverBins === "gateway"
+              ? []
+              : [{ name: "openshell-sandbox", markers: "" }]),
+            ...(options.driverBins === "gateway-vm"
+              ? [{ name: "openshell-driver-vm", markers: "" }]
+              : []),
+          ];
+    for (const fixture of driverFixtures) {
       writeExecutable(
-        path.join(fakeBin, "openshell-gateway"),
+        path.join(fakeBin, fixture.name),
         `#!/usr/bin/env bash
-# ${gatewayMarkers}
-exit 0`,
-      );
-    }
-    if (options.driverBins !== false && options.driverBins !== "gateway") {
-      writeExecutable(
-        path.join(fakeBin, "openshell-sandbox"),
-        `#!/usr/bin/env bash
-exit 0`,
-      );
-    }
-    if (options.driverBins === "gateway-vm") {
-      writeExecutable(
-        path.join(fakeBin, "openshell-driver-vm"),
-        `#!/usr/bin/env bash
+# ${fixture.markers}
 exit 0`,
       );
     }

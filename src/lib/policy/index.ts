@@ -3,6 +3,17 @@
 //
 // Policy preset management — list, load, merge, and apply presets.
 
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import readline from "node:readline";
+import { isDeepStrictEqual } from "node:util";
+
+import YAML from "yaml";
+
+// Namespace access keeps resolveOpenshell spyable in focused policy tests.
+import * as openshellResolveModule from "../adapters/openshell/resolve";
+import { loadAgent } from "../agent/defs";
 import type { JsonObject, JsonValue } from "../core/json-types";
 import {
   getMessagingPolicyKeyAliases,
@@ -10,19 +21,8 @@ import {
   listBuiltInMessagingChannelManifests,
   listMessagingPolicyPresetMetadata,
 } from "../messaging/channels";
-
-const fs = require("fs");
-const path = require("path");
-const os = require("os");
-const readline = require("readline");
-const { isDeepStrictEqual } = require("node:util");
-const YAML = require("yaml");
-const { ROOT, run, runCapture } = require("../runner");
-const registry = require("../state/registry");
-const { loadAgent } = require("../agent/defs");
-// Late-binding access via the module exports so tests can spy on
-// resolveOpenshell without rewiring requires.
-const openshellResolveModule = require("../adapters/openshell/resolve");
+import { ROOT, run, runCapture } from "../runner";
+import * as registry from "../state/registry";
 
 const PRESETS_DIR = path.join(ROOT, "nemoclaw-blueprint", "policies", "presets");
 

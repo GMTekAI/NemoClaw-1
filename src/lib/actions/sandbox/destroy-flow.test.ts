@@ -103,24 +103,30 @@ function createDestroyHarness(options: DestroyHarnessOptions = {}): DestroyHarne
   vi.spyOn(onboardSession, "loadSession").mockReturnValue({ sandboxName: "alpha" });
   vi.spyOn(onboardSession, "updateSession").mockImplementation((mutator: unknown) => {
     const session = { sandboxName: "alpha" };
-    if (typeof mutator === "function") (mutator as (value: typeof session) => void)(session);
+    expect(typeof mutator).toBe("function");
+    (mutator as (value: typeof session) => void)(session);
     return session;
   });
   const gatewayPinsAtSandboxList: Array<string | undefined> = [];
   const runOpenshellSpy = vi.spyOn(runtime, "runOpenshell").mockImplementation((args: unknown) => {
     const argv = Array.isArray(args) ? args : [];
-    if (argv[0] === "sandbox" && argv[1] === "list") {
-      gatewayPinsAtSandboxList.push(process.env.OPENSHELL_GATEWAY);
-      return {
-        status: 0,
-        stdout: sandboxListJson(options.sandboxPresent === false ? [] : ["alpha"]),
-        stderr: "",
-      };
+    switch (`${String(argv[0])}:${String(argv[1])}`) {
+      case "sandbox:list":
+        gatewayPinsAtSandboxList.push(process.env.OPENSHELL_GATEWAY);
+        return {
+          status: 0,
+          stdout: sandboxListJson(options.sandboxPresent === false ? [] : ["alpha"]),
+          stderr: "",
+        };
+      case "sandbox:delete":
+        return {
+          status: options.deleteStatus ?? 0,
+          stdout: options.deleteOutput ?? "",
+          stderr: "",
+        };
+      default:
+        return { status: 0, stdout: "", stderr: "" };
     }
-    if (argv[0] === "sandbox" && argv[1] === "delete") {
-      return { status: options.deleteStatus ?? 0, stdout: options.deleteOutput ?? "", stderr: "" };
-    }
-    return { status: 0, stdout: "", stderr: "" };
   });
   vi.spyOn(runtime, "captureOpenshell").mockReturnValue({ status: 0, output: "" });
   const selectGatewaySpy = vi
@@ -176,11 +182,11 @@ function createDestroyHarness(options: DestroyHarnessOptions = {}): DestroyHarne
     .mockResolvedValue(undefined);
   const finalizeMcpBridgesAfterSandboxDeleteSpy = vi
     .spyOn(mcpBridge, "finalizeMcpBridgesAfterSandboxDelete")
-    .mockImplementation(async () => {
-      if (options.finalizeMcpError) {
-        throw new Error(options.finalizeMcpError);
-      }
-    });
+    .mockImplementation(() =>
+      options.finalizeMcpError
+        ? Promise.reject(new Error(options.finalizeMcpError))
+        : Promise.resolve(),
+    );
 
   logSpy.mockClear();
 

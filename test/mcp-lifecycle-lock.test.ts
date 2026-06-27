@@ -4,6 +4,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
+import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 
@@ -14,6 +15,7 @@ type LifecycleLockModule = typeof import("../dist/lib/state/mcp-lifecycle-lock")
 const requireDist = createRequire(import.meta.url);
 const lockModulePath = requireDist.resolve("../dist/lib/state/mcp-lifecycle-lock.js");
 const lifecycleLock = requireDist(lockModulePath) as LifecycleLockModule;
+const currentProcessIdentity = lifecycleLock.readMcpLockProcessIdentity(process.pid);
 
 let stateDir: string;
 const children = new Set<ChildProcess>();
@@ -43,9 +45,11 @@ function waitForLine(child: ChildProcess, expected: string): Promise<void> {
     child.once("error", reject);
     child.stdout?.on("data", (chunk: Buffer) => {
       output += chunk.toString("utf8");
-      if (output.split(/\r?\n/).includes(expected)) {
-        clearTimeout(timeout);
-        resolve();
+      const matched = output.split(/\r?\n/).includes(expected);
+      switch (matched) {
+        case true:
+          clearTimeout(timeout);
+          resolve();
       }
     });
   });
@@ -62,6 +66,59 @@ afterEach(() => {
 });
 
 describe("MCP lifecycle lock", () => {
+  it.skipIf(process.platform === "win32")(
+    "does not follow a symlink when observing lock ownership",
+    async () => {
+      const lockPath = lifecycleLock.getMcpLifecycleLockPath("alpha", stateDir);
+      const targetPath = path.join(stateDir, "operator-owned-target");
+      const target = `${JSON.stringify({
+        version: 1,
+        sandboxName: "alpha",
+        pid: process.pid,
+        processIdentity: currentProcessIdentity,
+        token: "operator-owned-token",
+        acquiredAt: new Date().toISOString(),
+      })}\n`;
+      fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+      fs.writeFileSync(targetPath, target);
+      fs.symlinkSync(targetPath, lockPath);
+
+      await expect(
+        lifecycleLock.withMcpLifecycleLock("alpha", () => "acquired", options()),
+      ).resolves.toBe("acquired");
+      expect(fs.readFileSync(targetPath, "utf8")).toBe(target);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "reaps a non-regular Unix socket found at the lock path",
+    async () => {
+      const shortStateDir = path.join("/tmp", `m${process.pid}`);
+      fs.rmSync(shortStateDir, { recursive: true, force: true });
+      const lockPath = lifecycleLock.getMcpLifecycleLockPath("alpha", shortStateDir);
+      expect(Buffer.byteLength(lockPath)).toBeLessThan(104);
+      fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+      const server = createServer();
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(lockPath, resolve);
+      });
+      expect(fs.lstatSync(lockPath).isSocket()).toBe(true);
+
+      try {
+        await expect(
+          lifecycleLock.withMcpLifecycleLock("alpha", () => "acquired", {
+            ...options(),
+            stateDir: shortStateDir,
+          }),
+        ).resolves.toBe("acquired");
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        fs.rmSync(shortStateDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("serializes separate top-level promises in one process", async () => {
     const firstEntered = deferred();
     const releaseFirst = deferred();
@@ -265,10 +322,12 @@ const releasePath = process.argv[3];
     const rename = fs.promises.rename.bind(fs.promises);
     let injectedReplacement = false;
     const renameSpy = vi.spyOn(fs.promises, "rename").mockImplementation(async (from, to) => {
-      if (!injectedReplacement && String(from) === reaperPath) {
-        injectedReplacement = true;
-        fs.unlinkSync(reaperPath);
-        fs.writeFileSync(reaperPath, `${JSON.stringify(replacement)}\n`);
+      const shouldInject = !injectedReplacement && String(from) === reaperPath;
+      switch (shouldInject) {
+        case true:
+          injectedReplacement = true;
+          fs.unlinkSync(reaperPath);
+          fs.writeFileSync(reaperPath, `${JSON.stringify(replacement)}\n`);
       }
       return rename(from, to);
     });
@@ -283,28 +342,29 @@ const releasePath = process.argv[3];
     expect(JSON.parse(fs.readFileSync(reaperPath, "utf8")).token).toBe("replacement-reaper-token");
   });
 
-  it("recovers a recycled PID by comparing process-start identity", async () => {
-    const identity = lifecycleLock.readMcpLockProcessIdentity(process.pid);
-    if (identity === null) return;
-    const lockPath = lifecycleLock.getMcpLifecycleLockPath("alpha", stateDir);
-    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
-    fs.writeFileSync(
-      lockPath,
-      `${JSON.stringify({
-        version: 1,
-        sandboxName: "alpha",
-        pid: process.pid,
-        processIdentity: `${identity}-different-start`,
-        token: "recycled-token",
-        acquiredAt: "2026-01-01T00:00:00.000Z",
-      })}\n`,
-    );
+  it.skipIf(currentProcessIdentity === null)(
+    "recovers a recycled PID by comparing process-start identity",
+    async () => {
+      const lockPath = lifecycleLock.getMcpLifecycleLockPath("alpha", stateDir);
+      fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+      fs.writeFileSync(
+        lockPath,
+        `${JSON.stringify({
+          version: 1,
+          sandboxName: "alpha",
+          pid: process.pid,
+          processIdentity: `${String(currentProcessIdentity)}-different-start`,
+          token: "recycled-token",
+          acquiredAt: "2026-01-01T00:00:00.000Z",
+        })}\n`,
+      );
 
-    await expect(
-      lifecycleLock.withMcpLifecycleLock("alpha", () => undefined, options()),
-    ).resolves.toBeUndefined();
-    expect(fs.existsSync(lockPath)).toBe(false);
-  });
+      await expect(
+        lifecycleLock.withMcpLifecycleLock("alpha", () => undefined, options()),
+      ).resolves.toBeUndefined();
+      expect(fs.existsSync(lockPath)).toBe(false);
+    },
+  );
 
   it("does not break a long-lived lock owned by the same process identity", async () => {
     const lockPath = lifecycleLock.getMcpLifecycleLockPath("alpha", stateDir);

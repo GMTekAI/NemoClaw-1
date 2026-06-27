@@ -17,21 +17,15 @@ function dockerRunCommandBetween(
 ): string {
   const start = dockerfile.indexOf(startMarker);
   const end = dockerfile.indexOf(endMarker, start);
-  if (start === -1 || end === -1 || end <= start) {
-    throw new Error(`Expected Dockerfile block between ${startMarker} and ${endMarker}`);
-  }
+  expect(start, `Expected Dockerfile start marker ${startMarker}`).toBeGreaterThanOrEqual(0);
+  expect(end, `Expected Dockerfile end marker ${endMarker}`).toBeGreaterThan(start);
   const runIndex = dockerfile.indexOf("RUN ", start);
-  if (runIndex === -1 || runIndex > end) {
-    throw new Error(`Expected RUN instruction after ${startMarker}`);
-  }
-  const runLines: string[] = [];
-  for (const line of dockerfile.slice(runIndex, end).split("\n")) {
-    runLines.push(line);
-    if (!line.trimEnd().endsWith("\\")) break;
-  }
-  if (runLines.at(-1)?.trimEnd().endsWith("\\")) {
-    throw new Error(`Expected complete RUN instruction before ${endMarker}`);
-  }
+  expect(runIndex, `Expected RUN instruction after ${startMarker}`).toBeGreaterThanOrEqual(start);
+  expect(runIndex, `Expected RUN instruction before ${endMarker}`).toBeLessThan(end);
+  const blockLines = dockerfile.slice(runIndex, end).split("\n");
+  const runEnd = blockLines.findIndex((line) => !line.trimEnd().endsWith("\\"));
+  expect(runEnd, `Expected complete RUN instruction before ${endMarker}`).toBeGreaterThanOrEqual(0);
+  const runLines = blockLines.slice(0, runEnd + 1);
   return runLines
     .join("\n")
     .trim()

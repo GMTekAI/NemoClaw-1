@@ -156,7 +156,11 @@ openshell_required_feature_strings() {
   local -a candidates
 
   candidates=("$openshell_bin")
-  dir="$(cd "$(dirname "$openshell_bin")" 2>/dev/null && pwd -P || true)"
+  if dir="$(cd "$(dirname "$openshell_bin")" 2>/dev/null && pwd -P)"; then
+    :
+  else
+    dir=""
+  fi
   if [ -n "$dir" ]; then
     candidates+=("$dir/openshell-gateway" "$dir/openshell-sandbox" "$dir/openshell-driver-vm")
   fi
@@ -429,10 +433,12 @@ validate_actions_artifact_run() {
     || fail "OpenShell workflow run metadata did not match run ${OPENSHELL_ARTIFACT_RUN_ID}."
   [ "$workflow_id" = "246342097" ] \
     || fail "OpenShell workflow run ${OPENSHELL_ARTIFACT_RUN_ID} was not produced by the trusted Branch E2E workflow."
-  [ "$repository" = "NVIDIA/OpenShell" ] && [ "$head_repository" = "NVIDIA/OpenShell" ] \
-    || fail "OpenShell workflow run ${OPENSHELL_ARTIFACT_RUN_ID} was not produced from NVIDIA/OpenShell."
-  [ "$status" = "completed" ] && [ "$conclusion" = "success" ] \
-    || fail "OpenShell workflow run ${OPENSHELL_ARTIFACT_RUN_ID} must be completed successfully."
+  if [ "$repository" != "NVIDIA/OpenShell" ] || [ "$head_repository" != "NVIDIA/OpenShell" ]; then
+    fail "OpenShell workflow run ${OPENSHELL_ARTIFACT_RUN_ID} was not produced from NVIDIA/OpenShell."
+  fi
+  if [ "$status" != "completed" ] || [ "$conclusion" != "success" ]; then
+    fail "OpenShell workflow run ${OPENSHELL_ARTIFACT_RUN_ID} must be completed successfully."
+  fi
   case "$event" in
     push | workflow_dispatch) ;;
     *) fail "OpenShell workflow run ${OPENSHELL_ARTIFACT_RUN_ID} has unsupported event '$event'." ;;
@@ -461,8 +467,9 @@ download_verified_actions_artifact() {
     --jq '[.total_count, (.artifacts | length), .artifacts[0].id, .artifacts[0].name, .artifacts[0].digest, .artifacts[0].expired] | map(if . == null then "" else tostring end) | join("|")')" \
     || fail "Failed to resolve OpenShell artifact metadata for '$artifact_name'."
   IFS='|' read -r total_count returned_count artifact_id resolved_name artifact_digest artifact_expired <<<"$metadata"
-  [ "$total_count" = "1" ] && [ "$returned_count" = "1" ] \
-    || fail "Expected exactly one OpenShell artifact named '$artifact_name' in workflow run ${OPENSHELL_ARTIFACT_RUN_ID}, found ${total_count:-0}."
+  if [ "$total_count" != "1" ] || [ "$returned_count" != "1" ]; then
+    fail "Expected exactly one OpenShell artifact named '$artifact_name' in workflow run ${OPENSHELL_ARTIFACT_RUN_ID}, found ${total_count:-0}."
+  fi
   [ "$resolved_name" = "$artifact_name" ] \
     || fail "OpenShell artifact metadata name '$resolved_name' did not match expected '$artifact_name'."
   [[ "$artifact_id" =~ ^[0-9]+$ ]] \

@@ -14,6 +14,7 @@ import {
   buildDeepAgentsMcpRegisterCommand,
   buildDeepAgentsMcpRemoveCommand,
   buildDeepAgentsMcpStatusCommand,
+  buildHermesMcpLifecycleExecArgs,
   buildHermesMcpRegisterCommand,
   buildMcpBridgePolicyName,
   buildMcpBridgePolicyYaml,
@@ -787,11 +788,27 @@ describe("MCP adapters", () => {
       adapter: "hermes-config",
     });
 
-    expect(command).toContain("/usr/local/lib/nemoclaw/hermes-mcp-config-transaction.py");
-    expect(command).toContain(" add --payload ");
-    expect(command).toContain("https://api.githubcopilot.com/mcp/");
-    expect(command).toContain("openshell:resolve:env:GITHUB_TOKEN");
-    expect(command).toContain('"replace_existing":false');
+    expect(command.slice(0, 4)).toEqual([
+      "/opt/hermes/.venv/bin/python",
+      "/usr/local/lib/nemoclaw/hermes-mcp-config-transaction.py",
+      "add",
+      "--payload",
+    ]);
+    expect(JSON.parse(command[4] ?? "{}")).toEqual({
+      server: "github",
+      url: "https://api.githubcopilot.com/mcp/",
+      headers: { Authorization: "Bearer openshell:resolve:env:GITHUB_TOKEN" },
+      replace_existing: false,
+    });
+    expect(buildHermesMcpLifecycleExecArgs("hermes-box", command)).toEqual([
+      "sandbox",
+      "exec",
+      "--name",
+      "hermes-box",
+      "--no-tty",
+      "--",
+      ...command,
+    ]);
   });
 
   it("constructs a Deep Agents .mcp.json registration with placeholders", () => {

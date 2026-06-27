@@ -1554,9 +1554,9 @@ jobs:
       ref: ${{ inputs.target_ref || github.ref }}
       script: test/e2e/test-network-policy.sh
       artifact_name: "network-policy-test-log"
-      artifact_path: |
-        test-network-policy-*.log
-        /home/runner/.nemoclaw/onboard-failures/**
+      # Keep failure artifacts to the scenario's redacted test log. Raw
+      # onboard-failure directories can contain environment diagnostics.
+      artifact_path: "test-network-policy-*.log"
       apt_packages: expect
       env_json: '{"NEMOCLAW_ACCEPT_THIRD_PARTY_SOFTWARE":"1","NEMOCLAW_NON_INTERACTIVE":"1","NEMOCLAW_POLICY_TIER":"restricted","NEMOCLAW_RECREATE_SANDBOX":"1"}'
       nvidia_api_key: true

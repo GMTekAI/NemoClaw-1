@@ -164,25 +164,40 @@ function createLockOwner(sandboxName: string, token: string): McpLifecycleLockOw
 }
 
 async function readLockObservation(lockPath: string): Promise<LockObservation | null> {
-  let stat: fs.Stats;
+  let handle: fs.promises.FileHandle;
   try {
-    stat = await fs.promises.lstat(lockPath);
+    handle = await fs.promises.open(
+      lockPath,
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
+    );
   } catch (error) {
     if (isErrnoException(error) && error.code === "ENOENT") return null;
+    try {
+      const stat = await fs.promises.lstat(lockPath);
+      if (!stat.isFile() || stat.isSymbolicLink()) {
+        return { owner: null, mtimeMs: stat.mtimeMs };
+      }
+    } catch (statError) {
+      if (isErrnoException(statError) && statError.code === "ENOENT") return null;
+      throw statError;
+    }
     throw error;
   }
 
-  if (!stat.isFile() || stat.isSymbolicLink()) {
-    return { owner: null, mtimeMs: stat.mtimeMs };
-  }
   try {
-    const parsed: unknown = JSON.parse(await fs.promises.readFile(lockPath, "utf8"));
-    return {
-      owner: isLockOwner(parsed) ? parsed : null,
-      mtimeMs: stat.mtimeMs,
-    };
-  } catch {
-    return { owner: null, mtimeMs: stat.mtimeMs };
+    const stat = await handle.stat();
+    if (!stat.isFile()) return { owner: null, mtimeMs: stat.mtimeMs };
+    try {
+      const parsed: unknown = JSON.parse(await handle.readFile("utf8"));
+      return {
+        owner: isLockOwner(parsed) ? parsed : null,
+        mtimeMs: stat.mtimeMs,
+      };
+    } catch {
+      return { owner: null, mtimeMs: stat.mtimeMs };
+    }
+  } finally {
+    await handle.close();
   }
 }
 

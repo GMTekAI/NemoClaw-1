@@ -226,11 +226,6 @@ if [ ! -f "$_HERMES_RUNTIME_CONFIG_GUARD" ]; then
   _HERMES_RUNTIME_CONFIG_GUARD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runtime-config-guard.py"
 fi
 
-_HERMES_MCP_CONTROL="/usr/local/lib/nemoclaw/hermes-mcp-config-transaction.py"
-if [ ! -f "$_HERMES_MCP_CONTROL" ]; then
-  _HERMES_MCP_CONTROL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/mcp-config-transaction.py"
-fi
-
 # The seeder imports PyYAML, which ships ONLY in the Hermes venv — not in the
 # base-image python3 that is first on PATH at container boot. (An interactive
 # login shell activates the venv, masking this: `python3` there resolves to
@@ -935,39 +930,12 @@ restore_hermes_config_permissions_after_dashboard_start() {
   done
 }
 
-MCP_CONTROL_PID=""
-start_hermes_mcp_control() {
-  [ "$(id -u)" -eq 0 ] || return 0
-  prepare_restricted_log /tmp/hermes-mcp-control.log root:root 600
-  HERMES_HOME="${HERMES_DIR}" \
-    nohup "$_HERMES_PYTHON" "$_HERMES_MCP_CONTROL" serve \
-      >/tmp/hermes-mcp-control.log 2>&1 &
-  MCP_CONTROL_PID=$!
-  local attempts=0
-  while [ "$attempts" -lt 50 ]; do
-    if [ -S /run/nemoclaw/hermes-mcp-control.sock ]; then
-      echo "[gateway] Hermes MCP lifecycle control ready (pid ${MCP_CONTROL_PID})" >&2
-      return 0
-    fi
-    if ! kill -0 "$MCP_CONTROL_PID" 2>/dev/null; then
-      echo "[gateway] Hermes MCP lifecycle control failed to start" >&2
-      tail -n 20 /tmp/hermes-mcp-control.log >&2 2>/dev/null || true
-      return 1
-    fi
-    attempts=$((attempts + 1))
-    sleep 0.1
-  done
-  echo "[gateway] Hermes MCP lifecycle control socket did not become ready" >&2
-  return 1
-}
-
 record_hermes_service_pids() {
   SANDBOX_CHILD_PIDS=("$GATEWAY_PID" "$DASHBOARD_PID")
   [ -n "${GATEWAY_LOG_TAIL_PID:-}" ] && SANDBOX_CHILD_PIDS+=("$GATEWAY_LOG_TAIL_PID")
   [ -n "${DASHBOARD_LOG_TAIL_PID:-}" ] && SANDBOX_CHILD_PIDS+=("$DASHBOARD_LOG_TAIL_PID")
   [ -n "${SOCAT_PID:-}" ] && SANDBOX_CHILD_PIDS+=("$SOCAT_PID")
   [ -n "${DASHBOARD_SOCAT_PID:-}" ] && SANDBOX_CHILD_PIDS+=("$DASHBOARD_SOCAT_PID")
-  [ -n "${MCP_CONTROL_PID:-}" ] && SANDBOX_CHILD_PIDS+=("$MCP_CONTROL_PID")
   # shellcheck disable=SC2034  # read by cleanup_on_signal from sandbox-init.sh
   SANDBOX_WAIT_PID="$GATEWAY_PID"
 }
@@ -1405,6 +1373,13 @@ if [ ${#NEMOCLAW_CMD[@]} -gt 0 ]; then
   exec "${STEP_DOWN_PREFIX_SANDBOX[@]}" "${NEMOCLAW_CMD[@]}"
 fi
 
+# Same-uid lifecycle commands are valid only in OpenShell's non-root workload
+# topology. Stamp the legacy root-separated path before its gateway can start.
+install -d -m 0755 -o root -g root /run/nemoclaw
+printf '%s\n' 'root-separated' > /run/nemoclaw/hermes-root-lifecycle
+chown root:root /run/nemoclaw/hermes-root-lifecycle
+chmod 0444 /run/nemoclaw/hermes-root-lifecycle
+
 cleanup_stale_hermes_gateway_runtime
 
 # SECURITY: Protect gateway log from sandbox user tampering
@@ -1421,7 +1396,6 @@ GATEWAY_PID=$!
 echo "[gateway] hermes gateway launched as 'gateway' user (pid $GATEWAY_PID)" >&2
 start_gateway_log_stream
 wait_for_hermes_gateway_internal "$GATEWAY_PID"
-start_hermes_mcp_control
 start_socat_forwarder "$PUBLIC_PORT" "$INTERNAL_PORT" "API" SOCAT_PID
 start_hermes_dashboard_sandbox_user
 restore_hermes_config_permissions_after_dashboard_start

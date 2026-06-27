@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import type { StdioOptions } from "node:child_process";
+
 /**
  * Unified secret redaction — single module for all consumers.
  *
@@ -90,7 +92,7 @@ export function redactError(err: unknown): unknown {
 
 export function writeRedactedResult(
   result: { stdout?: Buffer | string | null; stderr?: Buffer | string | null } | null,
-  stdio: string | string[],
+  stdio: StdioOptions | undefined,
 ): void {
   if (!result || stdio === "inherit" || !Array.isArray(stdio)) return;
   if (stdio[1] === "pipe" && result.stdout) {
