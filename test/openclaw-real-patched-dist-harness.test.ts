@@ -200,7 +200,7 @@ describe.skipIf(process.env.NEMOCLAW_REAL_OPENCLAW_DIST_HARNESS !== "1")(
 
         const issue4434Patch = spawnSync(
           process.execPath,
-          [PATCH_OPENCLAW_ISSUE_4434_DIAGNOSTICS, dist],
+          ["--experimental-strip-types", PATCH_OPENCLAW_ISSUE_4434_DIAGNOSTICS, dist],
           {
             encoding: "utf-8",
             timeout: 20000,
@@ -211,7 +211,7 @@ describe.skipIf(process.env.NEMOCLAW_REAL_OPENCLAW_DIST_HARNESS !== "1")(
 
         const issue4434Audit = spawnSync(
           process.execPath,
-          [PATCH_OPENCLAW_ISSUE_4434_DIAGNOSTICS, "--audit", dist],
+          ["--experimental-strip-types", PATCH_OPENCLAW_ISSUE_4434_DIAGNOSTICS, "--audit", dist],
           {
             encoding: "utf-8",
             timeout: 20000,
