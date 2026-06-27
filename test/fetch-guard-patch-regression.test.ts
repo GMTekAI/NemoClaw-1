@@ -401,8 +401,6 @@ describe("fetch-guard patch regression guard", () => {
       "# Install NemoClaw plugin into OpenClaw",
       "# Apply messaging render and post-agent-install build-file hooks after agent/plugin installation.",
     );
-    expect(command).toContain("openclaw plugins inspect nemoclaw --json > /dev/null");
-    expect(command).not.toContain("openclaw plugins enable nemoclaw");
     const script = [
       "openclaw() {",
       '  if [ "${1:-} ${2:-} ${3:-}" = "plugins install /opt/nemoclaw" ]; then return 42; fi',
@@ -412,6 +410,26 @@ describe("fetch-guard patch regression guard", () => {
     ].join("\n");
     const result = spawnSync("bash", ["-c", script], { encoding: "utf-8", timeout: 5000 });
     expect(result.status).toBe(42);
+
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-plugin-install-"));
+    const inspectMarker = path.join(tmp, "inspected");
+    const successScript = [
+      "openclaw() {",
+      '  case "${1:-} ${2:-} ${3:-}" in',
+      '    "plugins install /opt/nemoclaw") echo "installed" ;;',
+      `    "plugins inspect nemoclaw") : > ${JSON.stringify(inspectMarker)} ;;`,
+      '    "plugins enable nemoclaw") return 43 ;;',
+      "  esac",
+      "  return 0",
+      "}",
+      command,
+    ].join("\n");
+    const success = spawnSync("bash", ["-c", successScript], {
+      encoding: "utf-8",
+      timeout: 5000,
+    });
+    expect(success.status).toBe(0);
+    expect(fs.existsSync(inspectMarker)).toBe(true);
   });
 
   it("upgrades stale OpenClaw to the runtime build target and leaves current installs alone", () => {

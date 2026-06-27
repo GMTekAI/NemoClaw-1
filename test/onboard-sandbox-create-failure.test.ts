@@ -7,7 +7,10 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { collectSandboxCreateFailureDiagnostics } from "../dist/lib/onboard/sandbox-create-failure.js";
+import {
+  collectSandboxCreateFailureDiagnostics,
+  printSandboxCreateFailureDiagnostics,
+} from "../dist/lib/onboard/sandbox-create-failure.js";
 
 describe("sandbox create failure diagnostics", () => {
   it("preserves gateway failure lines and VM console output before cleanup", () => {
@@ -57,14 +60,27 @@ describe("sandbox create failure diagnostics", () => {
     );
   });
 
-  it("prints diagnostics for immediate create command failures", () => {
-    const source = fs.readFileSync(path.join(process.cwd(), "src/lib/onboard.ts"), "utf-8");
+  it("prints saved diagnostics and retained backup details", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-create-failure-print-"));
+    const homeDir = path.join(tmp, "home");
+    const messages: string[] = [];
+    const originalError = console.error;
+    console.error = (message?: unknown) => {
+      messages.push(String(message ?? ""));
+    };
 
-    expect(source).toMatch(
-      /Sandbox creation failed \(exit \$\{createResult\.status\}\)\.[\s\S]*sandboxCreateFailureDiagnostics\.printSandboxCreateFailureDiagnostics[\s\S]*printSandboxCreateRecoveryHints/,
-    );
-    expect(source).toMatch(
-      /printReadinessFailure\(readiness, sandboxName, sandboxReadyTimeoutSecs\);[\s\S]*sandboxCreateFailureDiagnostics\.printSandboxCreateFailureDiagnostics/,
-    );
+    try {
+      const diagnostics = printSandboxCreateFailureDiagnostics("my-assistant", {
+        homeDir,
+        backupPath: "/tmp/pre-upgrade-backup",
+        now: new Date("2026-05-12T20:35:00.000Z"),
+      });
+
+      expect(diagnostics?.dir).toContain(path.join(homeDir, ".nemoclaw", "onboard-failures"));
+      expect(messages).toContain(`  Diagnostics saved: ${diagnostics!.dir}`);
+      expect(messages).toContain("  State backup retained: /tmp/pre-upgrade-backup");
+    } finally {
+      console.error = originalError;
+    }
   });
 });
