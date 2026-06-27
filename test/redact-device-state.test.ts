@@ -62,7 +62,6 @@ sandbox_exec_sh_script() {
   return "$E2E_TEST_SANDBOX_RC"
 }
 extract_json_doc() { cat; }
-E2E_DIR=${JSON.stringify(e2eDir)}
 ${functionBody}
 device_state_json
 `;
@@ -72,6 +71,7 @@ device_state_json
       timeout: 20_000,
       env: {
         ...process.env,
+        E2E_DIR: e2eDir,
         E2E_TEST_SANDBOX_RAW: stubs.sandboxRawOutput,
         E2E_TEST_SANDBOX_RC: String(stubs.sandboxRc),
       },
@@ -234,7 +234,7 @@ describe("scope-upgrade device_state_json shell wrapper", () => {
     });
 
     expect(result.rc).toBe(5);
-    expect(result.stdout).toContain("[DEVICE_STATE_REDACTION_FAILED stage=sandbox-exec rc=5]");
+    expect(result.stdout.trim()).toBe("[DEVICE_STATE_REDACTION_FAILED stage=sandbox-exec rc=5]");
     expect(result.stdout).not.toContain(TOKEN_LEAK);
     expect(result.stdout).not.toContain('"tokens"');
     expect(result.stderr).not.toContain(TOKEN_LEAK);
@@ -250,7 +250,7 @@ describe("scope-upgrade device_state_json shell wrapper", () => {
     });
 
     expect(result.rc).toBe(7);
-    expect(result.stdout).toContain("[DEVICE_STATE_REDACTION_FAILED stage=redactor rc=7]");
+    expect(result.stdout.trim()).toBe("[DEVICE_STATE_REDACTION_FAILED stage=redactor rc=7]");
     expect(result.stdout).not.toContain(TOKEN_LEAK);
     expect(result.stdout).not.toContain('"tokens"');
     expect(result.stderr).not.toContain(TOKEN_LEAK);
@@ -342,10 +342,10 @@ describe("scope-upgrade Phase 6 secret-bearing artifacts", () => {
 
     expect(script).toContain('python3 "${E2E_DIR}/lib/redact-text.py"');
     expect(script).toContain(
-      "auto_pair_diag_redacted=$(printf '%s' \"$auto_pair_diag\" | redact_text_for_state_log)",
+      "auto_pair_diag_redacted=$(printf '%s' \"$auto_pair_diag\" | redact_text_for_log)",
     );
     expect(script).toContain(
-      "auto_pair_snapshot_redacted=$(printf '%s' \"$auto_pair_log_snapshot\" | redact_text_for_state_log)",
+      "auto_pair_snapshot_redacted=$(printf '%s' \"$auto_pair_log_snapshot\" | redact_text_for_log)",
     );
     expect(script).toContain(
       'printf \'=== auto-pair diagnostic ===\\n%s\\n\' "$auto_pair_diag_redacted" >>"$STATE_LOG"',

@@ -133,17 +133,25 @@ quote_for_remote_sh() {
   printf "'%s'" "$(printf '%s' "$value" | sed "s/'/'\\\\''/g")"
 }
 
-sandbox_exec_sh_script() {
-  local seconds="$1"
-  local script="$2"
-  shift 2
+sandbox_named_exec_sh_script() {
+  local sandbox="$1"
+  local seconds="$2"
+  local script="$3"
+  shift 3
   local encoded remote_cmd arg
   encoded="$(printf '%s' "$script" | base64 | tr -d '\n')"
   remote_cmd="tmp=\$(mktemp); trap 'rm -f \"\$tmp\"' EXIT; printf %s $(quote_for_remote_sh "$encoded") | base64 -d > \"\$tmp\"; bash \"\$tmp\""
   for arg in "$@"; do
     remote_cmd+=" $(quote_for_remote_sh "$arg")"
   done
-  run_with_timeout "$seconds" "$OPENSHELL_BIN" sandbox exec --name "$SANDBOX_NAME" -- sh -lc "$remote_cmd"
+  run_with_timeout "$seconds" "$OPENSHELL_BIN" sandbox exec --name "$sandbox" -- sh -lc "$remote_cmd"
+}
+
+sandbox_exec_sh_script() {
+  local seconds="$1"
+  local script="$2"
+  shift 2
+  sandbox_named_exec_sh_script "$SANDBOX_NAME" "$seconds" "$script" "$@"
 }
 
 extract_json_doc() {
@@ -189,6 +197,32 @@ elif value is not None:
 
 extract_scope_request_id_from_output() {
   sed -nE 's/.*requestId: ([[:alnum:]_-]+).*/\1/p' | head -1
+}
+
+# Pipe arbitrary text through the standalone host-side token redactor so any
+# raw `openclaw devices approve` or `openclaw agent` output reaching
+# $APPROVAL_LOG / $AGENT_LOG / $STATE_LOG cannot carry bearer tokens, nvapi
+# keys, or similar credential-shaped substrings into uploaded artefacts. Pure
+# substitution: the redactor is deterministic, has no side effects, and
+# always exits 0 in normal operation.
+redact_text_for_log() {
+  python3 "${E2E_DIR}/lib/redact-text.py"
+}
+
+# Wrap stdin in the redactor and emit a fixed marker on non-zero exit so the
+# upload artefact never contains untrusted command output even when the
+# redactor itself fails. Stage label identifies the append site in failure
+# logs.
+redact_text_for_log_or_marker() {
+  local stage="$1"
+  local input redacted rc
+  input="$(cat)"
+  if redacted="$(printf '%s' "$input" | redact_text_for_log 2>/dev/null)"; then
+    printf '%s\n' "$redacted"
+  else
+    rc=$?
+    printf '[LOG_REDACTION_FAILED stage=%s rc=%s]\n' "$stage" "$rc"
+  fi
 }
 
 device_state_json() {
@@ -488,7 +522,7 @@ PROBESH
   rc=$?
   {
     printf '=== approve %s request=%s rc=%s ===\n' "$label" "$request_id" "$rc"
-    printf '%s\n' "$output"
+    printf '%s\n' "$output" | redact_text_for_log_or_marker "approve-output"
   } >>"$APPROVAL_LOG"
   if [ "$rc" -ne 0 ]; then
     if [ "$allow_already_approved" = "1" ]; then
@@ -595,7 +629,7 @@ exit 0
 ' "$request_id" 2>&1)
   {
     printf '=== legacy gateway-pinned approve request=%s ===\n' "$request_id"
-    printf '%s\n' "$output"
+    printf '%s\n' "$output" | redact_text_for_log_or_marker "legacy-approve-output"
   } >>"$APPROVAL_LOG"
   before_url=$(sed -n 's/^__URL_FOR_LEGACY_APPROVE__=//p' <<<"$output" | tail -1)
   if [[ "$before_url" != ws://127.0.0.1:* ]] && [[ "$before_url" != ws://localhost:* ]]; then
@@ -971,7 +1005,10 @@ set -e
 printf "__TRIGGER_AGENT_RC__=%s\n" "$agent_rc"
 exit 0
 ' 2>&1)
-  printf '=== trigger agent output ===\n%s\n' "$trigger_output" >>"$AGENT_LOG"
+  {
+    printf '=== trigger agent output ===\n'
+    printf '%s\n' "$trigger_output" | redact_text_for_log_or_marker "trigger-agent-output"
+  } >>"$AGENT_LOG"
 
   scope_request_id=""
   auto_approved_device=""
@@ -1075,7 +1112,10 @@ openclaw agent --agent main --json --session-id "$session_id" \
   -m "What is 6 multiplied by 7? Reply with only the integer, no extra words."
 ' 2>&1)
   final_rc=$?
-  printf '=== final agent attempt %s rc=%s ===\n%s\n' "$attempt" "$final_rc" "$final_output" >>"$AGENT_LOG"
+  {
+    printf '=== final agent attempt %s rc=%s ===\n' "$attempt" "$final_rc"
+    printf '%s\n' "$final_output" | redact_text_for_log_or_marker "final-agent-output"
+  } >>"$AGENT_LOG"
   reply=$(printf '%s' "$final_output" | parse_openclaw_agent_text 2>/dev/null) || reply=""
   if grep -Eiq 'EMBEDDED FALLBACK|scope upgrade pending approval|pairing required|fallbackFrom[": ]+gateway|transport[": ]+embedded' <<<"$final_output"; then
     last_agent_detail="agent output contained fallback or pairing marker: ${final_output:0:500}"
@@ -1184,15 +1224,12 @@ pgrep -af python3 2>&1 || true
 echo "--- last 80 lines /tmp/gateway.log ---"
 tail -n 80 /tmp/gateway.log 2>&1 || true
 ' 2>&1)
-redact_text_for_state_log() {
-  python3 "${E2E_DIR}/lib/redact-text.py"
-}
-auto_pair_diag_redacted=$(printf '%s' "$auto_pair_diag" | redact_text_for_state_log)
+auto_pair_diag_redacted=$(printf '%s' "$auto_pair_diag" | redact_text_for_log)
 auto_pair_diag_redact_rc=$?
 if [ "$auto_pair_diag_redact_rc" -ne 0 ]; then
   auto_pair_diag_redacted="[STATE_LOG_REDACTION_FAILED stage=text rc=${auto_pair_diag_redact_rc}]"
 fi
-auto_pair_snapshot_redacted=$(printf '%s' "$auto_pair_log_snapshot" | redact_text_for_state_log)
+auto_pair_snapshot_redacted=$(printf '%s' "$auto_pair_log_snapshot" | redact_text_for_log)
 auto_pair_snapshot_redact_rc=$?
 if [ "$auto_pair_snapshot_redact_rc" -ne 0 ]; then
   auto_pair_snapshot_redacted="[STATE_LOG_REDACTION_FAILED stage=text rc=${auto_pair_snapshot_redact_rc}]"
@@ -1344,12 +1381,28 @@ fi
 pass "second sandbox onboarded with Ollama provider"
 
 extract_openclaw_upstream() {
+  # Verify Phase 7's "two sandboxes, two providers, both via inference.local"
+  # contract from authoritative sources only:
+  #
+  #   * provider + model come from the host-side NemoClaw registry
+  #     (~/.nemoclaw/sandboxes.json), which records the requested intent for
+  #     each sandbox onboard / inference-set. The differing-providers half of
+  #     #5343 needs human-readable provider labels ("nvidia-prod" vs
+  #     "ollama-local") that the in-sandbox OpenClaw config does not carry —
+  #     patchOpenClawInferenceConfig normalises every managed route to
+  #     providerKey="inference", so both sandboxes look identical in
+  #     openclaw.json regardless of upstream.
+  #
+  #   * base_url comes from /sandbox/.openclaw/openclaw.json inside the
+  #     sandbox itself: this is the actual URL the next openclaw agent turn
+  #     will hand to its HTTP client, and the only file whose contents prove
+  #     the route still goes through inference.local. patchOpenClawInferenceConfig
+  #     writes it at models.providers[<key>].baseUrl. Fail closed if that
+  #     file is missing, providers is empty, or baseUrl is absent.
   local sandbox="$1"
-  # Read provider/model from the host-side NemoClaw sandbox registry rather
-  # than exec-ing into the container. The registry at ~/.nemoclaw/sandboxes.json
-  # is written by NemoClaw on every onboard/inference-set and is always
-  # accessible on the host without gRPC or sandbox exec overhead.
-  python3 - "$sandbox" <<'PY'
+  local registry_json route_json
+  registry_json="$(
+    python3 - "$sandbox" <<'PY'
 import json
 import os
 import sys
@@ -1357,16 +1410,62 @@ import sys
 sandbox_name = sys.argv[1]
 registry_file = os.path.join(os.environ.get("HOME", "/tmp"), ".nemoclaw", "sandboxes.json")
 try:
-    data = json.loads(open(registry_file, encoding="utf-8").read())
+    with open(registry_file, encoding="utf-8") as fh:
+        data = json.load(fh)
 except Exception as exc:
-    sys.stderr.write(f"read-registry-failed: {exc}\n")
+    sys.stderr.write(f"registry-read-failed: {exc}\n")
     raise SystemExit(2)
 
 entry = (data.get("sandboxes") or {}).get(sandbox_name) or {}
 provider = str(entry.get("provider") or "").strip()
 model = str(entry.get("model") or "").strip()
-base_url = "https://inference.local/v1" if provider else ""
-print(json.dumps({"provider": provider, "model": model, "base_url": base_url}, sort_keys=True))
+print(json.dumps({"provider": provider, "model": model}, sort_keys=True))
+PY
+  )" || return $?
+  route_json="$(sandbox_named_exec_sh_script "$sandbox" 60 '
+set -u
+python3 - <<'"'"'PY'"'"'
+import json
+import sys
+
+path = "/sandbox/.openclaw/openclaw.json"
+try:
+    with open(path, encoding="utf-8") as fh:
+        cfg = json.load(fh)
+except Exception as exc:
+    sys.stderr.write(f"openclaw-config-read-failed: {exc}\n")
+    raise SystemExit(2)
+
+models = cfg.get("models") or {}
+providers = models.get("providers") or {}
+if not isinstance(providers, dict) or not providers:
+    sys.stderr.write("openclaw-config-providers-empty\n")
+    raise SystemExit(3)
+
+provider_key, provider_cfg = next(iter(providers.items()))
+provider_cfg = provider_cfg or {}
+base_url = provider_cfg.get("baseUrl")
+if not isinstance(base_url, str) or not base_url.strip():
+    sys.stderr.write(f"openclaw-config-base-url-missing under providerKey={provider_key!r}\n")
+    raise SystemExit(4)
+print(json.dumps({"base_url": base_url.strip(), "provider_key": str(provider_key or "")}, sort_keys=True))
+PY
+')" || return $?
+  python3 - "$registry_json" "$route_json" <<'PY'
+import json
+import sys
+
+registry = json.loads(sys.argv[1] or "{}")
+route = json.loads(sys.argv[2] or "{}")
+print(json.dumps(
+    {
+        "provider": registry.get("provider", ""),
+        "model": registry.get("model", ""),
+        "base_url": route.get("base_url", ""),
+        "openclaw_provider_key": route.get("provider_key", ""),
+    },
+    sort_keys=True,
+))
 PY
 }
 
@@ -1461,13 +1560,7 @@ sandbox_b_exec_sh_script() {
   local seconds="$1"
   local script="$2"
   shift 2
-  local encoded remote_cmd arg
-  encoded="$(printf '%s' "$script" | base64 | tr -d '\n')"
-  remote_cmd="tmp=\$(mktemp); trap 'rm -f \"\$tmp\"' EXIT; printf %s $(quote_for_remote_sh "$encoded") | base64 -d > \"\$tmp\"; bash \"\$tmp\""
-  for arg in "$@"; do
-    remote_cmd+=" $(quote_for_remote_sh "$arg")"
-  done
-  run_with_timeout "$seconds" "$OPENSHELL_BIN" sandbox exec --name "$SANDBOX_NAME_B" -- sh -lc "$remote_cmd"
+  sandbox_named_exec_sh_script "$SANDBOX_NAME_B" "$seconds" "$script" "$@"
 }
 
 info "Running concurrent openclaw agent turns in both sandboxes"
@@ -1499,9 +1592,9 @@ multi_rc_b=$?
 
 {
   printf '=== sandbox A concurrent agent (rc=%s) ===\n' "$multi_rc_a"
-  cat "$multi_out_a"
+  redact_text_for_log_or_marker "multi-agent-output-a" <"$multi_out_a"
   printf '=== sandbox B concurrent agent (rc=%s) ===\n' "$multi_rc_b"
-  cat "$multi_out_b"
+  redact_text_for_log_or_marker "multi-agent-output-b" <"$multi_out_b"
 } >>"$AGENT_LOG"
 
 multi_marker_re='EMBEDDED FALLBACK|scope upgrade pending approval|pairing required|fallbackFrom[": ]+gateway|transport[": ]+embedded'

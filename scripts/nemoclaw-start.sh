@@ -2318,7 +2318,7 @@ def run(*args, strip_gateway_env=False):
         return 124, out.strip(), err.strip()
 
 
-def sleep_for_next_poll(default_seconds):
+def sleep_for_next_poll(default_seconds, productive=True):
     # Apply the bounded fast-reentry override before the caller's default
     # sleep so a recent allowlisted approval (which bumps the remaining
     # counter) drops polling to FAST_REENTRY_INTERVAL for the next few
@@ -2327,9 +2327,15 @@ def sleep_for_next_poll(default_seconds):
     # default so it never increases the inter-poll latency (e.g. when the
     # default is already tighter than FAST_REENTRY_INTERVAL during a
     # bounded retry pass in fast mode).
+    #
+    # Error-path callers pass productive=False so a string of gateway
+    # errors or JSON-parse failures after a fast-reentry bump does not
+    # silently drain the bounded window before a productive poll observes
+    # the cascading upgrades.
     global FAST_REENTRY_REMAINING
     if FAST_REENTRY_REMAINING > 0:
-        FAST_REENTRY_REMAINING -= 1
+        if productive:
+            FAST_REENTRY_REMAINING -= 1
         time.sleep(min(FAST_REENTRY_INTERVAL, default_seconds))
         return
     time.sleep(default_seconds)
@@ -2338,12 +2344,12 @@ def sleep_for_next_poll(default_seconds):
 while time.time() < DEADLINE:
     rc, out, err = run(OPENCLAW, 'devices', 'list', '--json')
     if rc != 0 or not out:
-        sleep_for_next_poll(SLOW_INTERVAL if SLOW_MODE else 1)
+        sleep_for_next_poll(SLOW_INTERVAL if SLOW_MODE else 1, productive=False)
         continue
     try:
         data = json.loads(out)
     except Exception:
-        sleep_for_next_poll(SLOW_INTERVAL if SLOW_MODE else 1)
+        sleep_for_next_poll(SLOW_INTERVAL if SLOW_MODE else 1, productive=False)
         continue
 
     pending = data.get('pending') or []
@@ -2432,6 +2438,11 @@ while time.time() < DEADLINE:
         # decides whether to retry. Cascading approvals from new ids still
         # bump as they appear, which is the case the override targets.
         new_attempted_ids = attempted_request_ids - FAST_REENTRY_BUMPED_REQUEST_IDS
+        # Bump in fast mode too: the cadence override is a no-op there
+        # (min(FAST_REENTRY_INTERVAL=1, default=1) = 1) but the requestId
+        # is still recorded in FAST_REENTRY_BUMPED_REQUEST_IDS so the same
+        # sticky id cannot re-arm the counter later when the watcher
+        # transitions into slow mode.
         if new_attempted_ids and FAST_REENTRY_POLLS > 0:
             FAST_REENTRY_REMAINING = FAST_REENTRY_POLLS
             FAST_REENTRY_BUMPED_REQUEST_IDS.update(new_attempted_ids)
@@ -2468,7 +2479,7 @@ while time.time() < DEADLINE:
 
     # Back off polling: 1s in fast mode while waiting for first pairing,
     # 5s in fast mode once anything is paired/approved, and SLOW_INTERVAL
-    # (default 30s) after convergence. Slow-mode keepalive lets late CLI
+    # (default 5s) after convergence. Slow-mode keepalive lets late CLI
     # scope upgrades get approved through the rest of DEADLINE without
     # hammering the gateway. The bounded fast-reentry counter (bumped above
     # when an allowlisted upgrade was attempted) overrides whichever tier
@@ -3806,20 +3817,16 @@ start_gateway_serving_watchdog() {
     # Both knobs must be positive integers: a zero/garbage interval would
     # busy-loop the probe, and a zero threshold would kill on the first
     # refusal. Fall back to the defaults rather than trusting bad input.
-    case "$interval" in
-      [1-9] | [1-9][0-9]*) ;;
-      *)
-        echo "[gateway-watchdog] invalid NEMOCLAW_GATEWAY_WATCHDOG_INTERVAL_SECONDS='${interval}'; defaulting to 30" >&2
-        interval=30
-        ;;
-    esac
-    case "$refused_threshold" in
-      [1-9] | [1-9][0-9]*) ;;
-      *)
-        echo "[gateway-watchdog] invalid NEMOCLAW_GATEWAY_WATCHDOG_REFUSED_THRESHOLD='${refused_threshold}'; defaulting to 4" >&2
-        refused_threshold=4
-        ;;
-    esac
+    # Use regex (=~) not glob (case [1-9]*) so trailing non-digit input
+    # like "12x" or "30abc" is rejected, not coerced.
+    if [[ ! "$interval" =~ ^[1-9][0-9]*$ ]]; then
+      echo "[gateway-watchdog] invalid NEMOCLAW_GATEWAY_WATCHDOG_INTERVAL_SECONDS='${interval}'; defaulting to 30" >&2
+      interval=30
+    fi
+    if [[ ! "$refused_threshold" =~ ^[1-9][0-9]*$ ]]; then
+      echo "[gateway-watchdog] invalid NEMOCLAW_GATEWAY_WATCHDOG_REFUSED_THRESHOLD='${refused_threshold}'; defaulting to 4" >&2
+      refused_threshold=4
+    fi
     [ -n "${_DASHBOARD_PORT:-}" ] || exit 0
     while :; do
       sleep "$interval"
