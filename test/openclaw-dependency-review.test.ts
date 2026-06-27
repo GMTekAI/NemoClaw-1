@@ -169,6 +169,33 @@ describe("OpenClaw 2026.6.9 dependency review contract", () => {
     expect(review).toContain(
       "CI job for `npm install --package-lock-only --ignore-scripts && npm audit --omit=dev --json`",
     );
+    expect(review).toContain("Transitive Dependency Graph Rationale");
+    expect(review).toContain(
+      "The OpenClaw 2026.6.9 bump does not newly introduce an unfrozen OpenClaw transitive graph",
+    );
+    expect(review).toContain(
+      "The reviewed `openclaw@2026.6.9` artifact ships `npm-shrinkwrap.json`",
+    );
+    expect(review).toContain(
+      "the previous reviewed `openclaw@2026.5.27` artifact also shipped `npm-shrinkwrap.json`",
+    );
+    expect(review).toContain("lockfile version `3`, `306` package entries");
+    expect(review).toContain("no resolved package entries missing integrity metadata");
+    expect(review).toContain("`@openclaw/diagnostics-otel@2026.6.9`");
+    expect(review).toContain("`@openclaw/brave-plugin@2026.6.9`");
+    expect(review).toContain("`@openclaw/discord@2026.6.9`");
+    expect(review).toContain("`@openclaw/slack@2026.6.9`");
+    expect(review).toContain("`@openclaw/whatsapp@2026.6.9`");
+    expect(review).toContain("`@openclaw/msteams@2026.6.9`");
+    expect(review).toContain("`@zed-industries/codex-acp@0.11.1` has no declared npm dependencies");
+    expect(review).toContain(
+      "the existing non-OpenClaw Tencent WeChat plugin, `@tencent-weixin/openclaw-weixin@2.4.3`",
+    );
+    expect(review).toContain("not introduced by the OpenClaw version change");
+    expect(review).toContain("third-party messaging plugins without package-internal shrinkwraps");
+    expect(review).toContain(
+      "The transitive npm graph warning is dispositioned by package evidence",
+    );
     expect(review).toContain("stale nonterminal rebuild-resume repair");
     expect(review).toContain("tracked against #4533");
     expect(review).toContain("src/lib/actions/sandbox/rebuild-resume-session.test.ts");
