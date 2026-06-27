@@ -1082,7 +1082,7 @@ hermes-box  127.0.0.1  8642  12346  running`;
       recovered: false,
       forwardRecovered: false,
       secretBoundaryRefused: true,
-      secretBoundaryReason: "inconclusive",
+      secretBoundaryReason: "agent-missing",
     });
     expect(secretBoundaryCalls).toBe(0);
     expect(forwardListCalls).toBe(0);
@@ -1273,7 +1273,7 @@ hermes-box  127.0.0.1  8642  12346  running`;
       recovered: false,
       forwardRecovered: false,
       secretBoundaryRefused: true,
-      secretBoundaryReason: "inconclusive",
+      secretBoundaryReason: "validator-missing",
     });
     const errorOutput = errorSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
     expect(errorOutput).toContain(
@@ -1441,7 +1441,7 @@ hermes-box  127.0.0.1  8642  12346  running`;
       recovered: false,
       forwardRecovered: false,
       secretBoundaryRefused: true,
-      secretBoundaryReason: "inconclusive",
+      secretBoundaryReason: "unexpected-marker",
     });
     expect(secretBoundaryCalls).toBe(1);
     const errorOutput = errorSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
