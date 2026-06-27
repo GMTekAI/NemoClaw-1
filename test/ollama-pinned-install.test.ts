@@ -286,6 +286,26 @@ describe("Phase 7 Ollama tarball layout validator (behavioural fixtures)", () =>
     );
   });
 
+  it("rejects a tarball where a directory ancestor is replaced by a symlink mid-archive (ZipSlip-on-extract)", () => {
+    const tarball = makeTarball(
+      tmpRoot,
+      "ancestor-link.tgz",
+      () => {
+        const src = path.join(tmpRoot, "tar-src");
+        mkdirSync(path.join(src, "bin"), { recursive: true });
+        writeFileSync(path.join(src, "bin", "ollama"), "ELF stub\n");
+        // The hostile member: `lib` as a symlink pointing outside the
+        // extraction root. Subsequent `lib/*` entries from a real archive
+        // would land via this symlink and escape /usr/local.
+        symlinkSync("/usr/share", path.join(src, "lib"));
+      },
+      ["bin", "lib"],
+    );
+    const result = runLayoutValidator(tarball);
+    expect(result.rc).toBe(1);
+    expect(result.stderr).toContain("symlink with an absolute or parent-traversal target");
+  });
+
   it("rejects a tarball that contains a hardlink to another bin/ member", () => {
     const tarball = path.join(tmpRoot, "hardlink.tgz");
     const src = path.join(tmpRoot, "tar-src");
@@ -358,6 +378,44 @@ describe("Phase 7 Ollama pinned install script wiring", () => {
     );
     expect(script).toContain("Phase 7 CPU-lane substitute: using ${OLLAMA_TWO_PROVIDER_MODEL}");
     expect(script).toContain("substituting for GPU-only spec model");
+  });
+
+  it("honours NEMOCLAW_CLI_SCOPE_OLLAMA_MODEL override so a GPU lane can swap in the literal #5343 model", () => {
+    const script = readFileSync(SCOPE_UPGRADE_SCRIPT, "utf8");
+
+    // The default lane's CPU substitute is taken via :- expansion, so a
+    // GPU lane that exports NEMOCLAW_CLI_SCOPE_OLLAMA_MODEL=qwen3.5:9b
+    // ends up with OLLAMA_TWO_PROVIDER_MODEL = OLLAMA_SPEC_MODEL_5343.
+    // Prove the override path is honoured by stub-evaluating the
+    // assignment with the env injected, and that the "CPU substitute"
+    // info line is suppressed when override == spec.
+    const overrideHarness = [
+      "set -u",
+      script.match(/OLLAMA_TWO_PROVIDER_MODEL=.*\n/)?.[0] ?? "",
+      script.match(/OLLAMA_SPEC_MODEL_5343=.*\n/)?.[0] ?? "",
+      'if [ "$OLLAMA_TWO_PROVIDER_MODEL" = "$OLLAMA_SPEC_MODEL_5343" ]; then',
+      '  echo "LITERAL_5343_LANE"',
+      "else",
+      '  echo "CPU_SUBSTITUTE_LANE_$OLLAMA_TWO_PROVIDER_MODEL"',
+      "fi",
+    ].join("\n");
+    const overridden = spawnSync("bash", ["-c", overrideHarness], {
+      encoding: "utf-8",
+      timeout: 10_000,
+      env: { ...process.env, NEMOCLAW_CLI_SCOPE_OLLAMA_MODEL: "qwen3.5:9b" },
+    });
+    expect(overridden.status).toBe(0);
+    expect(overridden.stdout.trim()).toBe("LITERAL_5343_LANE");
+
+    const cleanEnv = { ...process.env };
+    delete cleanEnv.NEMOCLAW_CLI_SCOPE_OLLAMA_MODEL;
+    const defaulted = spawnSync("bash", ["-c", overrideHarness], {
+      encoding: "utf-8",
+      timeout: 10_000,
+      env: cleanEnv,
+    });
+    expect(defaulted.status).toBe(0);
+    expect(defaulted.stdout.trim()).toBe("CPU_SUBSTITUTE_LANE_qwen3:0.6b");
   });
 
   it("Phase 7 requires sandbox-B provider metadata to identify Ollama, not a qwen model", () => {

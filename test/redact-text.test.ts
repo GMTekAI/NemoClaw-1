@@ -77,6 +77,44 @@ describe("scope-upgrade diagnostic text redactor", () => {
     expect(result.rc).toBe(0);
     expect(result.stdout).toBe(input);
   });
+
+  it("returns success on empty input", () => {
+    const result = runTextRedactor("");
+    expect(result.rc).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("");
+  });
+
+  it("handles input without a trailing newline", () => {
+    const result = runTextRedactor("plain text without newline");
+    expect(result.rc).toBe(0);
+    expect(result.stdout).toBe("plain text without newline");
+  });
+
+  it("redacts multiple shapes on the same line", () => {
+    const result = runTextRedactor(
+      "trace: Bearer nvapi-abc.def_ghi-jkl-mnopqrstu while X-API-Key=sk-projXYZ1234567890abcd\n",
+    );
+    expect(result.rc).toBe(0);
+    expect(result.stdout).not.toContain("nvapi-abc.def_ghi");
+    expect(result.stdout).not.toContain("sk-projXYZ");
+    expect(result.stdout).toContain("Bearer ");
+    expect(result.stdout).toContain("X-API-Key");
+    const redactedCount = (result.stdout.match(/\[REDACTED\]/g) ?? []).length;
+    expect(redactedCount).toBeGreaterThanOrEqual(2);
+  });
+
+  it("preserves newline structure across long multi-line input", () => {
+    const lines = Array.from({ length: 64 }, (_, i) =>
+      i % 8 === 0 ? `line ${i} nvapi-secret-value-${i}-padded-12345` : `line ${i} plain diagnostic`,
+    );
+    const input = `${lines.join("\n")}\n`;
+    const result = runTextRedactor(input);
+    expect(result.rc).toBe(0);
+    expect(result.stdout.split("\n").length).toBe(lines.length + 1);
+    expect(result.stdout).not.toMatch(/nvapi-secret-value-\d+-padded/);
+    expect(result.stdout).toMatch(/line 1 plain diagnostic/);
+  });
 });
 
 describe("scope-upgrade Phase 6 secret-bearing artifacts", () => {

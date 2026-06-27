@@ -2272,16 +2272,32 @@ DEADLINE = time.time() + _env_seconds('NEMOCLAW_AUTO_PAIR_DEADLINE_SECS', 28800)
 # as `operator.admin` are still rejected by the device approval policy, and
 # requests that need them must be approved through a separate operator path.
 SLOW_INTERVAL = _env_seconds('NEMOCLAW_AUTO_PAIR_SLOW_INTERVAL_SECS', 5)
-# SLOW_INTERVAL is the steady-state inter-poll wait for the in-sandbox
-# auto-pair watcher once browser pairing has converged. The 5-second
-# default is a 6x-tighter cadence than the previous 30-second value; the
-# trade is bounded — at most one extra `openclaw devices list --json` per
-# 5s per sandbox versus per 30s — and the inverse is severe (late
-# allowlisted scope upgrades from sibling sandboxes sit pending past the
-# OpenClaw client's tolerance, both sandboxes fall back to embedded mode,
-# which is exactly #5343). Operators who want the old cadence back can
-# set NEMOCLAW_AUTO_PAIR_SLOW_INTERVAL_SECS=30 in the sandbox env; #5343
-# Phase 5 + unit test/nemoclaw-start.test.ts cover the new default.
+# SOURCE_OF_TRUTH_REVIEW (auto-pair slow-mode cadence default 30s → 5s):
+#
+#   * Source boundary: the single SLOW_INTERVAL global above is the only
+#     steady-state inter-poll wait for the in-sandbox auto-pair watcher
+#     after browser pairing converges. The watcher's faster pre-converge
+#     cadence (1s) is unaffected.
+#   * Invalid state at the old default: a late
+#     `openclaw tui` / `openclaw agent` allowlisted scope upgrade lands
+#     inside a 30s window and waits up to one full SLOW_INTERVAL before
+#     the watcher polls. Two sibling sandboxes onboarded back-to-back
+#     each hit this window and both fall back to embedded mode (#5343).
+#   * Source-fix constraint: the 5s default is a bounded 6x increase in
+#     steady-state `openclaw devices list --json` calls per sandbox — at
+#     most one extra call per 5s vs. per 30s, which the gateway connect
+#     handler tolerates easily; the bounded fast-reentry counter above
+#     keeps cascading upgrades from exceeding this cadence.
+#   * Migration: operators who relied on the old cadence (load-sensitive
+#     gateways, large multi-sandbox deployments) can restore it by
+#     exporting NEMOCLAW_AUTO_PAIR_SLOW_INTERVAL_SECS=30 in the sandbox
+#     environment; the PR body calls this out under "Changes" too.
+#   * Regression test: test/nemoclaw-start.test.ts's late-CLI fixture
+#     covers the new default deterministically; #5343 Phase 5 covers it
+#     end to end.
+#   * Removal condition: when OpenClaw signals scope-upgrade requests via
+#     a push channel rather than a poll, the cadence becomes irrelevant
+#     and the variable retires.
 FAST_REENTRY_POLLS = int(_env_seconds('NEMOCLAW_AUTO_PAIR_FAST_REENTRY_POLLS', 5))
 FAST_REENTRY_INTERVAL = _env_seconds('NEMOCLAW_AUTO_PAIR_FAST_REENTRY_INTERVAL_SECS', 1)
 FAST_REENTRY_REMAINING = 0
