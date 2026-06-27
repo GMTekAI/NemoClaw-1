@@ -66,6 +66,23 @@ export type SandboxCommandResult = {
 const SANDBOX_EXEC_STARTED_MARKER = "__NEMOCLAW_SANDBOX_EXEC_STARTED__";
 const DEFAULT_SANDBOX_EXEC_TIMEOUT_MS = 15000;
 
+type AuxiliaryRecoveryResult = {
+  label: string;
+  recovered: boolean | null;
+};
+
+function auxiliaryRecoveryFailureDetail(results: AuxiliaryRecoveryResult[]): string | null {
+  const failed = results
+    .filter((result) => result.recovered === false)
+    .map((result) => result.label);
+  if (failed.length === 0) return null;
+  return `${failed.join(", ")} could not be re-established`;
+}
+
+function anyAuxiliaryRecovered(results: AuxiliaryRecoveryResult[]): boolean {
+  return results.some((result) => result.recovered === true);
+}
+
 function buildSandboxExecMarkedCommand(command: string): string {
   if (!command.includes("validate-hermes-env-secret-boundary.py")) {
     return `printf '%s\n' '${SANDBOX_EXEC_STARTED_MARKER}'; ${command}`;
@@ -427,7 +444,7 @@ function recoverSandboxProcesses(
       ? agent.healthProbe.port
       : dashboardPort;
     const script = agentRuntime.buildHermesGatewayRecoveryScript(agent, restartPort);
-    const execResult = executeSandboxExecCommand(sandboxName, script, 30000);
+    const execResult = executeSandboxRootExecCommand(sandboxName, script, 30000);
     if (hasRecoveryMarker(execResult)) return true;
     const failure = classifyGatewayRestartFailure(execResult);
     if (!quiet) printGatewayRestartFailure(sandboxName, failure.layer, failure.detail);
@@ -593,7 +610,7 @@ function enforceHermesSecretBoundaryOnRunningGateway(
     return { refused: true, reason: "inconclusive", stderr: "" };
   }
   const script = buildHermesEnvFileBoundaryStandaloneCheck();
-  const result = executeSandboxExecCommand(sandboxName, script, 30000);
+  const result = executeSandboxRootExecCommand(sandboxName, script, 30000);
   if (!result) {
     console.error("");
     console.error(
@@ -706,13 +723,23 @@ export function checkAndRecoverSandboxProcesses(
           quiet,
         },
       );
+      const auxiliaryResults = [
+        { label: "the Hermes dashboard process", recovered: dashboardProcessRecovered },
+        { label: "the Hermes dashboard host forward", recovered: dashboardForwardRecovered },
+        { label: "the messaging webhook host forward", recovered: messagingForwardRecovered },
+        {
+          label: "one or more agent-declared host forwards",
+          recovered: declaredForwardsRecovered,
+        },
+      ];
+      const auxiliaryFailureDetail = auxiliaryRecoveryFailureDetail(auxiliaryResults);
       if (!quiet) {
         if (forwardRecovered) {
           console.log(`  ${G}✓${R} Dashboard port forward re-established.`);
         } else {
           console.error("  Failed to re-establish the dashboard port forward.");
           console.error(
-            `  Run \`openshell forward start --background <port> ${sandboxName}\` manually.`,
+            `  Run \`openshell forward start --background ${recoveryPort} ${sandboxName}\` manually.`,
           );
         }
       }
@@ -723,18 +750,26 @@ export function checkAndRecoverSandboxProcesses(
           recovered: false,
           forwardRecovered: false,
           forwardRecoveryFailed: true,
+          forwardRecoveryFailureDetail:
+            "the primary dashboard/API host forward could not be re-established",
+        };
+      }
+      if (auxiliaryFailureDetail !== null) {
+        if (!quiet) console.error(`  ${auxiliaryFailureDetail}.`);
+        return {
+          checked: true,
+          wasRunning: true,
+          recovered: false,
+          forwardRecovered: false,
+          forwardRecoveryFailed: true,
+          forwardRecoveryFailureDetail: auxiliaryFailureDetail,
         };
       }
       return {
         checked: true,
         wasRunning: true,
         recovered: false,
-        forwardRecovered:
-          forwardRecovered ||
-          dashboardForwardRecovered === true ||
-          dashboardProcessRecovered === true ||
-          messagingForwardRecovered === true ||
-          declaredForwardsRecovered === true,
+        forwardRecovered: forwardRecovered || anyAuxiliaryRecovered(auxiliaryResults),
       };
     }
     if (forwardHealthy === "occupied") {
@@ -749,6 +784,8 @@ export function checkAndRecoverSandboxProcesses(
         recovered: false,
         forwardRecovered: false,
         forwardRecoveryFailed: true,
+        forwardRecoveryFailureDetail:
+          "the primary dashboard/API host forward is owned by another sandbox",
       };
     }
     const dashboardForwardRecovered = ensureHermesDashboardPortForwardIfEnabled(sandboxName);
@@ -756,15 +793,29 @@ export function checkAndRecoverSandboxProcesses(
     const declaredForwardsRecovered = recoverDeclaredAgentForwardPorts(sandboxName, recoveryPort, {
       quiet,
     });
+    const auxiliaryResults = [
+      { label: "the Hermes dashboard process", recovered: dashboardProcessRecovered },
+      { label: "the Hermes dashboard host forward", recovered: dashboardForwardRecovered },
+      { label: "the messaging webhook host forward", recovered: messagingForwardRecovered },
+      { label: "one or more agent-declared host forwards", recovered: declaredForwardsRecovered },
+    ];
+    const auxiliaryFailureDetail = auxiliaryRecoveryFailureDetail(auxiliaryResults);
+    if (auxiliaryFailureDetail !== null) {
+      if (!quiet) console.error(`  ${auxiliaryFailureDetail}.`);
+      return {
+        checked: true,
+        wasRunning: true,
+        recovered: false,
+        forwardRecovered: false,
+        forwardRecoveryFailed: true,
+        forwardRecoveryFailureDetail: auxiliaryFailureDetail,
+      };
+    }
     return {
       checked: true,
       wasRunning: true,
       recovered: false,
-      forwardRecovered:
-        dashboardForwardRecovered === true ||
-        dashboardProcessRecovered === true ||
-        messagingForwardRecovered === true ||
-        declaredForwardsRecovered === true,
+      forwardRecovered: anyAuxiliaryRecovered(auxiliaryResults),
     };
   }
 
@@ -799,6 +850,12 @@ export function checkAndRecoverSandboxProcesses(
     const declaredForwardsRecovered = recoverDeclaredAgentForwardPorts(sandboxName, recoveryPort, {
       quiet,
     });
+    const auxiliaryResults = [
+      { label: "the Hermes dashboard host forward", recovered: dashboardForwardRecovered },
+      { label: "the messaging webhook host forward", recovered: messagingForwardRecovered },
+      { label: "one or more agent-declared host forwards", recovered: declaredForwardsRecovered },
+    ];
+    const auxiliaryFailureDetail = auxiliaryRecoveryFailureDetail(auxiliaryResults);
     if (!quiet) {
       console.log(
         `  ${G}✓${R} ${agentRuntime.getAgentDisplayName(recoveryAgent)} gateway restarted inside sandbox.`,
@@ -808,7 +865,7 @@ export function checkAndRecoverSandboxProcesses(
       } else {
         console.error("  Failed to re-establish the dashboard port forward.");
         console.error(
-          `  Run \`openshell forward start --background <port> ${sandboxName}\` manually.`,
+          `  Run \`openshell forward start --background ${recoveryPort} ${sandboxName}\` manually.`,
         );
       }
     }
@@ -819,17 +876,26 @@ export function checkAndRecoverSandboxProcesses(
         recovered,
         forwardRecovered: false,
         forwardRecoveryFailed: true,
+        forwardRecoveryFailureDetail:
+          "the primary dashboard/API host forward could not be re-established",
+      };
+    }
+    if (auxiliaryFailureDetail !== null) {
+      if (!quiet) console.error(`  ${auxiliaryFailureDetail}.`);
+      return {
+        checked: true,
+        wasRunning: false,
+        recovered,
+        forwardRecovered: false,
+        forwardRecoveryFailed: true,
+        forwardRecoveryFailureDetail: auxiliaryFailureDetail,
       };
     }
     return {
       checked: true,
       wasRunning: false,
       recovered,
-      forwardRecovered:
-        forwardRecovered ||
-        dashboardForwardRecovered === true ||
-        messagingForwardRecovered === true ||
-        declaredForwardsRecovered === true,
+      forwardRecovered: forwardRecovered || anyAuxiliaryRecovered(auxiliaryResults),
     };
   }
   if (!quiet) {

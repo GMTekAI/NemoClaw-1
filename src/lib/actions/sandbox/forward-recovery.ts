@@ -183,7 +183,7 @@ export function ensureDeclaredAgentForwardPortsHealthy(
   let allHealthy = true;
   for (const candidate of declared) {
     if (typeof candidate !== "number") continue;
-    if (!Number.isInteger(candidate) || candidate < 1 || candidate > 65535) continue;
+    if (!Number.isInteger(candidate) || candidate < 1024 || candidate > 65535) continue;
     if (skipSet.has(candidate)) continue;
     sawCovered = true;
     const health = isSandboxPortForwardHealthy(sandboxName, candidate);

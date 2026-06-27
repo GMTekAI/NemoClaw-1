@@ -526,6 +526,9 @@ beta  127.0.0.1  18789  12345  running`;
       wasRunning: true,
       recovered: false,
       forwardRecovered: false,
+      forwardRecoveryFailed: true,
+      forwardRecoveryFailureDetail:
+        "the messaging webhook host forward could not be re-established",
     });
     expect(runOpenshell).toHaveBeenCalledWith(
       ["forward", "start", "--background", "3978", "beta"],
@@ -902,9 +905,7 @@ hermes-box  127.0.0.1  18789  12345  running`;
     vi.spyOn(agentRuntime, "getSessionAgent").mockReturnValue({
       name: "hermes",
       forwardPort: 18789,
-      // Mixed invalid entries the helper must skip: zero, negative, fractional,
-      // > 65535, non-numeric, and the primary entry.
-      forward_ports: [18789, 0, -1, 1.5, 70000, "8642" as unknown as number],
+      forward_ports: [18789, 0, -1, 1.5, 1023, 70000, "8642" as unknown as number],
     });
     vi.spyOn(registry, "getSandbox").mockReturnValue({
       name: "hermes-box",
@@ -929,7 +930,7 @@ hermes-box  127.0.0.1  18789  12345  running`;
     expect(issuedForwardStart).toBe(false);
   });
 
-  it("reports forwardRecovered=false when one declared secondary recovers and another fails", () => {
+  it("reports forward recovery failure when one declared secondary recovers and another fails", () => {
     const openshellRuntime = requireDist("../dist/lib/adapters/openshell/runtime.js");
     const agentRuntime = requireDist("../dist/lib/agent/runtime.js");
     const registry = requireDist("../dist/lib/state/registry.js");
@@ -980,9 +981,6 @@ hermes-box  127.0.0.1  8642  12346  running`;
     vi.spyOn(openshellRuntime, "runOpenshell").mockImplementation((rawArgs: unknown) => {
       const args = Array.isArray(rawArgs) ? rawArgs.map(String) : [];
       if (args[0] === "forward" && args[1] === "start" && args.includes("9100")) {
-        // Forward start succeeds at the OpenShell level but the post-start
-        // probe stays unhealthy — simulates a port that openshell launches
-        // and that immediately drops on the sandbox side.
         return { status: 0 } as never;
       }
       return { status: 0 } as never;
@@ -995,6 +993,8 @@ hermes-box  127.0.0.1  8642  12346  running`;
     expect(result.checked).toBe(true);
     expect(result.wasRunning).toBe(true);
     expect(result.forwardRecovered).toBe(false);
+    expect(result.forwardRecoveryFailed).toBe(true);
+    expect(result.forwardRecoveryFailureDetail).toContain("agent-declared host forwards");
   });
 
   it("refuses recovery of a running Hermes gateway when /sandbox/.hermes/.env contains raw secret-shaped values", () => {

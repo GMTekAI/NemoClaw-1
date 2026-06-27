@@ -85,7 +85,7 @@ describe("Hermes dashboard recovery helpers", () => {
         isPortForwardHealthy: () => true,
         ensurePortForward,
       }),
-    ).toBe(false);
+    ).toBe(true);
 
     const ensurePortForwardWhenOccupied = vi.fn(() => true);
     expect(

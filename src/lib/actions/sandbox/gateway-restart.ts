@@ -125,11 +125,7 @@ export function classifyGatewayRestartFailure(result: GatewayRestartCommandResul
   if (
     output.includes(MARKERS.HERMES_UNSAFE_CONFIG_PATH) ||
     output.includes(MARKERS.HERMES_RUNTIME_CONFIG_GUARD_MISSING) ||
-    output.includes(MARKERS.SECRET_BOUNDARY_VALIDATOR_MISSING) ||
-    output.includes("refusing unsafe Hermes runtime config path") ||
-    output.includes("refusing runtime config update") ||
-    output.includes("refusing to follow symlink") ||
-    output.includes("refusing hardlinked runtime config path")
+    output.includes(MARKERS.SECRET_BOUNDARY_VALIDATOR_MISSING)
   ) {
     return { layer: "unsafe config path", detail: detail || "unsafe config path" };
   }
@@ -177,6 +173,19 @@ function unsupportedGatewayRestartAgentDetail(agentName: string, reason: string)
     `Gateway restart-supported agents: ${GATEWAY_RESTART_SUPPORTED_AGENTS.join(", ")}.`,
     reason,
   ].join("\n");
+}
+
+type RestartAuxiliaryRecoveryResult = {
+  label: string;
+  recovered: boolean | null;
+};
+
+function failedAuxiliaryRecoveryDetail(results: RestartAuxiliaryRecoveryResult[]): string | null {
+  const failed = results
+    .filter((result) => result.recovered === false)
+    .map((result) => result.label);
+  if (failed.length === 0) return null;
+  return `gateway health passed but ${failed.join(", ")} could not be re-established`;
 }
 
 export function restartSandboxGatewayWithDeps(
@@ -272,12 +281,22 @@ export function restartSandboxGatewayWithDeps(
     dashboardPort,
     { quiet },
   );
+  const auxiliaryFailureDetail = failedAuxiliaryRecoveryDetail([
+    { label: "the Hermes dashboard process", recovered: dashboardProcessRecovered },
+    { label: "the Hermes dashboard host forward", recovered: dashboardForwardRecovered },
+    { label: "the messaging webhook host forward", recovered: messagingForwardRecovered },
+    { label: "one or more agent-declared host forwards", recovered: declaredForwardsRecovered },
+  ]);
 
   if (!forwardRecovered) {
     const detail =
       "gateway health passed but the primary dashboard/API host forward could not be re-established";
     printGatewayRestartFailure(sandboxName, "forward recovery failure", detail);
     return { ok: false, failureLayer: "forward recovery failure", detail };
+  }
+  if (auxiliaryFailureDetail !== null) {
+    printGatewayRestartFailure(sandboxName, "forward recovery failure", auxiliaryFailureDetail);
+    return { ok: false, failureLayer: "forward recovery failure", detail: auxiliaryFailureDetail };
   }
 
   if (!quiet) {

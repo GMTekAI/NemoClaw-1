@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 // Import from compiled dist/ so coverage is attributed correctly.
 import {
   buildHermesDashboardProcessRecoveryScript,
+  buildHermesGatewayRecoveryScript,
   buildManualRecoveryCommand,
   buildOpenClawRecoveryScript,
   buildRecoveryScript,
@@ -251,6 +252,19 @@ describe("buildRecoveryScript", () => {
       expect(script).toContain("nemoclaw-ciao-network-guard");
       expect(script).toContain("NODE_OPTIONS missing safety-net preload");
       expect(script).toContain("or ciao preload");
+    });
+
+    it("restores guards before stopped Hermes gateway recovery probes health", () => {
+      const script = buildHermesGatewayRecoveryScript(hermesAgent, 8642);
+      expect(script).toContain("restoring library guards from packaged preloads");
+      expect(script).toContain("nemoclaw-sandbox-safety-net");
+      expect(script).toContain("nemoclaw-ciao-network-guard");
+      expect(script).toContain("NODE_OPTIONS missing safety-net preload");
+      const guardIdx = script.indexOf("restoring library guards from packaged preloads");
+      const healthIdx = script.indexOf("_GW_CODE=");
+      expect(guardIdx).toBeGreaterThanOrEqual(0);
+      expect(healthIdx).toBeGreaterThanOrEqual(0);
+      expect(guardIdx).toBeLessThan(healthIdx);
     });
 
     it("stops stale launcher and gateway processes before relaunch", () => {

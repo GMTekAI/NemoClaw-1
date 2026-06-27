@@ -307,6 +307,27 @@ describe("restartSandboxGateway — host-mediated gateway restart", () => {
     }
   });
 
+  it("fails when an enabled auxiliary forward cannot be restored", () => {
+    const restore = silenceConsole();
+    try {
+      const deps = baseDeps({
+        ensureHermesDashboardPortForwardIfEnabled: vi.fn(() => false),
+      });
+      const result = restartSandboxGateway("alpha", { deps });
+
+      expect(result).toMatchObject({
+        ok: false,
+        failureLayer: "forward recovery failure",
+        detail: expect.stringContaining("Hermes dashboard host forward"),
+      });
+      expect(console.log).not.toHaveBeenCalledWith(
+        expect.stringContaining("Gateway restarted; health passed"),
+      );
+    } finally {
+      restore();
+    }
+  });
+
   it("refuses terminal agents with the unsupported-agent support matrix", () => {
     const restore = silenceConsole();
     try {

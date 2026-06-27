@@ -646,6 +646,70 @@ test.skipIf(!shouldRunLiveE2EScenarios())(
     expect(recoverHostHealth.exitCode, resultText(recoverHostHealth)).toBe(0);
     expect(resultText(recoverHostHealth)).toMatch(/"ok"/i);
 
+    if (hermesDashboardE2eEnabled()) {
+      const stopDashboardForward = await sandbox.openshell(
+        ["forward", "stop", HERMES_DASHBOARD_PORT, SANDBOX_NAME],
+        {
+          artifactName: "phase-5-stop-hermes-dashboard-forward-before-recover",
+          env: commandEnv(),
+          timeoutMs: 30_000,
+        },
+      );
+      expect(stopDashboardForward.exitCode, resultText(stopDashboardForward)).toBe(0);
+
+      const dashboardDown = await host.command(
+        "curl",
+        ["-sf", "--max-time", "3", `http://127.0.0.1:${HERMES_DASHBOARD_PORT}/`],
+        {
+          artifactName: "phase-5-hermes-dashboard-host-down-after-forward-stop",
+          env: commandEnv(),
+          timeoutMs: 30_000,
+        },
+      );
+      expect(dashboardDown.exitCode, resultText(dashboardDown)).not.toBe(0);
+
+      const recoverDashboardForward = await host.command("nemohermes", [SANDBOX_NAME, "recover"], {
+        artifactName: "phase-5-nemohermes-recover-dashboard-forward",
+        env: commandEnv(),
+        timeoutMs: 180_000,
+      });
+      expect(recoverDashboardForward.exitCode, resultText(recoverDashboardForward)).toBe(0);
+
+      const recoveredDashboard = await host.command(
+        "curl",
+        [
+          "-sS",
+          "-L",
+          "--max-time",
+          "10",
+          "-o",
+          "/tmp/hermes-dashboard-recovered-vitest-body",
+          "-w",
+          "%{http_code}",
+          `http://127.0.0.1:${HERMES_DASHBOARD_PORT}/`,
+        ],
+        {
+          artifactName: "phase-5-hermes-dashboard-host-after-forward-recover",
+          env: commandEnv(),
+          timeoutMs: 30_000,
+        },
+      );
+      expect(recoveredDashboard.exitCode, resultText(recoveredDashboard)).toBe(0);
+      expect(httpStatusOk(recoveredDashboard.stdout)).toBe(true);
+
+      const statusAfterDashboardRecover = await host.command(
+        "nemohermes",
+        [SANDBOX_NAME, "status"],
+        {
+          artifactName: "phase-5-nemohermes-status-after-dashboard-forward-recover",
+          env: commandEnv(),
+          timeoutMs: 60_000,
+        },
+      );
+      expect(statusAfterDashboardRecover.exitCode, resultText(statusAfterDashboardRecover)).toBe(0);
+      expect(resultText(statusAfterDashboardRecover)).toMatch(/Ready/i);
+    }
+
     // Phase 6: live inference through both the external provider and the
     // sandbox's inference.local route.
     const directChat = await retryHostedInference(

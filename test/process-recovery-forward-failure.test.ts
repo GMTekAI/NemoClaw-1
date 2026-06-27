@@ -76,6 +76,51 @@ function compactTeamsMessagingPlan(port = "3978") {
 }
 
 describe("checkAndRecoverSandboxProcesses primary forward failure", () => {
+  it("reports failure when a messaging forward cannot recover even if the primary is healthy", () => {
+    const openshellRuntime = requireDist("../dist/lib/adapters/openshell/runtime.js");
+    const agentRuntime = requireDist("../dist/lib/agent/runtime.js");
+    const registry = requireDist("../dist/lib/state/registry.js");
+    const forwardHealth = requireDist("../dist/lib/actions/sandbox/forward-health.js");
+    const childProcess = requireDist("node:child_process");
+
+    vi.spyOn(childProcess, "spawnSync").mockReturnValue({
+      status: 0,
+      stdout: "__NEMOCLAW_SANDBOX_EXEC_STARTED__\nRUNNING\n",
+      stderr: "",
+    } as never);
+    vi.spyOn(agentRuntime, "getSessionAgent").mockReturnValue(null);
+    vi.spyOn(registry, "getSandbox").mockReturnValue({
+      name: "beta",
+      agent: "openclaw",
+      dashboardPort: 18789,
+      messaging: { schemaVersion: 1, plan: compactTeamsMessagingPlan() },
+    });
+    vi.spyOn(forwardHealth, "isLocalForwardReachable").mockImplementation(
+      (port: unknown) => Number(port) === 18789,
+    );
+    vi.spyOn(openshellRuntime, "captureOpenshell").mockReturnValue({
+      status: 0,
+      output: `SANDBOX  BIND  PORT  PID  STATUS
+beta  127.0.0.1  18789  12345  running`,
+    });
+    vi.spyOn(openshellRuntime, "runOpenshell").mockImplementation((rawArgs: unknown) => {
+      const args = Array.isArray(rawArgs) ? rawArgs.map(String) : [];
+      return { status: args[0] === "forward" && args[1] === "start" ? 1 : 0 } as never;
+    });
+
+    expect(
+      withFakeOpenshellBinary(() => checkAndRecoverSandboxProcesses("beta", { quiet: true })),
+    ).toEqual({
+      checked: true,
+      wasRunning: true,
+      recovered: false,
+      forwardRecovered: false,
+      forwardRecoveryFailed: true,
+      forwardRecoveryFailureDetail:
+        "the messaging webhook host forward could not be re-established",
+    });
+  });
+
   it("reports failure when the primary forward cannot recover even if secondary forwards recover", () => {
     const openshellRuntime = requireDist("../dist/lib/adapters/openshell/runtime.js");
     const agentRuntime = requireDist("../dist/lib/agent/runtime.js");
@@ -123,6 +168,8 @@ beta  127.0.0.1  18789  12345  dead`,
       recovered: false,
       forwardRecovered: false,
       forwardRecoveryFailed: true,
+      forwardRecoveryFailureDetail:
+        "the primary dashboard/API host forward could not be re-established",
     });
     expect(teamsForwardStarted).toBe(true);
     expect(runOpenshell).toHaveBeenCalledWith(
