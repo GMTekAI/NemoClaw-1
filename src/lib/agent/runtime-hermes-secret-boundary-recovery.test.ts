@@ -28,8 +28,7 @@ function removeTempDir(dir: string) {
 function waitForPath(filePath: string, timeoutMs = 1000) {
   const sleepView = new Int32Array(new SharedArrayBuffer(4));
   const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (fs.existsSync(filePath)) return true;
+  while (!fs.existsSync(filePath) && Date.now() < deadline) {
     Atomics.wait(sleepView, 0, 0, 10);
   }
   return fs.existsSync(filePath);
@@ -115,12 +114,12 @@ describe("Hermes secret-boundary guard - runtime recovery behaviour", () => {
         /_GATEWAY_LOG=\/tmp\/gateway-recovery\.log/g,
         `_GATEWAY_LOG=${opts.recoveryFallbackLog}`,
       );
-    if (opts.envFilePath) {
-      stubbed = stubbed.replace(/\/sandbox\/\.hermes\/\.env/g, opts.envFilePath);
-    }
-    if (opts.proxyEnvPath) {
-      stubbed = stubbed.replace(/\/tmp\/nemoclaw-proxy-env\.sh/g, opts.proxyEnvPath);
-    }
+    stubbed = opts.envFilePath
+      ? stubbed.replace(/\/sandbox\/\.hermes\/\.env/g, opts.envFilePath)
+      : stubbed;
+    stubbed = opts.proxyEnvPath
+      ? stubbed.replace(/\/tmp\/nemoclaw-proxy-env\.sh/g, opts.proxyEnvPath)
+      : stubbed;
 
     const scriptPath = path.join(opts.tmp, "recovery.sh");
     fs.writeFileSync(
