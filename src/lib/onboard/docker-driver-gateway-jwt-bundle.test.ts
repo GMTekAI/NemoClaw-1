@@ -156,8 +156,11 @@ describe("docker-driver-gateway JWT bundle", () => {
         filePath: fs.PathOrFileDescriptor,
         options?: Parameters<typeof fs.readFileSync>[1],
       ) => {
-        if (filePath === paths.signingKeyPath) throw denied;
-        return originalReadFileSync(filePath, options as never);
+        const read = () => originalReadFileSync(filePath, options as never);
+        const reject = () => {
+          throw denied;
+        };
+        return filePath === paths.signingKeyPath ? reject() : read();
       }) as typeof fs.readFileSync);
 
       expect(() => writeGatewayConfig(stateDir)).toThrow(/permission denied/);
