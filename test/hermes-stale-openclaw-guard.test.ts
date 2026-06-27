@@ -78,11 +78,8 @@ describe("Hermes stale OpenClaw guardrails", () => {
     fs.writeFileSync(path.join(hermesDir, ".env"), "TOKEN=test\n", { mode: 0o600 });
 
     try {
-      const { result } = runDockerShell(
-        `BASE_IMAGE=nemoclaw-hermes-stale-openclaw-dir-base:test; ${cleanupCommand}`,
-        sandboxRoot,
-      );
-      expect(result.status).toBe(0);
+      const { result } = runDockerShell(cleanupCommand, sandboxRoot);
+      expect(result.status, result.stderr).toBe(0);
       expect(result.stderr).toBe("");
       expect(fs.existsSync(openclawDir)).toBe(false);
       expect(fs.lstatSync(path.join(hermesDir, "gateway_state.json")).isSymbolicLink()).toBe(true);
