@@ -22,11 +22,15 @@ function extractShellFunction(scriptPath: string, name: string): string {
   return lines.slice(0, endIndex + 1).join("\n");
 }
 
-function runGuard(env: {
-  OLLAMA_PINNED_SHA256?: string;
-  OLLAMA_PINNED_VERSION?: string;
-}): { rc: number; stdout: string; stderr: string } {
-  const functionBody = extractShellFunction(SCOPE_UPGRADE_SCRIPT, "ollama_pinned_install_sha256_ok");
+function runGuard(env: { OLLAMA_PINNED_SHA256?: string; OLLAMA_PINNED_VERSION?: string }): {
+  rc: number;
+  stdout: string;
+  stderr: string;
+} {
+  const functionBody = extractShellFunction(
+    SCOPE_UPGRADE_SCRIPT,
+    "ollama_pinned_install_sha256_ok",
+  );
   const harness = `
 set -u
 ${functionBody}
@@ -74,5 +78,63 @@ describe("Phase 7 Ollama pinned install SHA256 guard", () => {
     });
     expect(result.rc).toBe(1);
     expect(result.stderr.trim()).toMatch(/^OLLAMA_PIN_REQUIRES_SHA256 version=/);
+  });
+});
+
+describe("Phase 7 Ollama pinned install script wiring", () => {
+  it("commits the pinned default version + sha256, refuses overrides without a sha256 in lockstep, and verifies sha256 before sudo tar", () => {
+    const script = readFileSync(SCOPE_UPGRADE_SCRIPT, "utf8");
+
+    expect(script).toMatch(/OLLAMA_PINNED_VERSION_DEFAULT="\d+\.\d+\.\d+"/);
+    expect(script).toMatch(/OLLAMA_PINNED_SHA256_DEFAULT="[0-9a-f]{64}"/);
+    expect(script).toContain(
+      'fail "Ollama install requires NEMOCLAW_CLI_SCOPE_OLLAMA_SHA256 when NEMOCLAW_CLI_SCOPE_OLLAMA_VERSION overrides the pinned default',
+    );
+    expect(script).toContain('if [ "$computed_sha" != "$OLLAMA_PINNED_SHA256" ]; then');
+    expect(script).toContain('sudo tar -C /usr/local -xzf "${install_tmp}/ollama.tgz"');
+    expect(script).not.toContain("Skipping Ollama tarball sha256 verification");
+  });
+
+  it("rejects tarballs with absolute paths, parent traversal, members outside bin/lib, or non-relative symlinks before sudo tar", () => {
+    const script = readFileSync(SCOPE_UPGRADE_SCRIPT, "utf8");
+
+    expect(script).toContain(
+      "Ollama tarball contains absolute paths or parent traversal entries; refusing privileged extract",
+    );
+    expect(script).toContain(
+      "Ollama tarball contains members outside bin/ or lib/; refusing privileged extract",
+    );
+    expect(script).toContain("Ollama tarball contains non-file/non-directory/non-symlink entries");
+    expect(script).toContain(
+      "Ollama tarball contains a symlink with an absolute or parent-traversal target; refusing privileged extract",
+    );
+  });
+
+  it("default Phase 7 lane does not claim full #5343 qwen3.5 model coverage", () => {
+    const script = readFileSync(SCOPE_UPGRADE_SCRIPT, "utf8");
+
+    const defaultModelMatch = script.match(
+      /OLLAMA_TWO_PROVIDER_MODEL="\$\{NEMOCLAW_CLI_SCOPE_OLLAMA_MODEL:-([^}]+)\}"/,
+    );
+    const specModelMatch = script.match(/OLLAMA_SPEC_MODEL_5343="([^"]+)"/);
+    expect(defaultModelMatch?.[1]).toBeDefined();
+    expect(specModelMatch?.[1]).toBe("qwen3.5:9b");
+    expect(defaultModelMatch?.[1]).not.toBe(specModelMatch?.[1]);
+
+    expect(script).toContain(
+      'section "Phase 7 (CPU-substitute lane): Verify two-sandbox concurrent differing-provider gateway-backed agent turns"',
+    );
+    expect(script).toContain("Phase 7 CPU-lane substitute: using ${OLLAMA_TWO_PROVIDER_MODEL}");
+    expect(script).toContain("substituting for GPU-only spec model");
+  });
+
+  it("Phase 7 requires sandbox-B provider metadata to identify Ollama, not a qwen model", () => {
+    const script = readFileSync(SCOPE_UPGRADE_SCRIPT, "utf8");
+    const providerBlock = script.match(/case "\$provider_b" in[\s\S]*?esac/)?.[0];
+
+    expect(providerBlock).toBeDefined();
+    expect(providerBlock).toContain("*ollama*)");
+    expect(providerBlock).not.toContain("*qwen*");
+    expect(script).toContain('if [ "$model_b" != "$EXPECTED_MODEL_B" ]; then');
   });
 });

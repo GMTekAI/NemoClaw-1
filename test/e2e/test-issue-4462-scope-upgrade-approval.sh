@@ -1056,7 +1056,7 @@ exit 0
     pass "legacy gateway-pinned scope-upgrade was not reproducible because trigger agent completed through gateway mode"
     LEGACY_SCOPE_UPGRADE_NOT_REPRODUCED=1
   else
-    fail "No pending CLI scope-upgrade request appeared after agent trigger. State: $(printf '%s' "${state:-{}}" | summarize_device_state 2>/dev/null || true). Trigger: ${trigger_output:0:500}"
+    fail "No pending CLI scope-upgrade request appeared after agent trigger. State: $(printf '%s' "${state:-{}}" | summarize_device_state 2>/dev/null || true). Trigger: $(redacted_excerpt "$trigger_output" 500)"
     exit 1
   fi
 
@@ -1369,6 +1369,42 @@ if ! command -v ollama >/dev/null 2>&1; then
   fi
   if printf '%s\n' "$tar_listing" | grep -vE '^(bin|lib)(/|$)' >/dev/null; then
     fail "Ollama tarball contains members outside bin/ or lib/; refusing privileged extract"
+    rm -rf "$install_tmp"
+    exit 1
+  fi
+  # Reject archive members whose entry type is not a regular file,
+  # directory, or relative-target symlink. `tar -tvzf` prints the type
+  # letter as the first column character. Allow `-` (file), `d`
+  # (directory), `l` (symlink); reject hardlinks, devices, FIFOs, sockets,
+  # and any symlink whose target is absolute or contains `..`. The Ollama
+  # release tarball ships sibling-only relative symlinks for SO version
+  # aliases, which is the only legitimate symlink shape on this lane.
+  if ! tar_long_listing=$(tar -tvzf "${install_tmp}/ollama.tgz" 2>&1); then
+    fail "Ollama tarball long listing failed: $(redacted_excerpt "$tar_long_listing" 300)"
+    rm -rf "$install_tmp"
+    exit 1
+  fi
+  if printf '%s\n' "$tar_long_listing" | awk '$1 != "" && $1 !~ /^[-dl]/ {found=1} END {exit !found}'; then
+    fail "Ollama tarball contains non-file/non-directory/non-symlink entries (hardlink, device, fifo, or socket); refusing privileged extract"
+    rm -rf "$install_tmp"
+    exit 1
+  fi
+  if printf '%s\n' "$tar_long_listing" | awk '
+    /^l/ {
+      target = ""
+      for (i = NF; i >= 1; i--) {
+        if ($i == "->") {
+          target = $(i + 1)
+          break
+        }
+      }
+      if (target == "" || target ~ /^\// || target ~ /(^|\/)\.\.(\/|$)/) {
+        found = 1
+      }
+    }
+    END { exit !found }
+  '; then
+    fail "Ollama tarball contains a symlink with an absolute or parent-traversal target; refusing privileged extract"
     rm -rf "$install_tmp"
     exit 1
   fi

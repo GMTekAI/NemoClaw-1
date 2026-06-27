@@ -119,8 +119,8 @@ describe("scope-upgrade Phase 6 secret-bearing artifacts", () => {
   it("redacts truncated raw command-output excerpts in fail / info messages via redacted_excerpt", () => {
     const script = readFileSync(SCOPE_UPGRADE_SCRIPT, "utf8");
 
-    expect(script).toContain('redacted_excerpt() {');
-    expect(script).toContain('redact_text_for_log 2>/dev/null');
+    expect(script).toContain("redacted_excerpt() {");
+    expect(script).toContain("redact_text_for_log 2>/dev/null");
     expect(script).toMatch(/redacted_excerpt "\$output" 500/);
     expect(script).toMatch(/redacted_excerpt "\$state" 500/);
     expect(script).toMatch(/redacted_excerpt "\$guard_probe" 600/);
