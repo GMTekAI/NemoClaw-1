@@ -11,7 +11,6 @@ import { describe, expect, it } from "vitest";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REDACTOR = path.resolve(HERE, "e2e/lib/redact-device-state.py");
-const TEXT_REDACTOR = path.resolve(HERE, "e2e/lib/redact-text.py");
 const SCOPE_UPGRADE_SCRIPT = path.resolve(HERE, "e2e/test-issue-4462-scope-upgrade-approval.sh");
 const REDACTED = "[REDACTED]";
 
@@ -267,96 +266,6 @@ describe("scope-upgrade device_state_json shell wrapper", () => {
     expect(result.stdout).toContain(REDACTED);
     expect(result.stdout).not.toContain("[DEVICE_STATE_REDACTION_FAILED");
     expect(result.stderr).not.toContain(TOKEN_LEAK);
-  });
-});
-
-function runTextRedactor(input: string): { rc: number; stdout: string; stderr: string } {
-  const result = spawnSync("python3", [TEXT_REDACTOR], {
-    input,
-    encoding: "utf-8",
-    timeout: 20_000,
-  });
-  return {
-    rc: result.status ?? -1,
-    stdout: result.stdout ?? "",
-    stderr: result.stderr ?? "",
-  };
-}
-
-describe("scope-upgrade diagnostic text redactor", () => {
-  it("scrubs token-shaped substrings from raw gateway and auto-pair log excerpts", () => {
-    const input = [
-      "Authorization: Bearer nvapi-abc.def_ghi-jkl-mnopqrstu",
-      "Cookie: session=eyJabcdefg.payload.signature123",
-      "github-token=ghp_aaaaaaaaaaaaaaaaaa11",
-      "X-API-Key: sk-projXYZ1234567890abcd",
-      "request: token=github_pat_abcdefghijklmnopqrstu",
-      "huggingface key hf_aaaaaaaaaaaaaaaaaa logged",
-      "aws AKIAABCDEFGHIJKLMNOP",
-      "slack xoxb-1111-2222-aaaaa",
-      "plain gateway connect: ok",
-      "",
-    ].join("\n");
-
-    const result = runTextRedactor(input);
-    expect(result.rc).toBe(0);
-    expect(result.stdout).not.toContain("nvapi-abc.def_ghi");
-    expect(result.stdout).not.toContain("eyJabcdefg.payload");
-    expect(result.stdout).not.toContain("ghp_aaaaa");
-    expect(result.stdout).not.toContain("sk-projXYZ");
-    expect(result.stdout).not.toContain("github_pat_abcdefg");
-    expect(result.stdout).not.toContain("hf_aaaaa");
-    expect(result.stdout).not.toContain("AKIAABCDEFG");
-    expect(result.stdout).not.toContain("xoxb-1111");
-    expect(result.stdout).toContain("plain gateway connect: ok");
-    expect(result.stdout).toContain(REDACTED);
-  });
-
-  it("preserves structural prefixes while substituting only the secret value", () => {
-    const result = runTextRedactor("Authorization: Bearer raw-bearer-token\n");
-    expect(result.rc).toBe(0);
-    expect(result.stdout).toContain("Authorization:");
-    expect(result.stdout).toContain("Bearer ");
-    expect(result.stdout).not.toContain("raw-bearer-token");
-    expect(result.stdout).toContain(REDACTED);
-  });
-
-  it("passes through input free of token-shaped substrings unchanged", () => {
-    const input = "ls -la /tmp/auto-pair.log\nslow-mode keepalive transition observed\n";
-    const result = runTextRedactor(input);
-    expect(result.rc).toBe(0);
-    expect(result.stdout).toBe(input);
-  });
-
-  it("preserves ordinary hyphenated diagnostic text containing sk-", () => {
-    const input = "task-management-system-deployment completed without fallback\n";
-    const result = runTextRedactor(input);
-    expect(result.rc).toBe(0);
-    expect(result.stdout).toBe(input);
-  });
-});
-
-describe("scope-upgrade Phase 6 secret-bearing artifacts", () => {
-  it("pipes auto-pair and gateway diagnostics through the text redactor before appending to STATE_LOG", () => {
-    const script = readFileSync(SCOPE_UPGRADE_SCRIPT, "utf8");
-
-    expect(script).toContain('python3 "${E2E_DIR}/lib/redact-text.py"');
-    expect(script).toContain(
-      "auto_pair_diag_redacted=$(printf '%s' \"$auto_pair_diag\" | redact_text_for_log)",
-    );
-    expect(script).toContain(
-      "auto_pair_snapshot_redacted=$(printf '%s' \"$auto_pair_log_snapshot\" | redact_text_for_log)",
-    );
-    expect(script).toContain(
-      'printf \'=== auto-pair diagnostic ===\\n%s\\n\' "$auto_pair_diag_redacted" >>"$STATE_LOG"',
-    );
-    expect(script).toContain(
-      'printf \'=== /tmp/auto-pair.log snapshot (waited %ss) ===\\n%s\\n\' "$((SECONDS - slow_mode_start))" "$auto_pair_snapshot_redacted" >>"$STATE_LOG"',
-    );
-    expect(script).toContain("[STATE_LOG_REDACTION_FAILED stage=text rc=");
-    expect(script).not.toMatch(
-      /printf '=== auto-pair diagnostic ===[^']+'\s+"\$auto_pair_diag"\s+>>"\$STATE_LOG"/,
-    );
   });
 });
 

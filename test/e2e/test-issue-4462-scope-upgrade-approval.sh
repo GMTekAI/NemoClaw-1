@@ -225,6 +225,21 @@ redact_text_for_log_or_marker() {
   fi
 }
 
+# Truncated, redacted excerpt of a raw command/stream output for inclusion in
+# `fail` / `info` user-visible messages and CI step summaries. Mirrors the
+# token-shape redaction applied to log appends so a failure path that prints
+# `${var:0:N}` cannot leak bearer tokens, nvapi keys, or similar credential-
+# shaped substrings into job logs or uploaded artefacts.
+redacted_excerpt() {
+  local value="${1-}"
+  local limit="${2:-500}"
+  local redacted
+  if ! redacted="$(printf '%s' "$value" | redact_text_for_log 2>/dev/null)"; then
+    redacted="[REDACTION_FAILED]"
+  fi
+  printf '%s' "${redacted:0:$limit}"
+}
+
 device_state_json() {
   local raw rc redacted
   raw=$(sandbox_exec_sh_script 60 '
@@ -537,7 +552,7 @@ PROBESH
         fi
       fi
     fi
-    fail "${label}: openclaw devices approve failed for ${request_id}: ${output:0:500}"
+    fail "${label}: openclaw devices approve failed for ${request_id}: $(redacted_excerpt "$output" 500)"
     return 1
   fi
   before_url=$(sed -n 's/^__URL_BEFORE__=//p' <<<"$output" | tail -1)
@@ -569,7 +584,7 @@ PROBESH
   fi
   approve_json=$(sed -n '/^__APPROVE_OUTPUT_BEGIN__$/,/^__APPROVE_OUTPUT_END__$/p' <<<"$output" | sed '1d;$d' | extract_json_doc 2>/dev/null) || approve_json=""
   if [ -z "$approve_json" ]; then
-    fail "${label}: approve output did not contain JSON: ${output:0:500}"
+    fail "${label}: approve output did not contain JSON: $(redacted_excerpt "$output" 500)"
     return 1
   fi
   approved_id=$(printf '%s' "$approve_json" | json_field requestId)
@@ -638,7 +653,7 @@ exit 0
   fi
   legacy_rc=$(sed -n 's/^__LEGACY_APPROVE_RC__=//p' <<<"$output" | tail -1)
   if [ -z "$legacy_rc" ]; then
-    fail "legacy characterization did not report approve rc: ${output:0:500}"
+    fail "legacy characterization did not report approve rc: $(redacted_excerpt "$output" 500)"
     return 1
   fi
   legacy_approve_output=$(sed -n '/^__LEGACY_APPROVE_OUTPUT_BEGIN__$/,/^__LEGACY_APPROVE_OUTPUT_END__$/p' <<<"$output" | sed '1d;$d')
@@ -650,7 +665,7 @@ exit 0
     && grep -Fq "scope upgrade pending approval" <<<"$legacy_approve_output"; then
     legacy_failure_request_id=$(printf '%s' "$legacy_approve_output" | extract_scope_request_id_from_output) || legacy_failure_request_id=""
     if [ -z "$legacy_failure_request_id" ]; then
-      fail "legacy gateway-pinned devices approve did not report a requestId: ${legacy_approve_output:0:500}"
+      fail "legacy gateway-pinned devices approve did not report a requestId: $(redacted_excerpt "$legacy_approve_output" 500)"
       return 1
     fi
     if [ "$legacy_failure_request_id" = "$request_id" ]; then
@@ -663,7 +678,7 @@ exit 0
   fi
 
   state="$(device_state_json 2>&1)" || {
-    fail "Could not read OpenClaw device state after legacy approve failure: ${state:0:500}"
+    fail "Could not read OpenClaw device state after legacy approve failure: $(redacted_excerpt "$state" 500)"
     return 1
   }
   printf '=== state after legacy gateway-pinned approve failure ===\n%s\n' "$state" >>"$STATE_LOG"
@@ -781,7 +796,7 @@ tail -20 /tmp/auto-pair.log 2>/dev/null || true
     pass "auto-pair watcher is inactive before legacy scope-upgrade trigger"
     return 0
   fi
-  fail "auto-pair watcher was still active before legacy scope-upgrade trigger: ${output:0:500}"
+  fail "auto-pair watcher was still active before legacy scope-upgrade trigger: $(redacted_excerpt "$output" 500)"
   return 1
 }
 
@@ -890,14 +905,14 @@ grep -F "unset OPENCLAW_GATEWAY_URL OPENCLAW_GATEWAY_PORT OPENCLAW_GATEWAY_TOKEN
 guard_rc=$?
 printf '%s\n' "$guard_probe" >>"$STATE_LOG"
 if [ "$guard_rc" -ne 0 ]; then
-  fail "Could not source /tmp/nemoclaw-proxy-env.sh: ${guard_probe:0:400}"
+  fail "Could not source /tmp/nemoclaw-proxy-env.sh: $(redacted_excerpt "$guard_probe" 400)"
   exit 1
 fi
 if grep -q '^OPENCLAW_GATEWAY_URL=ws://127\.0\.0\.1:' <<<"$guard_probe" \
   && grep -q '^APPROVE_GUARD_PRESENT$' <<<"$guard_probe"; then
   pass "proxy env preserves gateway URL and contains devices approve guard"
 else
-  fail "proxy env missing gateway URL or approve guard: ${guard_probe:0:600}"
+  fail "proxy env missing gateway URL or approve guard: $(redacted_excerpt "$guard_probe" 600)"
   exit 1
 fi
 
@@ -918,7 +933,7 @@ exit 0
 printf '=== initial devices list ===\n%s\n' "$initial_list" >>"$STATE_LOG"
 
 state="$(device_state_json 2>&1)" || {
-  fail "Could not read OpenClaw device state after initial list: ${state:0:500}"
+  fail "Could not read OpenClaw device state after initial list: $(redacted_excerpt "$state" 500)"
   exit 1
 }
 printf '=== state after initial list ===\n%s\n' "$state" >>"$STATE_LOG"
@@ -947,7 +962,7 @@ else
 fi
 
 state="$(device_state_json 2>&1)" || {
-  fail "Could not read OpenClaw device state after initial approval: ${state:0:500}"
+  fail "Could not read OpenClaw device state after initial approval: $(redacted_excerpt "$state" 500)"
   exit 1
 }
 printf '=== state after initial approval ===\n%s\n' "$state" >>"$STATE_LOG"
@@ -975,7 +990,7 @@ printf '=== gateway devices list after initial approval rc=%s ===\n%s\n' "$gatew
 if [ "$gateway_list_rc" -eq 0 ] && grep -q '^__URL_FOR_LIST__=ws://' <<<"$gateway_list"; then
   pass "openclaw devices list observes device state while OPENCLAW_GATEWAY_URL is set"
 else
-  fail "devices list did not work with gateway URL after initial approval: ${gateway_list:0:500}"
+  fail "devices list did not work with gateway URL after initial approval: $(redacted_excerpt "$gateway_list" 500)"
   exit 1
 fi
 
@@ -1067,7 +1082,7 @@ exit 0
 fi
 
 state="$(device_state_json 2>&1)" || {
-  fail "Could not read OpenClaw device state after scope-upgrade approval: ${state:0:500}"
+  fail "Could not read OpenClaw device state after scope-upgrade approval: $(redacted_excerpt "$state" 500)"
   exit 1
 }
 printf '=== state after scope-upgrade approval ===\n%s\n' "$state" >>"$STATE_LOG"
@@ -1243,6 +1258,16 @@ else
   fail "watcher did not record any slow-mode transition within ${slow_mode_wait_secs}s"
 fi
 
+# The fast-reentry marker is asserted informationally, not strictly, because
+# the explicit `approve_request` invoked earlier in this test can win the
+# race against the watcher's next slow-mode poll — the watcher then never
+# observes a fresh allowlisted attempt to bump on. The strict guarantee
+# (that the bump fires on the rising edge of every fresh attempt and is
+# bounded per requestId) is owned by the deterministic unit test in
+# test/nemoclaw-start.test.ts, which constructs the late-CLI fixture
+# without the race; the e2e is exercising the user-facing slow→fast
+# convergence which Phase 6's strict slow-mode transition above already
+# validates.
 if grep -F '[auto-pair] fast-reentry bumped' <<<"$auto_pair_log_snapshot" >/dev/null; then
   pass "watcher logged fast-reentry marker on at least one allowlisted approval attempt"
 else
@@ -1253,9 +1278,16 @@ section "Phase 7 (CPU-substitute lane): Verify two-sandbox concurrent differing-
 
 # Sandbox A keeps the NVIDIA Cloud provider configured by Phase 1; sandbox B
 # is onboarded against a host-side Ollama daemon that serves a small local
-# model. Default model qwen3:0.6b is sized for CPU CI runners; the
-# production-spec qwen3.5:9b from #5343 needs GPU memory and is exercised
-# only when NEMOCLAW_CLI_SCOPE_OLLAMA_MODEL is overridden on a GPU lane.
+# model. The differing-provider gate of #5343 is the route assertion (sandbox
+# A on NVIDIA Cloud vs sandbox B on Ollama-local, both via inference.local
+# concurrently) and the absence of scope-upgrade / pairing / embedded-
+# fallback markers on either turn — neither of which depends on the absolute
+# model size. The default model qwen3:0.6b is therefore a CPU-lane substitute
+# for the issue-spec qwen3.5:9b, sized to fit shared CI runners; the literal
+# 9B-parameter sandbox-B model identity from #5343 is only validated when
+# NEMOCLAW_CLI_SCOPE_OLLAMA_MODEL is overridden on a GPU-provisioned lane,
+# and the result summary surfaces which lane ran so reviewers cannot mistake
+# this run for full literal-model coverage.
 # This default lane therefore proves differing-provider isolation and the
 # `inference.local` route on a CPU-sized substitute; it does not assert the
 # literal #5343 sandbox-B model identity. Both sandboxes run concurrent
@@ -1287,9 +1319,20 @@ if [ "$OLLAMA_TWO_PROVIDER_MODEL" != "$OLLAMA_SPEC_MODEL_5343" ]; then
   info "Phase 7 CPU-lane substitute: using ${OLLAMA_TWO_PROVIDER_MODEL} in place of the issue-spec model ${OLLAMA_SPEC_MODEL_5343}; differing-provider isolation and inference.local route are proven on this lane, GPU-provisioned model identity validation is deferred"
 fi
 
+# Refuse the privileged install path when the caller overrode the pinned
+# version without supplying a matching SHA256. Extracted so a unit-style
+# vitest can exercise both branches via the shared shell-function harness.
+ollama_pinned_install_sha256_ok() {
+  if [ -z "${OLLAMA_PINNED_SHA256:-}" ]; then
+    printf 'OLLAMA_PIN_REQUIRES_SHA256 version=%s\n' "${OLLAMA_PINNED_VERSION:-unset}" >&2
+    return 1
+  fi
+  return 0
+}
+
 info "Ensuring host-side Ollama is available for sandbox B"
 if ! command -v ollama >/dev/null 2>&1; then
-  if [ -z "$OLLAMA_PINNED_SHA256" ]; then
+  if ! ollama_pinned_install_sha256_ok; then
     fail "Ollama install requires NEMOCLAW_CLI_SCOPE_OLLAMA_SHA256 when NEMOCLAW_CLI_SCOPE_OLLAMA_VERSION overrides the pinned default v${OLLAMA_PINNED_VERSION_DEFAULT}"
     exit 1
   fi
@@ -1308,6 +1351,27 @@ if ! command -v ollama >/dev/null 2>&1; then
     exit 1
   fi
   pass "Ollama tarball sha256 verified (${computed_sha})"
+  # Validate archive layout before privileged extraction. The sha256 pin
+  # alone proves bit-for-bit identity with the committed default; when a
+  # caller overrides the pin in lockstep with NEMOCLAW_CLI_SCOPE_OLLAMA_SHA256
+  # this guard refuses any member outside the documented release layout
+  # (bin/, lib/) so a misaligned override cannot escape /usr/local via an
+  # absolute path or parent-traversal entry.
+  if ! tar_listing=$(tar -tzf "${install_tmp}/ollama.tgz" 2>&1); then
+    fail "Ollama tarball listing failed: $(redacted_excerpt "$tar_listing" 300)"
+    rm -rf "$install_tmp"
+    exit 1
+  fi
+  if printf '%s\n' "$tar_listing" | grep -E '(^|/)(\.\.)(/|$)|^/' >/dev/null; then
+    fail "Ollama tarball contains absolute paths or parent traversal entries; refusing privileged extract"
+    rm -rf "$install_tmp"
+    exit 1
+  fi
+  if printf '%s\n' "$tar_listing" | grep -vE '^(bin|lib)(/|$)' >/dev/null; then
+    fail "Ollama tarball contains members outside bin/ or lib/; refusing privileged extract"
+    rm -rf "$install_tmp"
+    exit 1
+  fi
   tar_out=$(sudo tar -C /usr/local -xzf "${install_tmp}/ollama.tgz" 2>&1)
   tar_rc=$?
   printf '%s\n' "$tar_out" >>"$INSTALL_LOG"
@@ -1380,29 +1444,15 @@ if [ "$onboard_b_rc" -ne 0 ]; then
 fi
 pass "second sandbox onboarded with Ollama provider"
 
-extract_openclaw_upstream() {
-  # Verify Phase 7's "two sandboxes, two providers, both via inference.local"
-  # contract from authoritative sources only:
-  #
-  #   * provider + model come from the host-side NemoClaw registry
-  #     (~/.nemoclaw/sandboxes.json), which records the requested intent for
-  #     each sandbox onboard / inference-set. The differing-providers half of
-  #     #5343 needs human-readable provider labels ("nvidia-prod" vs
-  #     "ollama-local") that the in-sandbox OpenClaw config does not carry —
-  #     patchOpenClawInferenceConfig normalises every managed route to
-  #     providerKey="inference", so both sandboxes look identical in
-  #     openclaw.json regardless of upstream.
-  #
-  #   * base_url comes from /sandbox/.openclaw/openclaw.json inside the
-  #     sandbox itself: this is the actual URL the next openclaw agent turn
-  #     will hand to its HTTP client, and the only file whose contents prove
-  #     the route still goes through inference.local. patchOpenClawInferenceConfig
-  #     writes it at models.providers[<key>].baseUrl. Fail closed if that
-  #     file is missing, providers is empty, or baseUrl is absent.
-  local sandbox="$1"
-  local registry_json route_json
-  registry_json="$(
-    python3 - "$sandbox" <<'PY'
+read_host_registry_provider_model() {
+  # Host-side NemoClaw registry (~/.nemoclaw/sandboxes.json) records the
+  # requested provider / model intent per sandbox. The differing-providers
+  # half of #5343 needs human-readable labels ("nvidia-prod" vs "ollama-local")
+  # that the in-sandbox OpenClaw config does not carry —
+  # patchOpenClawInferenceConfig normalises every managed route to
+  # providerKey="inference", so both sandboxes look identical in
+  # openclaw.json regardless of upstream.
+  python3 - "$1" <<'PY'
 import json
 import os
 import sys
@@ -1421,8 +1471,15 @@ provider = str(entry.get("provider") or "").strip()
 model = str(entry.get("model") or "").strip()
 print(json.dumps({"provider": provider, "model": model}, sort_keys=True))
 PY
-  )" || return $?
-  route_json="$(sandbox_named_exec_sh_script "$sandbox" 60 '
+}
+
+read_sandbox_openclaw_route() {
+  # The actual URL the next openclaw agent turn will hand to its HTTP client
+  # lives only at /sandbox/.openclaw/openclaw.json
+  # models.providers[<key>].baseUrl inside the sandbox itself —
+  # patchOpenClawInferenceConfig writes it there and nowhere else. Fail closed
+  # if the file is missing, the providers map is empty, or baseUrl is absent.
+  sandbox_named_exec_sh_script "$1" 60 '
 set -u
 python3 - <<'"'"'PY'"'"'
 import json
@@ -1450,7 +1507,22 @@ if not isinstance(base_url, str) or not base_url.strip():
     raise SystemExit(4)
 print(json.dumps({"base_url": base_url.strip(), "provider_key": str(provider_key or "")}, sort_keys=True))
 PY
-')" || return $?
+'
+}
+
+extract_openclaw_upstream() {
+  # Verify Phase 7's "two sandboxes, two providers, both via inference.local"
+  # contract from authoritative sources only — provider+model from the
+  # host-side NemoClaw registry (intent), base_url from the in-sandbox
+  # OpenClaw config (effective route). Combining the two is necessary
+  # because each source on its own is insufficient: the registry has no
+  # route field, and the in-sandbox config flattens every managed provider
+  # to providerKey="inference". The merge happens here in shell so the two
+  # readers stay single-purpose and reusable.
+  local sandbox="$1"
+  local registry_json route_json
+  registry_json="$(read_host_registry_provider_model "$sandbox")" || return $?
+  route_json="$(read_sandbox_openclaw_route "$sandbox")" || return $?
   python3 - "$registry_json" "$route_json" <<'PY'
 import json
 import sys
@@ -1470,11 +1542,11 @@ PY
 }
 
 upstream_a_json="$(extract_openclaw_upstream "$SANDBOX_NAME" 2>&1)" || {
-  fail "sandbox A openclaw upstream read failed: ${upstream_a_json:0:300}"
+  fail "sandbox A openclaw upstream read failed: $(redacted_excerpt "$upstream_a_json" 300)"
   exit 1
 }
 upstream_b_json="$(extract_openclaw_upstream "$SANDBOX_NAME_B" 2>&1)" || {
-  fail "sandbox B openclaw upstream read failed: ${upstream_b_json:0:300}"
+  fail "sandbox B openclaw upstream read failed: $(redacted_excerpt "$upstream_b_json" 300)"
   exit 1
 }
 printf '=== sandbox A upstream ===\n%s\n=== sandbox B upstream ===\n%s\n' \
