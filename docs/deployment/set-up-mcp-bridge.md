@@ -42,9 +42,9 @@ OpenShell's provider store. NemoClaw persists only the variable name, writes
 `openshell:resolve:env:KEY` into the sandbox-side MCP config, and relies on
 OpenShell to resolve the placeholder at egress.
 
-For one-time bootstrap you can pass `--env KEY=VALUE`. NemoClaw forwards
-`VALUE` only to `openshell provider create/update` and still persists only
-`KEY`.
+For one-time bootstrap you can pass `--env KEY=VALUE`. NemoClaw stages
+`VALUE` only in the environment of the `openshell provider create/update`
+subprocess and still persists only `KEY`.
 
 Unauthenticated MCP servers can omit `--env`.
 

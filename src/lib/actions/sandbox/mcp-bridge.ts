@@ -1283,7 +1283,7 @@ function renderMcpHelp(subcommand: string): void {
 FLAGS
   --url URL        MCP Streamable HTTP endpoint
   --env KEY       Host credential reference registered with OpenShell
-  --env KEY=VALUE Store VALUE in the OpenShell provider; only KEY is persisted by NemoClaw
+  --env KEY=VALUE Stage VALUE only for OpenShell provider registration
 
 SECURITY
   Credentials are registered as an OpenShell provider and appear inside the

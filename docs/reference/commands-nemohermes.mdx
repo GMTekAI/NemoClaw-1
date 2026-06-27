@@ -1012,7 +1012,7 @@ nemohermes my-assistant mcp list [--json]
 Add an MCP Streamable HTTP server to a sandbox.
 Pass `--url` for the MCP endpoint and `--env KEY` for each host credential the sandbox-side MCP client should reference.
 NemoClaw registers those credentials in an OpenShell provider, attaches it to the running sandbox, writes only `openshell:resolve:env:KEY` placeholders into the agent config, and applies a generated OpenShell `protocol: mcp` policy for the target endpoint.
-Inline `--env KEY=VALUE` values are stored in OpenShell's provider store; NemoClaw persists only `KEY`.
+Inline `--env KEY=VALUE` values are staged only in the OpenShell provider registration subprocess environment; NemoClaw persists only `KEY`.
 For full setup details, see [Set Up MCP Servers](../deployment/set-up-mcp-bridge).
 
 ```bash
