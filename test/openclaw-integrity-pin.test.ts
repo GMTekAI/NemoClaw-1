@@ -91,6 +91,7 @@ function runInstallBlock(
     codexAcpRegistryIntegrity?: string;
     codexAcpRegistryTarball?: string;
     codexAcpPackIntegrity?: string;
+    packFilename?: string;
     allowLegacyFixture?: boolean;
   } = {},
 ) {
@@ -104,6 +105,7 @@ function runInstallBlock(
     codexAcpRegistryIntegrity = codexAcpCommittedIntegrity,
     codexAcpRegistryTarball = PINNED_CODEX_ACP_TARBALL,
     codexAcpPackIntegrity = codexAcpCommittedIntegrity,
+    packFilename = "",
     allowLegacyFixture = false,
   } = options;
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-openclaw-integrity-"));
@@ -141,9 +143,11 @@ function runInstallBlock(
     '    test -n "$pack_dir";',
     '    pack_file="$(basename "$pack_spec")";',
     '    case "$pack_file" in *.tgz) ;; *) pack_file="${pack_file}.tgz" ;; esac',
+    `    reported_pack_file=${JSON.stringify(packFilename)}`,
+    '    reported_pack_file="${reported_pack_file:-$pack_file}"',
     '    printf "fake tarball" > "$pack_dir/$pack_file";',
     `    case "$pack_spec" in *"codex-acp"*) pack_integrity=${JSON.stringify(codexAcpPackIntegrity)} ;; *) pack_integrity=${JSON.stringify(packIntegrity)} ;; esac`,
-    '    printf \'[{"filename":"%s","integrity":"%s"}]\\n\' "$pack_file" "$pack_integrity";',
+    '    printf \'[{"filename":"%s","integrity":"%s"}]\\n\' "$reported_pack_file" "$pack_integrity";',
     "    return 0",
     "  fi",
     "}",
@@ -178,6 +182,7 @@ function runOptionalOpenClawPluginBlock(
     webSearch?: boolean;
     diagnosticsRegistryIntegrity?: string;
     braveRegistryIntegrity?: string;
+    pluginPackFilename?: string;
   } = {},
 ) {
   const {
@@ -186,6 +191,7 @@ function runOptionalOpenClawPluginBlock(
     webSearch = true,
     diagnosticsRegistryIntegrity = PINNED_OPENCLAW_DIAGNOSTICS_OTEL_INTEGRITY,
     braveRegistryIntegrity = PINNED_OPENCLAW_BRAVE_PLUGIN_INTEGRITY,
+    pluginPackFilename = "",
   } = options;
   const command = extractRunBlock(
     DOCKERFILE,
@@ -213,10 +219,12 @@ function runOptionalOpenClawPluginBlock(
     "      shift",
     "    done",
     '    test -n "$pack_dir"; pack_file="$(basename "$pack_spec")";',
+    `    reported_pack_file=${JSON.stringify(pluginPackFilename)}`,
+    '    reported_pack_file="${reported_pack_file:-$pack_file}"',
     '    printf "fake plugin tarball" > "$pack_dir/$pack_file";',
     '    case "$pack_spec" in',
-    `      *"diagnostics-otel"*) printf '[{"filename":"%s","integrity":"%s"}]\\n' "$pack_file" ${JSON.stringify(diagnosticsRegistryIntegrity)}; return 0 ;;`,
-    `      *"brave-plugin"*) printf '[{"filename":"%s","integrity":"%s"}]\\n' "$pack_file" ${JSON.stringify(braveRegistryIntegrity)}; return 0 ;;`,
+    `      *"diagnostics-otel"*) printf '[{"filename":"%s","integrity":"%s"}]\\n' "$reported_pack_file" ${JSON.stringify(diagnosticsRegistryIntegrity)}; return 0 ;;`,
+    `      *"brave-plugin"*) printf '[{"filename":"%s","integrity":"%s"}]\\n' "$reported_pack_file" ${JSON.stringify(braveRegistryIntegrity)}; return 0 ;;`,
     "    esac",
     "    return 1",
     "  fi",
@@ -264,6 +272,8 @@ describe("OpenClaw npm integrity pins", () => {
     expect(reviewNote).toContain("downloaded tarball integrity");
     expect(reviewNote).toContain("bind reviewed npm installs to verified local archives");
     expect(reviewNote).toContain("npm pack --json");
+    expect(reviewNote).toContain("reject reported archive filenames");
+    expect(reviewNote).toContain("unsafe reported archive filenames");
     expect(reviewNote).toContain("each reviewed npm plugin registry integrity");
     expect(reviewNote).toContain("install the verified archive path");
     expect(reviewNote).toContain("OpenClaw Compiled-Dist Patch Runtime Boundary");
@@ -479,6 +489,85 @@ describe("OpenClaw npm integrity pins", () => {
     expect(base.calls).toContain(`npm pack ${PINNED_OPENCLAW_TARBALL} --pack-destination`);
     expect(base.calls).toContain("npm install -g ");
     expect(base.calls).toContain(`openclaw-${PINNED_OPENCLAW_VERSION}.tgz`);
+  });
+
+  it("rejects npm pack filenames outside the fresh pack directories", () => {
+    const production = runInstallBlock(
+      extractRunBlock(
+        DOCKERFILE,
+        "# OPENCLAW_VERSION is the NemoClaw runtime build target",
+        "# Patch OpenClaw media fetch",
+      ),
+      {
+        openclawVersion: PINNED_OPENCLAW_VERSION,
+        committedIntegrity: PINNED_OPENCLAW_INTEGRITY,
+        registryIntegrity: PINNED_OPENCLAW_INTEGRITY,
+        packFilename: "../openclaw-2026.6.9.tgz",
+      },
+    );
+    const codexAcp = runInstallBlock(
+      extractRunBlock(
+        DOCKERFILE,
+        "# Pre-install the codex-acp package",
+        "# Upgrade OpenClaw if the base image is stale.",
+      ),
+      {
+        openclawVersion: PINNED_OPENCLAW_VERSION,
+        committedIntegrity: PINNED_OPENCLAW_INTEGRITY,
+        registryIntegrity: PINNED_OPENCLAW_INTEGRITY,
+        packFilename: "../codex-acp-0.11.1.tgz",
+      },
+    );
+    const base = runInstallBlock(
+      extractRunBlock(
+        DOCKERFILE_BASE,
+        "# Install OpenClaw CLI + PyYAML.",
+        "# Baseline health check.",
+      ),
+      {
+        openclawVersion: PINNED_OPENCLAW_VERSION,
+        committedIntegrity: PINNED_OPENCLAW_INTEGRITY,
+        registryIntegrity: PINNED_OPENCLAW_INTEGRITY,
+        packFilename: "../openclaw-2026.6.9.tgz",
+      },
+    );
+    const optionalPlugin = runOptionalOpenClawPluginBlock({
+      pluginPackFilename: "../diagnostics-otel-2026.6.9.tgz",
+    });
+
+    for (const item of [
+      {
+        label: "production Dockerfile",
+        outcome: production,
+        unsafeFilename: "../openclaw-2026.6.9.tgz",
+        blockedCommand: "npm install -g",
+      },
+      {
+        label: "codex-acp Dockerfile",
+        outcome: codexAcp,
+        unsafeFilename: "../codex-acp-0.11.1.tgz",
+        blockedCommand: "npm install -g",
+      },
+      {
+        label: "base Dockerfile",
+        outcome: base,
+        unsafeFilename: "../openclaw-2026.6.9.tgz",
+        blockedCommand: "npm install -g",
+      },
+      {
+        label: "optional OpenClaw plugin Dockerfile",
+        outcome: optionalPlugin,
+        unsafeFilename: "../diagnostics-otel-2026.6.9.tgz",
+        blockedCommand: "openclaw plugins install",
+      },
+    ]) {
+      expect(item.outcome.result.status, item.label).not.toBe(0);
+      expect(`${item.outcome.result.stdout}${item.outcome.result.stderr}`, item.label).toContain(
+        `npm pack reported unsafe archive filename: ${item.unsafeFilename}`,
+      );
+      expect(item.outcome.calls, item.label).toContain("npm pack");
+      expect(item.outcome.calls, item.label).not.toContain(item.blockedCommand);
+    }
   });
 
   it("rejects legacy fixture pins unless stale-upgrade fixture mode is explicit", () => {

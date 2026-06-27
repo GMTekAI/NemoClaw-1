@@ -95,6 +95,11 @@ describe("OpenClaw 2026.6.9 dependency review contract", () => {
     expect(review).toContain("downloaded tarball integrity");
     expect(review).toContain("npm pack --json");
     expect(review).toContain("install the verified archive path");
+    expect(review).toContain(
+      "reported filename must be contained inside the freshly created pack directory",
+    );
+    expect(review).toContain("unsafe reported archive filenames");
+    expect(review).toContain("no installer code consumes raw `npm pack --json` filenames");
     expect(review).toContain("OpenClaw Patch Source-of-Truth Table");
     expect(review).toContain(
       "| Patch | Invalid state | Source boundary | Why upstream/source cannot be fixed here | Regression test | Removal condition |",
@@ -198,6 +203,7 @@ check_contains "$codex_acp_block" 'npm view "\${CODEX_ACP_SPEC}" dist.tarball' "
 check_contains "$codex_acp_block" 'npm pack "$pack_spec" --pack-destination "$pack_dir" --json' "codex-acp pack"
 check_contains "$codex_acp_block" 'CODEX_ACP_PACK_PATH="$(pack_reviewed_npm_tarball "$CODEX_ACP_TARBALL" "$CODEX_ACP_0_11_1_INTEGRITY" "$CODEX_ACP_PACK_DIR" "$CODEX_ACP_SPEC")"' "codex-acp pack path"
 check_contains "$codex_acp_block" '"$CODEX_ACP_PACK_PATH"' "codex-acp local install path"
+check_contains "$codex_acp_block" 'reported unsafe archive filename' "codex-acp unsafe filename guard"
 
 for dockerfile in Dockerfile Dockerfile.base; do
   case "$dockerfile" in
@@ -210,6 +216,7 @@ for dockerfile in Dockerfile Dockerfile.base; do
   check_contains "$openclaw_block" 'npm view "openclaw@\${OPENCLAW_VERSION}" dist.tarball' "$dockerfile registry tarball"
   check_contains "$openclaw_block" 'OPENCLAW_PACK_PATH="$(pack_reviewed_npm_tarball "$EXPECTED_TARBALL" "$EXPECTED_INTEGRITY" "$OPENCLAW_PACK_DIR"' "$dockerfile pack path"
   check_contains "$openclaw_block" '"$OPENCLAW_PACK_PATH"' "$dockerfile local install path"
+  check_contains "$openclaw_block" 'reported unsafe archive filename' "$dockerfile unsafe filename guard"
 done
 
 optional_plugin_block="$(sed -n '/# Install non-messaging OpenClaw plugins that need to match the runtime./,/^RUN OPENCLAW_VERSION=/p' Dockerfile)"
@@ -217,10 +224,13 @@ check_contains "$optional_plugin_block" 'npm view "$plugin_spec" dist.integrity'
 check_contains "$optional_plugin_block" 'npm view "$plugin_spec" dist.tarball' "optional plugin registry tarball"
 check_contains "$optional_plugin_block" 'npm pack "$expected_tarball" --pack-destination "$NEMOCLAW_OPENCLAW_PLUGIN_PACK_DIR" --json' "optional plugin pack"
 check_contains "$optional_plugin_block" 'openclaw plugins install "$plugin_archive" --pin' "optional plugin archive install"
+check_contains "$optional_plugin_block" 'reported unsafe archive filename' "optional plugin unsafe filename guard"
 
 	grep -Fq 'spawnSync("npm", ["pack", packageSpec, "--pack-destination", rootDir, "--json"]' "$messaging_build_applier"
 	grep -Fq '["openclaw", "plugins", "install", packed.archivePath, ...(install.pin ? ["--pin"] : [])]' "$messaging_build_applier"
 	grep -Fq 'downloaded tarball integrity mismatch' "$messaging_build_applier"
+	grep -Fq 'resolveNpmPackArchivePath(packageSpec, rootDir, filename)' "$messaging_build_applier"
+	grep -Fq 'reported unsafe archive filename' "$messaging_build_applier"
 	issue_4434_patch=${JSON.stringify(ISSUE_4434_PATCH)}
 	grep -Fq 'formatRawAssistantErrorForUi' "$issue_4434_patch"
 	grep -Fq 'OPENSHELL_SANDBOX !== "1"' "$issue_4434_patch"

@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { discordManifest } from "../../channels/discord/manifest.ts";
 import { slackManifest } from "../../channels/slack/manifest.ts";
@@ -1111,6 +1111,33 @@ function npmViewString(packageSpec: string, field: string, env: Env): string {
   return String(result.stdout ?? "").trim();
 }
 
+function resolveNpmPackArchivePath(packageSpec: string, rootDir: string, filename: string): string {
+  const filenameSegments = filename.split(/[\\/]+/);
+  if (
+    !filename ||
+    isAbsolute(filename) ||
+    filename === "." ||
+    filename === ".." ||
+    filename.includes("/") ||
+    filename.includes("\\") ||
+    filenameSegments.includes("..") ||
+    filenameSegments.includes("")
+  ) {
+    throw new MessagingBuildApplierError(
+      `npm pack ${packageSpec} reported unsafe archive filename: ${filename}`,
+    );
+  }
+
+  const root = resolve(rootDir);
+  const archivePath = resolve(root, filename);
+  if (!archivePath.startsWith(root + sep)) {
+    throw new MessagingBuildApplierError(
+      `npm pack ${packageSpec} reported archive path outside pack directory: ${filename}`,
+    );
+  }
+  return archivePath;
+}
+
 function packNpmArchive(
   packageSpec: string,
   expectedIntegrity: string,
@@ -1159,7 +1186,12 @@ function packNpmArchive(
       `OpenClaw plugin ${packageSpec} downloaded tarball integrity mismatch. Expected: ${expectedIntegrity}. Actual: ${actualIntegrity}`,
     );
   }
-  return { archivePath: join(rootDir, filename), rootDir };
+  try {
+    return { archivePath: resolveNpmPackArchivePath(packageSpec, rootDir, filename), rootDir };
+  } catch (error) {
+    rmSync(rootDir, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 function packVerifiedOpenClawPluginArchive(

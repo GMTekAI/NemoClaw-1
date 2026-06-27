@@ -33,8 +33,9 @@ function fakeSlackNpmScript(): string {
     'if [ "${1:-}" = "pack" ]; then',
     '  pack_dir="${4:-}";',
     '  test -n "$pack_dir";',
+    '  reported_filename="${OPENCLAW_PACK_FILENAME_OVERRIDE:-slack-2026.6.9.tgz}";',
     '  printf "fake plugin tarball" > "$pack_dir/slack-2026.6.9.tgz";',
-    '  printf \'[{"filename":"slack-2026.6.9.tgz","integrity":"%s"}]\\n\' "$OPENCLAW_PACK_INTEGRITY_OVERRIDE";',
+    '  printf \'[{"filename":"%s","integrity":"%s"}]\\n\' "$reported_filename" "$OPENCLAW_PACK_INTEGRITY_OVERRIDE";',
     "  exit 0",
     "fi",
     'if [ "${1:-}" = "view" ] && [ "${3:-}" = "dist.integrity" ]; then printf "%s\\n" "$OPENCLAW_SLACK_INTEGRITY"; exit 0; fi',
@@ -97,6 +98,69 @@ describe("messaging-build-applier.mts: plugin archive integrity", () => {
         );
         expect(result.stderr).toContain(`Expected: ${OPENCLAW_SLACK_2026_6_9_INTEGRITY}`);
         expect(result.stderr).toContain("Actual: sha512-packed-drift");
+        const trace = fs.readFileSync(tracePath, "utf-8");
+        expect(trace).toContain("npm|view|@openclaw/slack@2026.6.9|dist.integrity");
+        expect(trace).toContain("npm|pack|@openclaw/slack@2026.6.9|--pack-destination");
+        expect(trace).not.toContain("openclaw|plugins|install");
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    },
+    testTimeout(15_000),
+  );
+
+  it(
+    "rejects packed archive filenames outside the fresh pack directory",
+    () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-openclaw-slack-pack-path-"));
+      const tracePath = path.join(tmp, "openclaw.trace");
+      fs.writeFileSync(path.join(tmp, "npm"), fakeSlackNpmScript(), { mode: 0o755 });
+      fs.writeFileSync(
+        path.join(tmp, "openclaw"),
+        [
+          "#!/bin/sh",
+          'printf \'openclaw|%s|%s|%s|%s\\n\' "$1" "$2" "$3" "$4" >> "$OPENCLAW_TRACE"',
+          "exit 0",
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+
+      try {
+        const env = withLegacyMessagingPlanEnv(
+          {
+            PATH: `${tmp}:${process.env.PATH || "/usr/bin:/bin"}`,
+            OPENCLAW_TRACE: tracePath,
+            OPENCLAW_SLACK_INTEGRITY: OPENCLAW_SLACK_2026_6_9_INTEGRITY,
+            OPENCLAW_PACK_INTEGRITY_OVERRIDE: OPENCLAW_SLACK_2026_6_9_INTEGRITY,
+            OPENCLAW_PACK_FILENAME_OVERRIDE: "../slack-2026.6.9.tgz",
+            OPENCLAW_VERSION: "2026.6.9",
+            NEMOCLAW_MESSAGING_CHANNELS_B64: channelsB64(["slack"]),
+          },
+          "openclaw",
+        );
+        const result = spawnSync(
+          "node",
+          [
+            "--experimental-strip-types",
+            SCRIPT_PATH,
+            "--agent",
+            "openclaw",
+            "--phase",
+            "agent-install",
+          ],
+          {
+            encoding: "utf-8",
+            stdio: ["pipe", "pipe", "pipe"],
+            env,
+            timeout: 10_000,
+          },
+        );
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "npm pack @openclaw/slack@2026.6.9 reported unsafe archive filename: ../slack-2026.6.9.tgz",
+        );
         const trace = fs.readFileSync(tracePath, "utf-8");
         expect(trace).toContain("npm|view|@openclaw/slack@2026.6.9|dist.integrity");
         expect(trace).toContain("npm|pack|@openclaw/slack@2026.6.9|--pack-destination");

@@ -29,7 +29,7 @@ const PATCHED_OPENCLAW_2026_6_9_ISSUE_4434_TUI_ERROR_OUTPUT = [
   "1m 04s | error",
 ].join("\n");
 
-const PARTIAL_OPENCLAW_2026_6_9_ISSUE_4434_TUI_ERROR_OUTPUT = [
+const UPSTREAM_OPENCLAW_2026_6_9_ISSUE_4434_TUI_ERROR_OUTPUT = [
   "run error:",
   "TypeError: fetch failed",
   "1m 04s | error",
@@ -85,7 +85,7 @@ describe("issue #4434 full OpenClaw TUI error guard", () => {
       missingIssue4434AcceptanceFields(PATCHED_OPENCLAW_2026_6_9_ISSUE_4434_TUI_ERROR_OUTPUT),
     ).toEqual([]);
     expect(
-      missingIssue4434AcceptanceFields(PARTIAL_OPENCLAW_2026_6_9_ISSUE_4434_TUI_ERROR_OUTPUT),
+      missingIssue4434AcceptanceFields(UPSTREAM_OPENCLAW_2026_6_9_ISSUE_4434_TUI_ERROR_OUTPUT),
     ).toEqual(["httpStatusOrCause", "reportingLayer", "recoveryHint"]);
   });
 

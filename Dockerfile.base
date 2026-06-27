@@ -267,7 +267,8 @@ RUN --mount=type=bind,source=nemoclaw-blueprint/blueprint.yaml,target=/tmp/bluep
             echo "Expected: ${expected_integrity}"; \
             echo "Actual:   ${pack_integrity}"; exit 1; \
         fi; \
-        printf '%s\n' "${pack_dir}/${pack_filename}"; \
+        if ! pack_archive="$(node -e 'const path = require("node:path"); const [dir, filename, label] = process.argv.slice(1); const parts = filename.split(/[\\/]+/); const unsafe = !filename || path.isAbsolute(filename) || filename === "." || filename === ".." || filename.includes("/") || filename.includes("\\") || parts.includes("..") || parts.includes(""); if (unsafe) { console.error("Error: " + label + " npm pack reported unsafe archive filename: " + filename); process.exit(1); } const root = path.resolve(dir); const archive = path.resolve(root, filename); if (!archive.startsWith(root + path.sep)) { console.error("Error: " + label + " npm pack archive escaped pack directory: " + filename); process.exit(1); } process.stdout.write(archive);' "$pack_dir" "$pack_filename" "$label")"; then exit 1; fi; \
+        printf '%s\n' "$pack_archive"; \
     }; \
     OPENCLAW_PACK_DIR="$(mktemp -d)"; \
     OPENCLAW_PACK_PATH="$(pack_reviewed_npm_tarball "$EXPECTED_TARBALL" "$EXPECTED_INTEGRITY" "$OPENCLAW_PACK_DIR" "OpenClaw ${OPENCLAW_VERSION}")"; \

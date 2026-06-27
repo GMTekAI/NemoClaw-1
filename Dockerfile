@@ -146,7 +146,8 @@ RUN set -eu; \
             echo "Expected: ${expected_integrity}" >&2; \
             echo "Actual:   ${pack_integrity}" >&2; exit 1; \
         fi; \
-        printf '%s\n' "${pack_dir}/${pack_filename}"; \
+        if ! pack_archive="$(node -e 'const path = require("node:path"); const [dir, filename, label] = process.argv.slice(1); const parts = filename.split(/[\\/]+/); const unsafe = !filename || path.isAbsolute(filename) || filename === "." || filename === ".." || filename.includes("/") || filename.includes("\\") || parts.includes("..") || parts.includes(""); if (unsafe) { console.error("ERROR: " + label + " npm pack reported unsafe archive filename: " + filename); process.exit(1); } const root = path.resolve(dir); const archive = path.resolve(root, filename); if (!archive.startsWith(root + path.sep)) { console.error("ERROR: " + label + " npm pack archive escaped pack directory: " + filename); process.exit(1); } process.stdout.write(archive);' "$pack_dir" "$pack_filename" "$label")"; then exit 1; fi; \
+        printf '%s\n' "$pack_archive"; \
     }; \
     REGISTRY_CODEX_ACP_INTEGRITY=$(npm view "${CODEX_ACP_SPEC}" dist.integrity); \
     REGISTRY_CODEX_ACP_TARBALL=$(npm view "${CODEX_ACP_SPEC}" dist.tarball); \
@@ -212,7 +213,8 @@ RUN set -eu; \
             echo "Expected: ${expected_integrity}" >&2; \
             echo "Actual:   ${pack_integrity}" >&2; exit 1; \
         fi; \
-        printf '%s\n' "${pack_dir}/${pack_filename}"; \
+        if ! pack_archive="$(node -e 'const path = require("node:path"); const [dir, filename, label] = process.argv.slice(1); const parts = filename.split(/[\\/]+/); const unsafe = !filename || path.isAbsolute(filename) || filename === "." || filename === ".." || filename.includes("/") || filename.includes("\\") || parts.includes("..") || parts.includes(""); if (unsafe) { console.error("ERROR: " + label + " npm pack reported unsafe archive filename: " + filename); process.exit(1); } const root = path.resolve(dir); const archive = path.resolve(root, filename); if (!archive.startsWith(root + path.sep)) { console.error("ERROR: " + label + " npm pack archive escaped pack directory: " + filename); process.exit(1); } process.stdout.write(archive);' "$pack_dir" "$pack_filename" "$label")"; then exit 1; fi; \
+        printf '%s\n' "$pack_archive"; \
     }; \
     REGISTRY_INTEGRITY=$(npm view "openclaw@${OPENCLAW_VERSION}" dist.integrity); \
     if [ "$REGISTRY_INTEGRITY" != "$EXPECTED_INTEGRITY" ]; then \
@@ -848,7 +850,8 @@ RUN set -eu; \
         if [ -z "$plugin_pack_filename" ]; then \
             echo "ERROR: OpenClaw plugin ${plugin_spec} npm pack did not report a filename" >&2; exit 1; \
         fi; \
-        printf '%s\n' "$NEMOCLAW_OPENCLAW_PLUGIN_PACK_DIR/$plugin_pack_filename"; \
+        if ! plugin_pack_archive="$(node -e 'const path = require("node:path"); const [dir, filename, label] = process.argv.slice(1); const parts = filename.split(/[\\/]+/); const unsafe = !filename || path.isAbsolute(filename) || filename === "." || filename === ".." || filename.includes("/") || filename.includes("\\") || parts.includes("..") || parts.includes(""); if (unsafe) { console.error("ERROR: " + label + " npm pack reported unsafe archive filename: " + filename); process.exit(1); } const root = path.resolve(dir); const archive = path.resolve(root, filename); if (!archive.startsWith(root + path.sep)) { console.error("ERROR: " + label + " npm pack archive escaped pack directory: " + filename); process.exit(1); } process.stdout.write(archive);' "$NEMOCLAW_OPENCLAW_PLUGIN_PACK_DIR" "$plugin_pack_filename" "OpenClaw plugin ${plugin_spec}")"; then exit 1; fi; \
+        printf '%s\n' "$plugin_pack_archive"; \
     }; \
     install_reviewed_openclaw_plugin() { \
         plugin_spec="${1}@${OPENCLAW_VERSION}"; \
