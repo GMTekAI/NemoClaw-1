@@ -50,10 +50,12 @@ const COMMON_SECRET_ENV_NAMES = [
 const FREE_STANDING_SELECTOR_SPECIAL_CASES = new Set([
   "hermes-e2e-vitest",
   "hermes-root-entrypoint-smoke-vitest",
+  "openshell-gateway-auth-contract-vitest",
   "jetson-nvmap-gpu-vitest",
   "sandbox-rlimits-connect-vitest",
 ]);
 const FULL_SUITE_EXCLUDED_FREE_STANDING_JOBS = new Set([
+  "openshell-gateway-auth-contract-vitest",
   "jetson-nvmap-gpu-vitest",
   "sandbox-rlimits-connect-vitest",
 ]);
@@ -765,17 +767,27 @@ function validateOpenShellGatewayAuthContractVitestJob(
       "openshell-gateway-auth-contract-vitest job must run on ubuntu-latest",
     );
   }
-  validateFreeStandingJobSelector(
-    errors,
-    jobs,
-    jobName,
-    "openshell-gateway-auth-contract",
-  );
+  if (job.needs !== "generate-matrix") {
+    errors.push("openshell-gateway-auth-contract-vitest job must depend on generate-matrix");
+  }
+  if (
+    job.if !==
+    explicitOnlyFreeStandingJobIf(jobName, "openshell-gateway-auth-contract")
+  ) {
+    errors.push(
+      "openshell-gateway-auth-contract-vitest job must run only when explicitly selected",
+    );
+  }
 
   const jobEnv = asRecord(job.env);
   if (jobEnv.NEMOCLAW_RUN_E2E_SCENARIOS !== "1") {
     errors.push(
       "openshell-gateway-auth-contract-vitest job must set NEMOCLAW_RUN_E2E_SCENARIOS=1",
+    );
+  }
+  if (jobEnv.NEMOCLAW_OPENSHELL_PIN_VERSION !== "0.0.67") {
+    errors.push(
+      "openshell-gateway-auth-contract-vitest job must pin NEMOCLAW_OPENSHELL_PIN_VERSION=0.0.67",
     );
   }
   if (

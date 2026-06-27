@@ -396,6 +396,19 @@ $$nemoclaw <name> connect
 
 Run `$$nemoclaw status` for a broader gateway health report.
 
+<AgentOnly variant="hermes">
+If `nemohermes <name> recover` reports that the Hermes secret-boundary validator is missing, the sandbox image predates the recovery-side validator that re-checks `/sandbox/.hermes/.env`.
+Current NemoClaw releases fail closed in this state: recovery stops Hermes gateway/dashboard processes, prints `SECRET_BOUNDARY_VALIDATOR_MISSING`, and refuses to claim the secret boundary was checked.
+
+Re-image the sandbox with a current Hermes build before retrying recovery:
+
+```bash
+nemohermes <sandbox-name> rebuild --yes
+nemohermes <sandbox-name> recover
+```
+
+</AgentOnly>
+
 ### Sandbox container reports `(unhealthy)` while the agent gateway process is still alive
 
 The in-sandbox OpenClaw gateway can drop its HTTP listener while its process stays alive.
