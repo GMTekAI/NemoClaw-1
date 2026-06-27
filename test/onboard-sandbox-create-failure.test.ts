@@ -61,10 +61,10 @@ describe("sandbox create failure diagnostics", () => {
     const source = fs.readFileSync(path.join(process.cwd(), "src/lib/onboard.ts"), "utf-8");
 
     expect(source).toMatch(
-      /Sandbox creation failed \(exit \$\{createResult\.status\}\)\.[\s\S]*printSandboxCreateDiagnostics\(\);[\s\S]*printSandboxCreateRecoveryHints/,
+      /Sandbox creation failed \(exit \$\{createResult\.status\}\)\.[\s\S]*sandboxCreateFailureDiagnostics\.printSandboxCreateFailureDiagnostics[\s\S]*printSandboxCreateRecoveryHints/,
     );
     expect(source).toMatch(
-      /printReadinessFailure\(readiness, sandboxName, sandboxReadyTimeoutSecs\);[\s\S]*printSandboxCreateDiagnostics\(\);/,
+      /printReadinessFailure\(readiness, sandboxName, sandboxReadyTimeoutSecs\);[\s\S]*sandboxCreateFailureDiagnostics\.printSandboxCreateFailureDiagnostics/,
     );
   });
 });

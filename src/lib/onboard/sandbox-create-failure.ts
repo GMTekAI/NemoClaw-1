@@ -220,3 +220,23 @@ export function collectSandboxCreateFailureDiagnostics(
     summaryLines: relevantLines.slice(-8),
   };
 }
+
+export function printSandboxCreateFailureDiagnostics(
+  sandboxName: string,
+  options: SandboxCreateFailureDiagnosticOptions = {},
+): SandboxCreateFailureDiagnostics | null {
+  const diagnostics = collectSandboxCreateFailureDiagnostics(sandboxName, options);
+  if (!diagnostics) return null;
+
+  console.error(`  Diagnostics saved: ${diagnostics.dir}`);
+  if (diagnostics.summaryLines.length > 0) {
+    console.error("  Recent OpenShell gateway failure:");
+    for (const line of diagnostics.summaryLines) {
+      console.error(`    ${line}`);
+    }
+  }
+  if (diagnostics.backupPath) {
+    console.error(`  State backup retained: ${diagnostics.backupPath}`);
+  }
+  return diagnostics;
+}

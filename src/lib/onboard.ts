@@ -3069,24 +3069,6 @@ async function createSandbox(
 
   const restoreBackupPath =
     pendingStateRestore?.manifest?.backupPath ?? pendingStateRestoreBackupPath;
-  const printSandboxCreateDiagnostics = () => {
-    const diagnostics = sandboxCreateFailureDiagnostics.collectSandboxCreateFailureDiagnostics(
-      sandboxName,
-      { backupPath: restoreBackupPath },
-    );
-    if (!diagnostics) return;
-
-    console.error(`  Diagnostics saved: ${diagnostics.dir}`);
-    if (diagnostics.summaryLines.length > 0) {
-      console.error("  Recent OpenShell gateway failure:");
-      for (const line of diagnostics.summaryLines) {
-        console.error(`    ${line}`);
-      }
-    }
-    if (diagnostics.backupPath) {
-      console.error(`  State backup retained: ${diagnostics.backupPath}`);
-    }
-  };
 
   if (createResult.status !== 0) {
     const failure = classifySandboxCreateFailure(createResult.output);
@@ -3106,7 +3088,9 @@ async function createSandbox(
         console.error("");
         console.error(createResult.output);
       }
-      printSandboxCreateDiagnostics();
+      sandboxCreateFailureDiagnostics.printSandboxCreateFailureDiagnostics(sandboxName, {
+        backupPath: restoreBackupPath,
+      });
       console.error("  Try:  openshell sandbox list        # check gateway state");
       printSandboxCreateRecoveryHints(createResult.output, { createArgs });
       process.exit(createResult.status || 1);
@@ -3133,7 +3117,9 @@ async function createSandbox(
   if (!readiness.ready) {
     console.error("");
     sandboxReadinessTracing.printReadinessFailure(readiness, sandboxName, sandboxReadyTimeoutSecs);
-    printSandboxCreateDiagnostics();
+    sandboxCreateFailureDiagnostics.printSandboxCreateFailureDiagnostics(sandboxName, {
+      backupPath: restoreBackupPath,
+    });
     if (useDockerGpuPatch) {
       dockerGpuCreatePatch.printReadinessFailureIfEnabled();
     } else {
