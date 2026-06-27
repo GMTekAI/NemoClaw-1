@@ -175,21 +175,20 @@ describe("classifySandboxForwardHealth", () => {
 describe("classifyForwardHealthWithReachability", () => {
   // Regression coverage for #3334: `openshell forward list` STATUS can lag the
   // real state of the forward. When it shows a non-running entry but the
-  // local port still answers, the forward is functionally healthy and the
-  // probe must not trigger spurious "missing or dead" + "Failed to
-  // re-establish" log pairs.
-  it("treats a non-running entry as healthy when the local port answers", () => {
-    // Covers both branches that produce `false` from the underlying classifier:
-    // a missing entry, and an entry whose status is anything but "running".
-    const inputs: SandboxForwardListEntry[][] = [
-      [],
-      [{ sandboxName: "beta", port: "18790", status: "dead" }],
-    ];
-    for (const entries of inputs) {
-      expect(classifyForwardHealthWithReachability(entries, "beta", "18790", () => true)).toBe(
-        true,
-      );
-    }
+  // local port still answers, the forward is functionally healthy.
+  it("treats a non-running owned entry as healthy when the local port answers", () => {
+    expect(
+      classifyForwardHealthWithReachability(
+        [{ sandboxName: "beta", port: "18790", status: "dead" }],
+        "beta",
+        "18790",
+        () => true,
+      ),
+    ).toBe(true);
+  });
+
+  it("does not accept reachability when the forward list entry is missing", () => {
+    expect(classifyForwardHealthWithReachability([], "beta", "18790", () => true)).toBe(false);
   });
 
   it("returns false when forward list says dead and the port does not answer", () => {
@@ -1192,7 +1191,7 @@ hermes-box  127.0.0.1  8642  12346  running`;
     vi.spyOn(forwardHealth, "isLocalForwardReachable").mockReturnValue(true);
     vi.spyOn(openshellRuntime, "captureOpenshell").mockReturnValue({
       status: 0,
-      output: `SANDBOX  BIND  PORT  PID  STATUS\nhermes-box  127.0.0.1  18789  12345  running`,
+      output: `SANDBOX  BIND  PORT  PID  STATUS\nhermes-box  127.0.0.1  8642  12346  dead\nhermes-box  127.0.0.1  18789  12345  running`,
     });
     vi.spyOn(openshellRuntime, "runOpenshell").mockReturnValue({ status: 0 } as never);
     const result = withFakeOpenshellBinary(() =>
@@ -1249,7 +1248,7 @@ hermes-box  127.0.0.1  8642  12346  running`;
     vi.spyOn(forwardHealth, "isLocalForwardReachable").mockReturnValue(true);
     vi.spyOn(openshellRuntime, "captureOpenshell").mockReturnValue({
       status: 0,
-      output: `SANDBOX  BIND  PORT  PID  STATUS\nhermes-box  127.0.0.1  18789  12345  running`,
+      output: `SANDBOX  BIND  PORT  PID  STATUS\nhermes-box  127.0.0.1  8642  12346  dead\nhermes-box  127.0.0.1  18789  12345  running`,
     });
     vi.spyOn(openshellRuntime, "runOpenshell").mockReturnValue({ status: 0 } as never);
 

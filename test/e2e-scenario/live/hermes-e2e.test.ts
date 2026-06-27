@@ -697,6 +697,20 @@ test.skipIf(!shouldRunLiveE2EScenarios())(
       expect(recoveredDashboard.exitCode, resultText(recoveredDashboard)).toBe(0);
       expect(httpStatusOk(recoveredDashboard.stdout)).toBe(true);
 
+      const recoveredDashboardBody = await host.command(
+        "sh",
+        ["-lc", "cat /tmp/hermes-dashboard-recovered-vitest-body"],
+        {
+          artifactName: "phase-5-hermes-dashboard-host-after-forward-recover-body",
+          env: commandEnv(),
+          timeoutMs: 30_000,
+        },
+      );
+      expect(recoveredDashboardBody.exitCode, resultText(recoveredDashboardBody)).toBe(0);
+      expect(resultText(recoveredDashboardBody)).toMatch(
+        /(<title>[^<]*Hermes|id=["']root["']|Hermes Dashboard|<html)/i,
+      );
+
       const statusAfterDashboardRecover = await host.command(
         "nemohermes",
         [SANDBOX_NAME, "status"],
@@ -708,6 +722,7 @@ test.skipIf(!shouldRunLiveE2EScenarios())(
       );
       expect(statusAfterDashboardRecover.exitCode, resultText(statusAfterDashboardRecover)).toBe(0);
       expect(resultText(statusAfterDashboardRecover)).toMatch(/Ready/i);
+      expect(resultText(statusAfterDashboardRecover)).toMatch(/Inference(?: \([^)]+\))?: healthy/i);
     }
 
     // Phase 6: live inference through both the external provider and the

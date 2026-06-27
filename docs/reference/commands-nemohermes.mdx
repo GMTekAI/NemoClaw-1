@@ -516,7 +516,7 @@ Use this after a sandbox pod restart, a sandbox crash, or whenever `nemohermes <
 
 `recover` runs the same recovery the `connect` command performs as a side effect, but without dropping into a shell, so it is safe to call from scripts and automation.
 It is idempotent.
-If the gateway is already running, the command exits zero with a probe message and makes no changes.
+If the gateway is already running, the command exits zero without force-restarting it; it can still re-evaluate supported safety checks and check or recover host-side forwards.
 Use [`nemohermes <name> gateway restart`](#nemohermes-name-gateway-restart) when you deliberately need a running gateway to reload runtime configuration or plugins.
 
 ```bash

@@ -109,10 +109,15 @@ export function ensureSandboxPortForwardForPort(sandboxName: string, port: numbe
   if (forwardHealth === true) return true;
   if (forwardHealth === "occupied") return false;
 
-  runOpenshell(["forward", "stop", String(port), sandboxName], {
+  const stopResult = runOpenshell(["forward", "stop", String(port), sandboxName], {
     ignoreError: true,
     stdio: "ignore",
   });
+  if (stopResult.status !== 0) {
+    console.error(
+      `  Warning: openshell forward stop ${port} ${sandboxName} exited ${stopResult.status}; attempting restart anyway.`,
+    );
+  }
   const startResult = runOpenshell(
     ["forward", "start", "--background", String(port), sandboxName],
     {

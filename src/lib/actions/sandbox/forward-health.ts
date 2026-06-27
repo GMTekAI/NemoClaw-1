@@ -25,11 +25,12 @@ export function classifySandboxForwardHealth(
 /**
  * Like {@link classifySandboxForwardHealth} but accepts a reachability
  * callback that probes whether the local forwarded port actually answers.
- * When the entry-based classification would return `false`, the
- * reachability check overrides it: a port that answers is healthy
- * regardless of what `forward list` reports. The "occupied" verdict is
- * preserved — we never silently take over a forward owned by another
- * sandbox, even if that forward happens to be reachable.
+ * Reachability only overrides a non-running entry owned by the target
+ * sandbox. A missing entry still returns false so recovery recreates the
+ * OpenShell-owned forward instead of trusting an arbitrary local listener.
+ * The "occupied" verdict is preserved — we never silently take over a
+ * forward owned by another sandbox, even if that forward happens to be
+ * reachable.
  */
 export function classifyForwardHealthWithReachability(
   entries: SandboxForwardListEntry[],
@@ -37,8 +38,10 @@ export function classifyForwardHealthWithReachability(
   port: string,
   isReachable: () => boolean,
 ): Exclude<SandboxForwardHealth, null> {
-  const verdict = classifySandboxForwardHealth(entries, sandboxName, port);
-  if (verdict !== false) return verdict;
+  const match = entries.find((entry) => entry.port === port);
+  if (!match) return false;
+  if (match.sandboxName !== sandboxName) return "occupied";
+  if (match.status === "running") return true;
   return isReachable() ? true : false;
 }
 
