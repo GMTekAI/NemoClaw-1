@@ -216,12 +216,11 @@ describe("nemoclaw <name> recover", () => {
         forwardStartHeals: false,
       });
       const result = runRecover(fixture);
-      expect(result.status).toBe(0);
+      expect(result.status).toBe(1);
 
       const combined = (result.stdout || "") + (result.stderr || "");
-      // Probe wrapper falls back to the plain "is running" line; the success
-      // suffix must not appear because the forward never came back.
       expect(combined).toContain("gateway is running in 'stuck-sandbox'");
+      expect(combined).toContain("dashboard/API host forward could not be restored");
       expect(combined).not.toContain("restored dashboard port forward");
     },
   );

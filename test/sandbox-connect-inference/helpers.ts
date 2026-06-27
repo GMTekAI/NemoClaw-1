@@ -212,6 +212,11 @@ if (args[0] === "logs") {
   process.exit(0);
 }
 
+if (args[0] === "forward" && args[1] === "list") {
+  process.stdout.write("${sandboxName} 127.0.0.1 18789 12345 running\\n");
+  process.exit(0);
+}
+
 if (args[0] === "forward") {
   process.exit(0);
 }

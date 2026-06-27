@@ -62,6 +62,7 @@ describe("CLI dispatch", () => {
         'if [ "$1" = "sandbox" ] && [ "$2" = "connect" ] && [ "$3" = "alpha" ]; then',
         "  exit 0",
         "fi",
+        'if [ "$1" = "forward" ] && [ "$2" = "list" ]; then echo "alpha 127.0.0.1 18789 12345 running"; exit 0; fi',
         "exit 0",
       ].join("\n"),
       { mode: 0o755 },
@@ -146,67 +147,74 @@ describe("CLI dispatch", () => {
     expect(fs.existsSync(sshMarkerFile)).toBe(false);
   });
 
-  it("connect --probe-only recovers the gateway without opening SSH", () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-cli-connect-probe-"));
-    const localBin = path.join(home, "bin");
-    const markerFile = path.join(home, "openshell-calls");
-    const sshMarkerFile = path.join(home, "ssh-calls");
-    const stateFile = path.join(home, "probe-state");
-    fs.mkdirSync(localBin, { recursive: true });
-    writeSandboxRegistry(home);
-    fs.writeFileSync(stateFile, "stopped");
-    fs.writeFileSync(
-      path.join(localBin, "openshell"),
-      [
-        "#!/usr/bin/env bash",
-        `marker_file=${JSON.stringify(markerFile)}`,
-        `state_file=${JSON.stringify(stateFile)}`,
-        'printf \'%s\\n\' "$*" >> "$marker_file"',
-        'if [ "$1" = "sandbox" ] && [ "$2" = "get" ] && [ "$3" = "alpha" ]; then',
-        "  echo 'Sandbox:'",
-        "  echo",
-        "  echo '  Id: abc'",
-        "  echo '  Name: alpha'",
-        "  echo '  Namespace: openshell'",
-        "  echo '  Phase: Ready'",
-        "  exit 0",
-        "fi",
-        'if [ "$1" = "sandbox" ] && [ "$2" = "exec" ] && [ "$3" = "--name" ] && [ "$4" = "alpha" ]; then',
-        '  cmd="$8"',
-        '  case "$cmd" in',
-        '    *"OPENCLAW="*)',
-        '      echo recovered > "$state_file"',
-        "      echo '__NEMOCLAW_SANDBOX_EXEC_STARTED__'",
-        "      echo 'GATEWAY_PID=123'",
-        "      exit 42",
-        "      ;;",
-        "    *'curl -so'*)",
-        "      echo '__NEMOCLAW_SANDBOX_EXEC_STARTED__'",
-        '      if [ "$(cat "$state_file")" = recovered ]; then echo RUNNING; else echo STOPPED; fi',
-        "      exit 0",
-        "      ;;",
-        "  esac",
-        "fi",
-        "exit 0",
-      ].join("\n"),
-      { mode: 0o755 },
-    );
-    writeRecordingCommand(localBin, "ssh", sshMarkerFile, 98);
+  it(
+    "connect --probe-only recovers the gateway without opening SSH",
+    testTimeoutOptions(15_000),
+    () => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-cli-connect-probe-"));
+      const localBin = path.join(home, "bin");
+      const markerFile = path.join(home, "openshell-calls");
+      const sshMarkerFile = path.join(home, "ssh-calls");
+      const stateFile = path.join(home, "probe-state");
+      fs.mkdirSync(localBin, { recursive: true });
+      writeSandboxRegistry(home);
+      fs.writeFileSync(stateFile, "stopped");
+      fs.writeFileSync(
+        path.join(localBin, "openshell"),
+        [
+          "#!/usr/bin/env bash",
+          `marker_file=${JSON.stringify(markerFile)}`,
+          `state_file=${JSON.stringify(stateFile)}`,
+          'printf \'%s\\n\' "$*" >> "$marker_file"',
+          'if [ "$1" = "sandbox" ] && [ "$2" = "get" ] && [ "$3" = "alpha" ]; then',
+          "  echo 'Sandbox:'",
+          "  echo",
+          "  echo '  Id: abc'",
+          "  echo '  Name: alpha'",
+          "  echo '  Namespace: openshell'",
+          "  echo '  Phase: Ready'",
+          "  exit 0",
+          "fi",
+          'if [ "$1" = "sandbox" ] && [ "$2" = "exec" ] && [ "$3" = "--name" ] && [ "$4" = "alpha" ]; then',
+          '  cmd="$8"',
+          '  case "$cmd" in',
+          '    *"OPENCLAW="*)',
+          '      echo recovered > "$state_file"',
+          "      echo '__NEMOCLAW_SANDBOX_EXEC_STARTED__'",
+          "      echo 'GATEWAY_PID=123'",
+          "      exit 42",
+          "      ;;",
+          "    *'curl -so'*)",
+          "      echo '__NEMOCLAW_SANDBOX_EXEC_STARTED__'",
+          '      if [ "$(cat "$state_file")" = recovered ]; then echo RUNNING; else echo STOPPED; fi',
+          "      exit 0",
+          "      ;;",
+          "  esac",
+          "fi",
+          'if [ "$1" = "forward" ] && [ "$2" = "list" ]; then echo "alpha 127.0.0.1 18789 12345 running"; exit 0; fi',
+          "exit 0",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      writeRecordingCommand(localBin, "ssh", sshMarkerFile, 98);
 
-    const r = runWithEnv("alpha connect --probe-only", {
-      HOME: home,
-      PATH: `${localBin}:${process.env.PATH || ""}`,
-    });
+      const r = runWithEnv("alpha connect --probe-only", {
+        HOME: home,
+        PATH: `${localBin}:${process.env.PATH || ""}`,
+      });
 
-    expect(r.code).toBe(0);
-    expect(r.out).toContain("Probe complete: recovered OpenClaw gateway");
-    const calls = fs.readFileSync(markerFile, "utf8").trim().split("\n").filter(Boolean);
-    expect(calls).toContain("sandbox get alpha");
-    expect(calls.some((call) => call.startsWith("sandbox exec --name alpha -- sh -c"))).toBe(true);
-    expect(calls).not.toContain("sandbox ssh-config alpha");
-    expect(calls).not.toContain("sandbox connect alpha");
-    expect(fs.existsSync(sshMarkerFile)).toBe(false);
-  });
+      expect(r.code).toBe(0);
+      expect(r.out).toContain("Probe complete: recovered OpenClaw gateway");
+      const calls = fs.readFileSync(markerFile, "utf8").trim().split("\n").filter(Boolean);
+      expect(calls).toContain("sandbox get alpha");
+      expect(calls.some((call) => call.startsWith("sandbox exec --name alpha -- sh -c"))).toBe(
+        true,
+      );
+      expect(calls).not.toContain("sandbox ssh-config alpha");
+      expect(calls).not.toContain("sandbox connect alpha");
+      expect(fs.existsSync(sshMarkerFile)).toBe(false);
+    },
+  );
 
   it("waits for recovered gateway health before failing probe-only", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-cli-connect-probe-wait-"));
@@ -254,9 +262,7 @@ describe("CLI dispatch", () => {
         "      ;;",
         "  esac",
         "fi",
-        'if [ "$1" = "forward" ]; then',
-        "  exit 0",
-        "fi",
+        'if [ "$1" = "forward" ]; then [ "$2" = "list" ] && echo "alpha 127.0.0.1 18789 12345 running"; exit 0; fi',
         "exit 0",
       ].join("\n"),
       { mode: 0o755 },
@@ -301,6 +307,7 @@ describe("CLI dispatch", () => {
         '  if [[ "$cmd" == *"curl -so"* ]]; then echo "__NEMOCLAW_SANDBOX_EXEC_STARTED__"; echo RUNNING; exit 0; fi',
         '  if [[ "$cmd" == *"OPENCLAW="* ]]; then echo "__NEMOCLAW_SANDBOX_EXEC_STARTED__"; echo UNEXPECTED_RECOVERY; exit 1; fi',
         "fi",
+        'if [ "$1" = "forward" ] && [ "$2" = "list" ]; then echo "alpha 127.0.0.1 18789 12345 running"; exit 0; fi',
         "exit 0",
       ].join("\n"),
       { mode: 0o755 },
@@ -411,6 +418,7 @@ describe("CLI dispatch", () => {
           "  echo '  User sandbox'",
           "  exit 0",
           "fi",
+          'if [ "$1" = "forward" ] && [ "$2" = "list" ]; then echo "alpha 127.0.0.1 18789 12345 running"; exit 0; fi',
           "exit 0",
         ].join("\n"),
         { mode: 0o755 },
@@ -495,6 +503,7 @@ describe("CLI dispatch", () => {
           "  echo '  User sandbox'",
           "  exit 0",
           "fi",
+          'if [ "$1" = "forward" ] && [ "$2" = "list" ]; then echo "alpha 127.0.0.1 18789 12345 running"; exit 0; fi',
           "exit 0",
         ].join("\n"),
         { mode: 0o755 },
@@ -581,9 +590,7 @@ describe("CLI dispatch", () => {
         '  echo UNEXPECTED_SSH_CONFIG >> "$calls"',
         "  exit 1",
         "fi",
-        'if [ "$1" = "forward" ]; then',
-        "  exit 0",
-        "fi",
+        'if [ "$1" = "forward" ]; then [ "$2" = "list" ] && { echo "alpha 127.0.0.1 18789 12345 running"; echo "alpha 127.0.0.1 8642 12346 running"; }; exit 0; fi',
         "exit 0",
       ].join("\n"),
       { mode: 0o755 },
