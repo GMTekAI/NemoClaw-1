@@ -19,16 +19,20 @@ function withFakeOpenshellBinary<T>(fn: () => T): T {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-fake-openshell-"));
   const bin = path.join(dir, "openshell");
   const previous = process.env.NEMOCLAW_OPENSHELL_BIN;
+  const restoreEnv =
+    previous === undefined
+      ? () => {
+          delete process.env.NEMOCLAW_OPENSHELL_BIN;
+        }
+      : () => {
+          process.env.NEMOCLAW_OPENSHELL_BIN = previous;
+        };
   fs.writeFileSync(bin, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   process.env.NEMOCLAW_OPENSHELL_BIN = bin;
   try {
     return fn();
   } finally {
-    if (previous === undefined) {
-      delete process.env.NEMOCLAW_OPENSHELL_BIN;
-    } else {
-      process.env.NEMOCLAW_OPENSHELL_BIN = previous;
-    }
+    restoreEnv();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
@@ -105,13 +109,10 @@ beta  127.0.0.1  18789  12345  dead`,
       .spyOn(openshellRuntime, "runOpenshell")
       .mockImplementation((rawArgs: unknown) => {
         const args = Array.isArray(rawArgs) ? rawArgs.map(String) : [];
-        if (args[0] === "forward" && args[1] === "start" && args.includes("18789")) {
-          return { status: 1 } as never;
-        }
-        if (args[0] === "forward" && args[1] === "start" && args.includes("3978")) {
-          teamsForwardStarted = true;
-        }
-        return { status: 0 } as never;
+        const isForwardStart = args[0] === "forward" && args[1] === "start";
+        const startsTeamsForward = isForwardStart && args.includes("3978");
+        teamsForwardStarted = teamsForwardStarted || startsTeamsForward;
+        return { status: isForwardStart && args.includes("18789") ? 1 : 0 } as never;
       });
 
     expect(
