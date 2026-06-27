@@ -22,8 +22,8 @@ describe("docker-driver-gateway auth contract", () => {
   it("keeps the OpenShell gateway auth source review aligned with the generated config", () => {
     const reviewNote = fs.readFileSync(GATEWAY_AUTH_REVIEW_NOTE, "utf-8");
 
-    expect(reviewNote).toContain("NVIDIA/OpenShell@v0.0.67");
-    expect(reviewNote).toContain("ce788b50f9b1f977a4327e4484c5b663013dd9a5");
+    expect(reviewNote).toContain("NVIDIA/OpenShell@v0.0.71");
+    expect(reviewNote).toContain("a242f84bb367d6df7d4d133e95a93857406c67f7");
     expect(reviewNote).toContain("openshell-gateway-auth-source-contract.test.ts");
     expect(reviewNote).toContain("openshell_server::config_file::load()");
     expect(reviewNote).toContain("allow_unauthenticated_users");
@@ -47,12 +47,12 @@ describe("docker-driver-gateway auth contract", () => {
     expect(reviewNote).toContain("Markerless sandbox gateway recovery output");
     expect(reviewNote).toContain("Sessions admin gateway RPC helper");
     expect(reviewNote).toContain("Issue #5591 is the dependency-update umbrella");
-    expect(reviewNote).toContain("this PR pins and validates OpenShell `0.0.67`");
+    expect(reviewNote).toContain("this PR pins and validates OpenShell `0.0.71`");
     expect(reviewNote).toContain("Issue #2478 is not an acceptance target");
     expect(reviewNote).toContain("valid sandbox JWT access from Docker origin");
   });
 
-  it("emits an OpenShell 0.0.67-compatible sandbox JWT bundle and TTL contract", () => {
+  it("emits an OpenShell 0.0.71-compatible sandbox JWT bundle and TTL contract", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-config-"));
     try {
       const env = writeGatewayConfig(stateDir);
@@ -150,7 +150,7 @@ describe("docker-driver-gateway auth contract", () => {
     }
   });
 
-  it("emits the complete OpenShell 0.0.67 gateway auth TOML schema", () => {
+  it("emits the complete OpenShell 0.0.71 gateway auth TOML schema", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-config-"));
     try {
       const env = writeGatewayConfig(stateDir);

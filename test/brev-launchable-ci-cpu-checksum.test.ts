@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 
 const SCRIPT = path.join(import.meta.dirname, "..", "scripts", "brev-launchable-ci-cpu.sh");
 const ASSET = "openshell-x86_64-unknown-linux-musl.tar.gz";
-const PINNED_ASSET_SHA256 = "41bf6c672b7048e82335588e08aa8ece2bd619f999575937cc5894a989ef1707";
+const PINNED_ASSET_SHA256 = "b71e3a7fb6973c7c353521f88740885e6e661a199b6355140d45f4f8ab72d716";
 
 function writeExecutable(target: string, contents: string): void {
   fs.writeFileSync(target, contents, { mode: 0o755 });
@@ -141,7 +141,7 @@ done
 case "$(basename "$out")" in
   ${ASSET})
     tmp="$(mktemp -d)"
-    printf '#!/usr/bin/env bash\\nprintf "openshell 0.0.67\\\\n"\\n' > "$tmp/openshell"
+    printf '#!/usr/bin/env bash\\nprintf "openshell 0.0.71\\\\n"\\n' > "$tmp/openshell"
     chmod +x "$tmp/openshell"
     /usr/bin/tar -czf "$out" -C "$tmp" openshell
     rm -rf "$tmp"
@@ -199,7 +199,7 @@ function runLaunchable(options: {
       ...process.env,
       LAUNCH_LOG: fake.launchLog,
       NEMOCLAW_CLONE_DIR: fake.cloneDir,
-      OPENSHELL_VERSION: options.openshellVersion ?? "v0.0.67",
+      OPENSHELL_VERSION: options.openshellVersion ?? "v0.0.71",
       PATH: `${fake.fakeBin}:/usr/bin:/bin`,
       SKIP_DOCKER_PULL: "1",
       SUDO_USER: "tester",
@@ -221,7 +221,7 @@ describe("brev-launchable-ci-cpu.sh OpenShell checksum gate", { timeout: 30_000 
   it("rejects malformed OPENSHELL_VERSION before downloads or Docker pre-pulls", () => {
     const { fake, result } = runLaunchable({
       checksum: "match",
-      openshellVersion: "v0.0.67;touch /tmp/nemoclaw-version-injection",
+      openshellVersion: "v0.0.71;touch /tmp/nemoclaw-version-injection",
     });
     try {
       const out = combinedLaunchableOutput(result, fake.launchLog);
@@ -258,7 +258,7 @@ describe("brev-launchable-ci-cpu.sh OpenShell checksum gate", { timeout: 30_000 
       const out = combinedLaunchableOutput(result, fake.launchLog);
       expect(result.status, out).toBe(1);
       expect(out).toContain(
-        `OpenShell release checksum for ${ASSET} does not match NemoClaw-pinned v0.0.67 digest`,
+        `OpenShell release checksum for ${ASSET} does not match NemoClaw-pinned v0.0.71 digest`,
       );
       expect(fs.existsSync(fake.tarLog) ? fs.readFileSync(fake.tarLog, "utf-8") : "").toBe("");
       expect(fs.existsSync(fake.sudoLog) ? fs.readFileSync(fake.sudoLog, "utf-8") : "").not.toMatch(
@@ -274,7 +274,7 @@ describe("brev-launchable-ci-cpu.sh OpenShell checksum gate", { timeout: 30_000 
     try {
       const out = combinedLaunchableOutput(result, fake.launchLog);
       expect(result.status, out).toBe(0);
-      expect(out).toContain("OpenShell CLI installed: openshell 0.0.67");
+      expect(out).toContain("OpenShell CLI installed: openshell 0.0.71");
       expect(fs.readFileSync(fake.tarLog, "utf-8")).toContain(`xzf`);
       expect(fs.readFileSync(fake.sudoLog, "utf-8")).toMatch(/^install -m 755 .*openshell/m);
       expect(out).toContain("CI-Ready CPU launchable setup complete");

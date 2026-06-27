@@ -14,7 +14,7 @@ import {
   resolveDriftGatewayBin,
 } from "../../../dist/lib/onboard/docker-driver-gateway-launch";
 
-const PINNED_COMPAT_IMAGE_OVERRIDE = `registry.example/nemoclaw/gateway-compat:0.0.67@sha256:${"a".repeat(
+const PINNED_COMPAT_IMAGE_OVERRIDE = `registry.example/nemoclaw/gateway-compat:0.0.71@sha256:${"a".repeat(
   64,
 )}`;
 

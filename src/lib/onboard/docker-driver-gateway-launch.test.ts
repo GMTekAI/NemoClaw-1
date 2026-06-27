@@ -123,7 +123,7 @@ describe("docker-driver-gateway-launch", () => {
           },
         });
       });
-    }).toThrow(/not supported for the OpenShell 0\.0\.67 Docker-driver gateway/);
+    }).toThrow(/not supported for the OpenShell Docker-driver gateway/);
   });
 
   it("uses the host binary as the drift binary outside compatibility mode", () => {

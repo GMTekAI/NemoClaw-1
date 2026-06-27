@@ -785,9 +785,9 @@ function validateOpenShellGatewayAuthContractVitestJob(
       "openshell-gateway-auth-contract-vitest job must set NEMOCLAW_RUN_E2E_SCENARIOS=1",
     );
   }
-  if (jobEnv.NEMOCLAW_OPENSHELL_PIN_VERSION !== "0.0.67") {
+  if (jobEnv.NEMOCLAW_OPENSHELL_PIN_VERSION !== "0.0.71") {
     errors.push(
-      "openshell-gateway-auth-contract-vitest job must pin NEMOCLAW_OPENSHELL_PIN_VERSION=0.0.67",
+      "openshell-gateway-auth-contract-vitest job must pin NEMOCLAW_OPENSHELL_PIN_VERSION=0.0.71",
     );
   }
   if (

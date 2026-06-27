@@ -92,7 +92,7 @@ describe("buildDockerDriverGatewayEnv", () => {
         OPENSHELL_BIND_ADDRESS: "0.0.0.0",
         OPENSHELL_GATEWAY_CONFIG: "/tmp/openshell-gateway.toml",
       }),
-    ).toThrow(/not supported for the OpenShell 0\.0\.67 Docker-driver gateway/);
+    ).toThrow(/not supported for the OpenShell Docker-driver gateway/);
   });
 
   it("validates generated gateway auth config before runtime startup", () => {
@@ -176,7 +176,7 @@ describe("buildDockerGatewayDebEnvFile", () => {
     expect(next).toBe("OPENSHELL_DRIVERS=docker\n");
   });
 
-  it("removes stale auth-disable env so OpenShell 0.0.67 TOML auth policy stays authoritative", () => {
+  it("removes stale auth-disable env so OpenShell 0.0.71 TOML auth policy stays authoritative", () => {
     const next = buildDockerGatewayDebEnvFile(
       [
         "KEEP_ME=1",
@@ -327,6 +327,6 @@ describe("writeDockerGatewayDebEnvOverride", () => {
         skipSandboxBridgeReachability: false,
         verifySandboxBridgeGatewayReachableOrExit: async () => undefined,
       }),
-    ).toThrow(/not supported for the OpenShell 0\.0\.67 Docker-driver gateway/);
+    ).toThrow(/not supported for the OpenShell Docker-driver gateway/);
   });
 });

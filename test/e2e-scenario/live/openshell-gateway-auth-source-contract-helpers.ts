@@ -565,7 +565,7 @@ export async function runOpenShellGatewayAuthSourceContractScenario({
 
   const version = run(gatewayBin, ["--version"]);
   expect(version.status, commandOutput(version)).toBe(0);
-  expect(commandOutput(version)).toContain("0.0.67");
+  expect(commandOutput(version)).toContain("0.0.71");
 
   await requireDockerDaemon({ dockerBin, host, skip });
 
@@ -594,7 +594,7 @@ export async function runOpenShellGatewayAuthSourceContractScenario({
     OPENSHELL_BIND_ADDRESS: "127.0.0.1",
     OPENSHELL_DB_URL: `sqlite:${path.join(stateDir, "openshell.db")}`,
     OPENSHELL_DOCKER_NETWORK_NAME: networkName,
-    OPENSHELL_DOCKER_SUPERVISOR_IMAGE: "ghcr.io/nvidia/openshell/supervisor:0.0.67",
+    OPENSHELL_DOCKER_SUPERVISOR_IMAGE: "ghcr.io/nvidia/openshell/supervisor:0.0.71",
     OPENSHELL_DRIVERS: "docker",
     OPENSHELL_GRPC_ENDPOINT: `https://127.0.0.1:${port}`,
     OPENSHELL_LOCAL_TLS_DIR: certBundle.localTlsDir,

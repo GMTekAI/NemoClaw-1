@@ -160,7 +160,7 @@ function compatGatewayBindAddress(env: NodeJS.ProcessEnv): string {
   if (!raw) return DEFAULT_COMPAT_BIND_ADDRESS;
   if (raw === LOOPBACK_BIND_ADDRESS) return raw;
   throw new Error(
-    "Invalid NEMOCLAW_OPENSHELL_GATEWAY_COMPAT_BIND_ADDRESS; OpenShell 0.0.67 compatibility mode only supports 127.0.0.1.",
+    "Invalid NEMOCLAW_OPENSHELL_GATEWAY_COMPAT_BIND_ADDRESS; OpenShell compatibility mode only supports 127.0.0.1.",
   );
 }
 

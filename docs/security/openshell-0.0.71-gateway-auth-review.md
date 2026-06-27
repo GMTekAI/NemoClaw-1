@@ -1,13 +1,13 @@
-# OpenShell 0.0.67 Gateway Auth Review
+# OpenShell 0.0.71 Gateway Auth Review
 
-Review date: 2026-06-24
+Review date: 2026-06-26
 
-Scope: NemoClaw Docker-driver gateway config generated for OpenShell `0.0.67`.
+Scope: NemoClaw Docker-driver gateway config generated for OpenShell `0.0.71`.
 
 ## Source-of-Truth Boundaries
 
-- OpenShell gateway auth source contract: invalid state is an OpenShell `0.0.67` Docker-driver gateway launched from NemoClaw without the upstream config-file auth policy, local mTLS bundle, sandbox JWT bundle, or Docker bridge callback route that OpenShell expects. Source boundary is upstream OpenShell config/auth/listener/Docker-driver behavior; NemoClaw only generates config, local TLS/JWT material, bind policy, and launch env. Regression coverage is the live `openshell-gateway-auth-source-contract` scenario plus local config/env/launch tests. Remove the NemoClaw-local compatibility notes when OpenShell exposes a stable SDK/config contract that makes this generated config surface unnecessary.
-- Docker-hosted gateway compatibility container: invalid state is a host with older glibc than the downloaded `openshell-gateway` binary, where the gateway needs an explicitly opted-in compatibility container but still behaves like the host-side Docker-driver gateway. Source boundary is OpenShell Docker-driver bridge discovery plus Docker API access. NemoClaw requires `NEMOCLAW_OPENSHELL_GATEWAY_CONTAINER_PATCH=1` before using `--network host`, so OpenShell can bind the same Docker bridge callback addresses, and before bind-mounting the Docker socket so the gateway can drive the Docker compute driver. The container keeps the main listener on `127.0.0.1`, drops Linux capabilities, sets `no-new-privileges`, and publishes no additional container ports. This PR cannot republish OpenShell `0.0.67` gateway release assets or change the upstream host-support matrix; the source fix belongs in OpenShell packaging via static or older-glibc-compatible Linux gateway assets, or in a documented OpenShell policy that drops those older hosts. Regression coverage is the compatibility-container launch/config tests plus the live gateway auth source-contract scenario. Remove this shim when OpenShell publishes supported Linux gateway assets that launch directly on the accepted older-glibc hosts, or when NemoClaw intentionally drops those hosts. Rootless Docker/Podman remain outside the accepted path for this shim until the OpenShell Docker driver publishes a supported rootless compatibility contract.
+- OpenShell gateway auth source contract: invalid state is an OpenShell `0.0.71` Docker-driver gateway launched from NemoClaw without the upstream config-file auth policy, local mTLS bundle, sandbox JWT bundle, or Docker bridge callback route that OpenShell expects. Source boundary is upstream OpenShell config/auth/listener/Docker-driver behavior; NemoClaw only generates config, local TLS/JWT material, bind policy, and launch env. Regression coverage is the live `openshell-gateway-auth-source-contract` scenario plus local config/env/launch tests. Remove the NemoClaw-local compatibility notes when OpenShell exposes a stable SDK/config contract that makes this generated config surface unnecessary.
+- Docker-hosted gateway compatibility container: OpenShell `0.0.68` lowered the standalone Linux gateway's glibc floor to `2.28`, and `0.0.71` carries that support. Supported Ubuntu 20.04+, RHEL/Rocky 8+, Amazon Linux 2023+, and Fedora 32+ hosts therefore launch the gateway directly. NemoClaw retains the existing container bridge only as an explicit opt-in for an older host below the upstream support floor or a forced diagnostic run. `NEMOCLAW_OPENSHELL_GATEWAY_CONTAINER_PATCH=1` is still required before using `--network host` and read-only Docker socket access. The container keeps the main listener on `127.0.0.1`, drops Linux capabilities, sets `no-new-privileges`, and publishes no additional Docker ports. This fallback does not extend OpenShell's supported host matrix. Regression coverage is the compatibility-container launch/config tests plus the live gateway auth source-contract scenario. Rootless Docker/Podman remain outside the accepted path for this shim until the OpenShell Docker driver publishes a supported rootless compatibility contract.
 - Hermes env-file secret-boundary enforcement: invalid state is a Hermes sandbox recovery path that restarts or accepts a running gateway while `/sandbox/.hermes/.env` contains raw secret-shaped values that the Hermes startup validator would reject. Source boundary is the Hermes image entrypoint and `validate-hermes-env-secret-boundary.py`; NemoClaw only re-runs that source validator on recovery/probe paths that bypass the entrypoint. This PR cannot retroactively bake the validator into already-created older Hermes sandbox images, so missing-validator recovery now fails closed with a re-image instruction instead of claiming the boundary was checked. Regression coverage lives in `src/lib/actions/sandbox/hermes-secret-boundary-recovery.test.ts`, `src/lib/agent/runtime-hermes-secret-boundary-shape.test.ts`, and `src/lib/agent/runtime-hermes-secret-boundary-behavioural.test.ts`. Remove the NemoClaw recovery-side shim when Hermes exposes a stable recovery entrypoint that always re-enters the validator.
 - Markerless sandbox gateway recovery output: invalid state is newer OpenShell sandbox exec/relaunch output that starts the gateway launcher but omits NemoClaw's legacy `GATEWAY_PID=` or `ALREADY_RUNNING` markers. Source boundary is OpenShell exec/recovery output format; NemoClaw treats the text as "may have started" only and still requires a healthy gateway probe. Regression coverage lives in `test/cli/connect-recovery-markerless.test.ts`. Remove the markerless heuristic when OpenShell provides a stable machine-readable recovery marker.
 - Sessions admin gateway RPC helper: invalid state is a host CLI session reset/delete action that needs OpenClaw backend/operator scope while preserving gateway token, loopback, and auto-pair boundaries. Source boundary is OpenClaw's gateway-runtime API; NemoClaw's helper is limited to `sessions.reset` and `sessions.delete`. Regression coverage lives in `src/lib/actions/sandbox/sessions/gateway-rpc-call.test.ts`. Add new methods only with a caller, allowlist entry, and negative test.
@@ -17,23 +17,24 @@ Scope: NemoClaw Docker-driver gateway config generated for OpenShell `0.0.67`.
 Issue #5591 is the dependency-update umbrella. Its literal proposed-design clauses map across the split dependency PRs:
 
 - `Latest stable version of Hermes`: handled by PR #5594 (`dep/hermes-v2026.6.19`), not by this OpenShell PR.
-- `Latest version of OpenShell`: this PR pins and validates OpenShell `0.0.67`.
+- `Latest version of OpenShell`: this PR pins and validates OpenShell `0.0.71`.
 - `Latest stable version of OpenClaw`: handled by PR #5595 (`dep/openclaw-2026.6.9`), not by this OpenShell PR.
 
 Issue #2478 is not an acceptance target for this OpenShell version-pin PR. Its crash-loop clauses include "Every time it boots, it crashes on the same line" and "`connect` doesn't auto-recover" because `@homebridge/ciao` calls `os.networkInterfaces()` under sandbox netlink restrictions. The source fix remains the existing guard-chain/preload work validated by `test/e2e-scenario/live/issue-2478-crash-loop-recovery.test.ts`. This PR only updates markerless recovery wrapper behavior: newer OpenShell relaunch output can be accepted after, and only after, the gateway health probe succeeds.
 
 ## Source Review
 
-Reviewed upstream source at `NVIDIA/OpenShell@v0.0.67` (`ce788b50f9b1f977a4327e4484c5b663013dd9a5`):
+Reviewed upstream source at `NVIDIA/OpenShell@v0.0.71` (`a242f84bb367d6df7d4d133e95a93857406c67f7`):
 
 - `crates/openshell-core/src/config.rs`: `GatewayAuthConfig.allow_unauthenticated_users` is documented as an unsafe local-development escape hatch for user/CLI calls; sandbox supervisor calls still use gateway-minted sandbox JWTs.
-- `crates/openshell-server/src/config_file.rs`: OpenShell loads the gateway tables from config files through `openshell_server::config_file::load()`.
+- `crates/openshell-server/src/config_file.rs`: OpenShell loads the gateway tables from config files through `openshell_server::config_file::load()`; `0.0.71` broadens compute-driver names for out-of-tree sockets without changing the auth, TLS, mTLS, or gateway JWT tables used here.
 - `crates/openshell-server/src/lib.rs`: when `gateway_jwt` is configured, OpenShell reads the configured signing key, public key, and kid, then installs both `SandboxJwtIssuer` and `SandboxJwtAuthenticator`.
 - `crates/openshell-server/src/multiplex.rs`: mTLS user authentication promotes a verified client certificate into a user principal when `[openshell.gateway.mtls_auth] enabled = true`; when `allow_unauthenticated_users` is false, missing auth is rejected.
 - `crates/openshell-server/src/multiplex.rs`: user principals are rejected from sandbox-only methods with `permission_denied`, while sandbox principals are checked against the sandbox method allowlist.
 - `crates/openshell-server/src/lib.rs`: the server binds the configured main listener plus compute-driver `gateway_bind_addresses`, skipping only driver addresses already covered by a wildcard listener.
-- `crates/openshell-driver-docker/src/lib.rs`: Docker-driver sandboxes see loopback and arbitrary hostnames rewritten to `host.openshell.internal:<gateway-port>`, and native Linux Docker gets a bridge-gateway bind address such as `<docker-bridge-gateway-ip>:<gateway-port>`.
+- `crates/openshell-driver-docker/src/lib.rs`: Docker-driver sandboxes see loopback and arbitrary hostnames rewritten to `host.openshell.internal:<gateway-port>`, and native Linux Docker gets a bridge-gateway bind address such as `<docker-bridge-gateway-ip>:<gateway-port>`. OpenShell `0.0.70` also makes the configured `supervisor_image` authoritative ahead of local build artifacts.
 - `crates/openshell-server/src/auth/sandbox_jwt.rs`: `SandboxJwtAuthenticator` validates Ed25519/EdDSA sandbox JWTs, requires the configured `kid`, `iss`, `aud`, and `sub`, and rejects expired tokens while allowing non-matching `kid` values to fall through to other authenticators.
+- `crates/openshell-supervisor-network/src/l7`: OpenShell `0.0.68` blocks the h2c L7 tunnel escape before traffic reaches the gateway auth boundary.
 
 ## NemoClaw Boundary
 
@@ -45,17 +46,19 @@ The local TLS reuse check allows a fixed 5-minute certificate validity skew to a
 
 The Docker-hosted compatibility gateway requires `NEMOCLAW_OPENSHELL_GATEWAY_CONTAINER_PATCH=1` and keeps the main OpenShell listener on `127.0.0.1`. Sandbox callback reachability is preserved by OpenShell's Docker driver: it rewrites the sandbox-facing endpoint to `host.openshell.internal:<gateway-port>` and the OpenShell server adds the computed Docker bridge listener when that route is needed. `NEMOCLAW_OPENSHELL_GATEWAY_COMPAT_BIND_ADDRESS=0.0.0.0` is rejected so the main listener is not widened. The compatibility container does not publish Docker ports; it uses host networking only for parity with the host gateway's Docker bridge listener calculation after explicit opt-in.
 
-Package-managed Docker-driver gateways also reject `NEMOCLAW_GATEWAY_BIND_ADDRESS=0.0.0.0` while the 0.0.67 Docker-driver config is active. Use the dashboard bind setting for remote dashboard exposure instead of widening the OpenShell gateway surface.
+Package-managed Docker-driver gateways also reject `NEMOCLAW_GATEWAY_BIND_ADDRESS=0.0.0.0` while the 0.0.71 Docker-driver config is active. Use the dashboard bind setting for remote dashboard exposure instead of widening the OpenShell gateway surface.
 
 ## Upstream Contract Coverage
 
-`test/e2e-scenario/live/openshell-gateway-auth-source-contract.test.ts` is the live/source-contract scenario for this PR. It uses OpenShell 0.0.67 plus NemoClaw-generated `OPENSHELL_GATEWAY_CONFIG` and verifies:
+`test/e2e-scenario/live/openshell-gateway-auth-source-contract.test.ts` is the live/source-contract scenario for this PR. It uses OpenShell 0.0.71 plus NemoClaw-generated `OPENSHELL_GATEWAY_CONFIG` and verifies:
 
 - no-token Docker sandbox-origin access to a user-callable gateway API is rejected or unreachable;
 - valid sandbox JWT access from Docker origin to an allowlisted sandbox method reaches OpenShell auth over `host.openshell.internal` with the generated guest mTLS material, and a token minted for one sandbox is rejected when it requests another sandbox config;
 - inherited `OPENSHELL_DISABLE_GATEWAY_AUTH=true` remains scrubbed from the launch env.
 
-Local run against `NVIDIA/OpenShell@v0.0.67`:
+The live source-contract scenario passed locally against the SHA-256-verified OpenShell `0.0.71` macOS arm64 release gateway and a Docker-backed sandbox probe.
+
+Local run against `NVIDIA/OpenShell@v0.0.71`:
 
 - `cargo test -p openshell-server sandbox_jwt -- --nocapture`: passed 7 sandbox JWT tests, including `mint_and_validate_round_trip`, `token_signed_by_other_key_is_rejected`, `malformed_token_is_rejected`, and `expired_token_is_rejected`.
 - `cargo test -p openshell-server mtls_auth -- --nocapture`: passed mTLS user principal tests, including the missing-peer-identity rejection.
@@ -67,7 +70,7 @@ Local run against `NVIDIA/OpenShell@v0.0.67`:
 
 ## Local Coverage
 
-- `src/lib/onboard/docker-driver-gateway-config-auth-contract.test.ts` verifies doc alignment with the OpenShell 0.0.67 source contract plus sandbox JWT TTL, wrong kid, wrong gateway id, expired token, and cross-gateway rejection.
+- `src/lib/onboard/docker-driver-gateway-config-auth-contract.test.ts` verifies doc alignment with the OpenShell 0.0.71 source contract plus sandbox JWT TTL, wrong kid, wrong gateway id, expired token, and cross-gateway rejection.
 - `src/lib/onboard/docker-driver-gateway-config-toml.test.ts` verifies the generated TOML, file permissions for signing key, public key, and kid files, and the auth/TLS config shape.
 - `src/lib/onboard/docker-driver-gateway-jwt-bundle.test.ts` verifies valid bundle reuse, invalid complete bundle regeneration, incomplete bundle regeneration, and recovery from a crash that left a partial `.jwt-tmp-*` staging directory.
 - `src/lib/onboard/docker-driver-gateway-env.test.ts` verifies package-managed Docker-driver gateway startup uses HTTPS, publishes the local TLS dir, rejects wildcard binds, and scrubs stale auth-disable env while gateway JWT auth is active.

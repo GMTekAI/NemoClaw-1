@@ -13,14 +13,14 @@ import { redact, runCapture } from "../dist/lib/runner";
 
 const runnerPath = path.join(import.meta.dirname, "..", "dist", "lib", "runner.js");
 const PINNED_OPEN_SHELL_SHA256 = {
-  cliDarwinArm64: "f3852e15266eff963a43b00e58533f1c35c851a82cb40f5a7c1c49372a34728f",
-  cliLinuxArm64: "f7c381659b910864b584c7c1f10126420d6f2baaae1118c657482e23bfde86ff",
-  cliLinuxX64: "41bf6c672b7048e82335588e08aa8ece2bd619f999575937cc5894a989ef1707",
-  gatewayDarwinArm64: "36eaf14058e9f26119d052e1a0aab02292d5e61fbbe45c2bacb166c8b7f4394d",
-  gatewayLinuxArm64: "766236f7ca0e5ca4c600cc9e934947a0cd4c985c189dc874824476fec4a5be1f",
-  gatewayLinuxX64: "e28e63b35cdf147c1be89bec361c9ba58690d08c94fd91ec90b1752b1900b99d",
-  sandboxLinuxArm64: "733ba3bf68151d1a763f9cdf76f042d26154767bebb58a03ab162d4322f84b6a",
-  sandboxLinuxX64: "7dce9cb100ff52d883ff7caccacaff4b2d06e58fa49aab6107fcf063ef0edbf6",
+  cliDarwinArm64: "1ef9a2b447a35391a6a0f417f4383d99f3e928e443cf86ed190002ec937a8871",
+  cliLinuxArm64: "b86b33d9e7c960cd04bc99a9539964f1cb84ae4a9886dd437c0566b64e093390",
+  cliLinuxX64: "b71e3a7fb6973c7c353521f88740885e6e661a199b6355140d45f4f8ab72d716",
+  gatewayDarwinArm64: "26fa5b4dcb6d2631f7212639d087f37d8b0fc50c6f6cec856e019c22847e5bc9",
+  gatewayLinuxArm64: "e9b258b3fb38fd68ffc37675efe8a027750087f630cf19ad248e94eff5464091",
+  gatewayLinuxX64: "85fe7c9d939cb2d32389182e816ac388ee1c95dbf5dae1c3dcd37d5bd979db7d",
+  sandboxLinuxArm64: "e60dc50524c56460faa8c37617725280a6e1205e73e5cc888b4fd0d148ccb71c",
+  sandboxLinuxX64: "dbf7fffb285e9ffca7ffd439118b7aadd4e5c4df45c73f0fff89fcca9b19c47d",
 };
 
 type SpawnCallOptions = {

@@ -12,7 +12,7 @@ import {
 import fs from "node:fs";
 import path from "node:path";
 
-// See docs/security/openshell-0.0.67-gateway-auth-review.md for the source-of-truth review.
+// See docs/security/openshell-0.0.71-gateway-auth-review.md for the source-of-truth review.
 export const DOCKER_DRIVER_GATEWAY_CONFIG_NAME = "openshell-gateway.toml";
 export const DOCKER_DRIVER_GATEWAY_JWT_TTL_SECS = 3600;
 const GATEWAY_JWT_DIR_NAME = "jwt";
@@ -209,7 +209,7 @@ export function ensureDockerDriverGatewayJwtBundle(stateDir: string): DockerDriv
     } else if (present > 0) {
       // Invalid state boundary: this directory is NemoClaw-owned local gateway
       // state, and a manual edit or interrupted prior write can leave only part
-      // of the OpenShell v0.0.67 gateway_jwt bundle. OpenShell requires all three
+      // of the OpenShell v0.0.71 gateway_jwt bundle. OpenShell requires all three
       // files to agree, so the safe source of truth is a freshly generated local
       // bundle, staged outside the final jwt directory and renamed into place.
       fs.rmSync(jwtDir, { recursive: true, force: true });
