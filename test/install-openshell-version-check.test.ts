@@ -543,11 +543,18 @@ exit 0`,
       const installDir = path.join(tmp, "install-bin");
       const artifactLog = path.join(tmp, "artifacts.log");
       fs.mkdirSync(fakeBin);
+      fs.mkdirSync(installDir);
 
       writeExecutable(
         path.join(fakeBin, "uname"),
         `#!/usr/bin/env bash
 if [ "\${1:-}" = "-m" ]; then echo "x86_64"; else echo "Linux"; fi`,
+      );
+      writeExecutable(
+        path.join(installDir, "openshell"),
+        `#!/usr/bin/env bash
+if [ "\${1:-}" = "--version" ]; then echo "openshell 0.0.71"; exit 0; fi
+exit 0`,
       );
       writeExecutable(
         path.join(fakeBin, "gh"),
@@ -609,7 +616,7 @@ exit 1`,
           NEMOCLAW_NON_INTERACTIVE: "1",
           NEMOCLAW_OPENSHELL_CHANNEL: "artifact",
           NEMOCLAW_OPENSHELL_ARTIFACT_RUN_ID: "28267935010",
-          PATH: `${fakeBin}:/usr/bin:/bin`,
+          PATH: `${fakeBin}:${installDir}:/usr/bin:/bin`,
         },
         encoding: "utf8",
       });

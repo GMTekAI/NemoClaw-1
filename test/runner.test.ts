@@ -657,10 +657,17 @@ describe("regression guards", () => {
     it("install-openshell.sh gh-absent path uses curl directly", () => {
       const scriptPath = path.join(import.meta.dirname, "..", "scripts", "install-openshell.sh");
       const tmpBin = fs.mkdtempSync(path.join(os.tmpdir(), "gh-absent-"));
+      fs.writeFileSync(
+        path.join(tmpBin, "openshell"),
+        `#!/usr/bin/env bash
+if [ "\${1:-}" = "--version" ]; then echo "openshell 0.0.1"; exit 0; fi
+# request-body-credential-rewrite websocket-credential-rewrite allow_all_known_mcp_methods
+exit 0
+`,
+        { mode: 0o755 },
+      );
       const stub = `
         #!/usr/bin/env bash
-        openshell() { echo "openshell 0.0.1"; }
-        export -f openshell
         export PATH="${tmpBin}:/usr/bin:/bin"
         command() { if [ "\${1:-}" = "-v" ] && [ "\${2:-}" = "gh" ]; then return 1; fi; builtin command "$@"; }
         curl() {
@@ -728,14 +735,21 @@ describe("regression guards", () => {
       const scriptPath = path.join(import.meta.dirname, "..", "scripts", "install-openshell.sh");
       const tmpBin = fs.mkdtempSync(path.join(os.tmpdir(), "gh-stub-"));
       const checksumLog = path.join(tmpBin, "sha256sum.log");
+      fs.writeFileSync(
+        path.join(tmpBin, "openshell"),
+        `#!/usr/bin/env bash
+if [ "\${1:-}" = "--version" ]; then echo "openshell 0.0.1"; exit 0; fi
+# request-body-credential-rewrite websocket-credential-rewrite allow_all_known_mcp_methods
+exit 0
+`,
+        { mode: 0o755 },
+      );
       const ghStub = path.join(tmpBin, "gh");
       fs.writeFileSync(ghStub, "#!/bin/sh\nexit 4\n");
       fs.chmodSync(ghStub, 0o755);
 
       const stub = `
         #!/usr/bin/env bash
-        openshell() { echo "openshell 0.0.1"; }
-        export -f openshell
         export PATH="${tmpBin}:/usr/bin:/bin"
         curl() { echo "CURL_FALLBACK $*"; return 0; }
         export -f curl
