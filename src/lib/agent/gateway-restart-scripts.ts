@@ -128,17 +128,17 @@ export function buildOpenClawGatewayRestartScript(port: number): string {
  */
 export function buildRecoveryScript(
   agent: AgentDefinition & { runtime: { kind: "terminal" } },
-  port: number,
+  port?: number,
   options?: { hermesDashboard?: HermesDashboardRecoveryConfig | null },
 ): typeof TERMINAL_AGENT_RECOVERY_SCRIPT;
 export function buildRecoveryScript(
   agent: AgentDefinition | null,
-  port: number,
+  port?: number,
   options?: { hermesDashboard?: HermesDashboardRecoveryConfig | null },
 ): string | null;
 export function buildRecoveryScript(
   agent: AgentDefinition | null,
-  port: number,
+  port = agent?.forwardPort ?? agent?.healthProbe?.port ?? DASHBOARD_PORT,
   options: { hermesDashboard?: HermesDashboardRecoveryConfig | null } = {},
 ): AgentRecoveryScript {
   if (!agent) return null;
@@ -152,11 +152,17 @@ export function buildRecoveryScript(
   const usesValidatedBinary = configuredGatewayCommand === defaultGatewayCommand;
   const customGatewayExecutable = configuredGatewayCommand.split(/\s+/)[0] ?? binaryName;
   const staleGatewayPattern = selfSafeGatewayProcessPattern(configuredGatewayCommand);
+  const isHermes = agent.name === "hermes";
   const validationSteps = usesValidatedBinary
-    ? [
-        `AGENT_BIN=${shellQuote(binaryPath)}; if [ ! -x "$AGENT_BIN" ]; then AGENT_BIN="$(command -v ${shellQuote(binaryName)})"; fi;`,
-        'if [ -z "$AGENT_BIN" ]; then echo AGENT_MISSING; exit 1; fi;',
-      ]
+    ? isHermes
+      ? [
+          `AGENT_BIN=${shellQuote(binaryPath)};`,
+          'if [ ! -x "$AGENT_BIN" ]; then echo AGENT_MISSING; exit 1; fi;',
+        ]
+      : [
+          `AGENT_BIN=${shellQuote(binaryPath)}; if [ ! -x "$AGENT_BIN" ]; then AGENT_BIN="$(command -v ${shellQuote(binaryName)})"; fi;`,
+          'if [ -z "$AGENT_BIN" ]; then echo AGENT_MISSING; exit 1; fi;',
+        ]
     : [
         `GATEWAY_CMD_BIN=${shellQuote(customGatewayExecutable)};`,
         'case "$GATEWAY_CMD_BIN" in */*) [ -x "$GATEWAY_CMD_BIN" ] || { echo AGENT_MISSING; exit 1; } ;; *) command -v "$GATEWAY_CMD_BIN" >/dev/null 2>&1 || { echo AGENT_MISSING; exit 1; } ;; esac;',
@@ -166,7 +172,6 @@ export function buildRecoveryScript(
   // survive past the gateway launch. Otherwise the warning explaining why the
   // gateway is about to crash gets wiped by the same launch that is about to
   // crash on a missing guard. (#2478)
-  const isHermes = agent.name === "hermes";
   const hermesHome = isHermes ? "export HERMES_HOME=/sandbox/.hermes; " : "";
   const hermesLaunchEnv = isHermes ? `env ${hermesGatewayEnvPrefix()} ` : "";
   const launchCommand = usesValidatedBinary

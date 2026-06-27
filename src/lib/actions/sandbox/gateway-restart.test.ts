@@ -334,6 +334,29 @@ describe("restartSandboxGateway — host-mediated gateway restart", () => {
     }
   });
 
+  it("fails closed when the persisted agent lookup fails", () => {
+    const restore = silenceConsole();
+    try {
+      const deps = baseDeps({
+        getSessionAgent: () => null,
+        getSandbox: () => {
+          throw new Error("registry unavailable");
+        },
+      });
+      const result = restartSandboxGateway("alpha", { deps });
+
+      expect(result).toMatchObject({
+        ok: false,
+        failureLayer: "unsupported agent",
+        detail: expect.stringContaining("Sandbox agent lookup failed: registry unavailable."),
+      });
+      expect(deps.buildOpenClawGatewayRestartScript).not.toHaveBeenCalled();
+      expect(deps.executeSandboxExecCommand).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
+
   it("refuses custom gateway agents without a supported restart runtime", () => {
     const restore = silenceConsole();
     try {

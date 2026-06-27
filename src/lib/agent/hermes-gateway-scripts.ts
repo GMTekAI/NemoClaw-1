@@ -68,8 +68,8 @@ export function buildHermesDashboardProcessRecoveryScript(
     '[ "$_GUARDS_MISSING" = "1" ] && { _E="[gateway-recovery] ERROR: NODE_OPTIONS missing safety-net preload or ciao preload after trusted recovery - refusing unguarded dashboard relaunch (#2478/#2701)"; echo "$_E" >&2; exit 1; };',
     "[ -f ~/.bashrc ] && . ~/.bashrc;",
     buildHermesRuntimeEnvBoundaryGuard(),
-    'AGENT_BIN=/usr/local/bin/hermes; if [ ! -x "$AGENT_BIN" ]; then AGENT_BIN="$(command -v hermes)"; fi;',
-    'if [ -z "$AGENT_BIN" ]; then echo AGENT_MISSING; exit 1; fi;',
+    "AGENT_BIN=/usr/local/bin/hermes;",
+    'if [ ! -x "$AGENT_BIN" ]; then echo AGENT_MISSING; exit 1; fi;',
     ...buildHermesDashboardRecoveryLines(config),
   ].join(" ");
 }

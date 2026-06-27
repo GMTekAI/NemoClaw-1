@@ -172,6 +172,7 @@ describe("buildHermesGatewayRecoveryScript (#2426)", () => {
     expect(script).toContain('"$AGENT_BIN" gateway run');
     expect(script).not.toContain('"$AGENT_BIN" gateway run --port 8642');
     expect(script).not.toContain("_NEMOCLAW_RESTART_HEALTH_PORT");
+    expect(script).not.toContain("command -v 'hermes'");
   });
 });
 
@@ -195,6 +196,8 @@ describe("buildOpenClawGatewayRestartScript (#2426)", () => {
     expect(script).toContain('"$OPENCLAW" gateway run --port 18789');
     expect(script).toContain('pkill -TERM -f "$_GATEWAY_PROC_PATTERN"');
     expect(script).toContain("GATEWAY_STALE_PROCESSES");
+    expect(script).toContain("O_NONBLOCK");
+    expect(script).toContain("errno.ENXIO");
     expect(script).not.toContain("ALREADY_RUNNING");
   });
 });

@@ -76,11 +76,7 @@ export function sandboxAgentName(
   sandboxName: string,
   getSandbox: SandboxAgentLookup,
 ): string | null {
-  try {
-    return getSandbox(sandboxName)?.agent ?? null;
-  } catch {
-    return null;
-  }
+  return getSandbox(sandboxName)?.agent ?? null;
 }
 
 function gatewayRestartOutput(result: GatewayRestartCommandResult): string {
@@ -193,7 +189,18 @@ export function restartSandboxGatewayWithDeps(
   },
 ): GatewayRestartResult {
   const agent = deps.getSessionAgent(sandboxName);
-  const persistedAgent = sandboxAgentName(sandboxName, deps.getSandbox);
+  let persistedAgent: string | null;
+  try {
+    persistedAgent = sandboxAgentName(sandboxName, deps.getSandbox);
+  } catch (error) {
+    const reason =
+      error instanceof Error && error.message.trim()
+        ? `Sandbox agent lookup failed: ${error.message}.`
+        : "Sandbox agent lookup failed.";
+    const detail = unsupportedGatewayRestartAgentDetail("unknown", reason);
+    printGatewayRestartFailure(sandboxName, "unsupported agent", detail);
+    return { ok: false, failureLayer: "unsupported agent", detail };
+  }
   const agentName = agent?.name ?? persistedAgent ?? "openclaw";
   const dashboardPort = deps.resolveSandboxDashboardPort(sandboxName);
 

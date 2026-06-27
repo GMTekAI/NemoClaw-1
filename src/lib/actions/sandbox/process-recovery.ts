@@ -398,7 +398,17 @@ function recoverSandboxProcesses(
 ): boolean {
   const agent = agentRuntime.getSessionAgent(sandboxName);
   const dashboardPort = resolveSandboxDashboardPort(sandboxName);
-  const persistedAgent = sandboxAgentName(sandboxName, registry.getSandbox);
+  let persistedAgent: string | null;
+  try {
+    persistedAgent = sandboxAgentName(sandboxName, registry.getSandbox);
+  } catch (error) {
+    const detail =
+      error instanceof Error && error.message.trim()
+        ? `Sandbox agent lookup failed: ${error.message}.`
+        : "Sandbox agent lookup failed.";
+    quiet || printGatewayRestartFailure(sandboxName, "unsupported agent", detail);
+    return false;
+  }
   const hasRecoveryMarker = (result: SandboxCommandResult | null) =>
     !!(
       result &&

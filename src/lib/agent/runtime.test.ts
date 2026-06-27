@@ -89,6 +89,12 @@ describe("buildRecoveryScript", () => {
     expect(script).toContain("--port 18789");
   });
 
+  it("derives the recovery port from agent metadata when omitted", () => {
+    const script = buildRecoveryScript(minimalAgent);
+    expect(script).toContain("--port 19000");
+    expect(script).not.toContain("--port undefined");
+  });
+
   it("launches the default gateway command through the validated agent binary", () => {
     const script = buildRecoveryScript(minimalAgent, 19000);
     expect(script).toContain("command -v 'test-agent'");
@@ -108,6 +114,7 @@ describe("buildRecoveryScript", () => {
     expect(script).toContain('"$AGENT_BIN" gateway run');
     expect(script).not.toContain('"$AGENT_BIN" gateway run --port 8642');
     expect(script).not.toContain("hermes gateway run --port 8642");
+    expect(script).not.toContain("command -v 'hermes'");
   });
 
   it("relaunches the optional Hermes dashboard during recovery", () => {
@@ -141,6 +148,8 @@ describe("buildRecoveryScript", () => {
     expect(sourceIndex).toBeGreaterThan(validationIndex);
     expect(script).toContain('. "$_NEMOCLAW_RECOVERY_SOURCE_ENV"');
     expect(script).toContain("/usr/local/bin/hermes");
+    expect(script).not.toContain("command -v hermes");
+    expect(script).toContain('if [ ! -x "$AGENT_BIN" ]; then echo AGENT_MISSING; exit 1; fi;');
     expect(script).toContain("_HERMES_DASHBOARD_HOME=/sandbox/.hermes/dashboard-home");
     expect(script).toContain("/usr/local/lib/nemoclaw/seed-hermes-dashboard-config.py");
     expect(script).toContain('HERMES_HOME="$_HERMES_DASHBOARD_HOME"');
