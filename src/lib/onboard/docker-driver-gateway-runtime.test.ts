@@ -6,12 +6,11 @@ import os from "node:os";
 import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-
+import * as dockerDriverGatewayEnv from "./docker-driver-gateway-env";
 import {
   createDockerDriverGatewayRuntimeHelpers,
   type DockerDriverGatewayRuntimeDeps,
 } from "./docker-driver-gateway-runtime";
-import * as dockerDriverGatewayEnv from "./docker-driver-gateway-env";
 import {
   getDockerDriverGatewayRuntimeMarkerPath,
   writeDockerDriverGatewayRuntimeMarkerForStateDir,
@@ -341,5 +340,36 @@ describe("docker-driver gateway runtime helpers", () => {
     expect(runCapture).toHaveBeenCalledWith(["ps", "-p", String(pid), "-o", "args="], {
       ignoreError: true,
     });
+  });
+
+  it("detects a replaced executable against the compatibility identity gateway binary", () => {
+    const pid = 12_349;
+    const identityGatewayBin = "/opt/openshell/openshell-gateway";
+    const replacementGatewayBin = "/opt/openshell/replaced/openshell-gateway";
+    const desiredEnv = { OPENSHELL_DRIVERS: "docker" };
+    const { helpers } = makeHelpers();
+    const originalExistsSync = fs.existsSync.bind(fs);
+    const originalReadFileSync = fs.readFileSync.bind(fs);
+    const originalReadlinkSync = fs.readlinkSync.bind(fs);
+    vi.spyOn(fs, "existsSync").mockImplementation(((candidate) => {
+      if (String(candidate) === `/proc/${pid}/environ`) return true;
+      if (String(candidate) === `/proc/${pid}/exe`) return true;
+      return originalExistsSync(candidate);
+    }) as typeof fs.existsSync);
+    vi.spyOn(fs, "readFileSync").mockImplementation(((candidate, options) => {
+      if (String(candidate) === `/proc/${pid}/environ`) {
+        return "OPENSHELL_DRIVERS=docker\0";
+      }
+      return originalReadFileSync(candidate, options as never);
+    }) as typeof fs.readFileSync);
+    vi.spyOn(fs, "readlinkSync").mockImplementation(((candidate, options) => {
+      if (String(candidate) === `/proc/${pid}/exe`) return replacementGatewayBin;
+      return originalReadlinkSync(candidate, options as never);
+    }) as typeof fs.readlinkSync);
+
+    expect(
+      helpers.getDockerDriverGatewayRuntimeDrift(pid, desiredEnv, identityGatewayBin, "linux")
+        ?.reason,
+    ).toBe(`executable=${replacementGatewayBin} (expected ${identityGatewayBin})`);
   });
 });

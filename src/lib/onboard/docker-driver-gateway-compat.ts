@@ -258,13 +258,19 @@ export function buildContainerizedDockerDriverGatewayLaunch(
 
 export function prepareContainerizedDockerDriverGatewayLaunch(
   launch: DockerDriverGatewayLaunch,
+  removeContainer: typeof dockerForceRm = dockerForceRm,
 ): void {
   if (launch.mode !== "container" || !launch.containerName) return;
-  dockerForceRm(launch.containerName, {
+  const result = removeContainer(launch.containerName, {
     ignoreError: true,
     suppressOutput: true,
     timeout: 30_000,
   });
+  if (result.error) {
+    throw new Error(
+      `Failed to remove prior OpenShell compatibility gateway container '${launch.containerName}': ${result.error.message}`,
+    );
+  }
 }
 
 export function logContainerizedDockerDriverGatewayLaunch(
@@ -276,7 +282,7 @@ export function logContainerizedDockerDriverGatewayLaunch(
   log(`  OpenShell gateway compatibility patch active (${launch.reason}).`);
   log("  Running openshell-gateway inside a Docker compatibility container.");
   warn(
-    "  SECURITY NOTICE: compatibility container uses host networking plus Docker API access; enabled only by NEMOCLAW_OPENSHELL_GATEWAY_CONTAINER_PATCH=1.",
+    "  SECURITY NOTICE: compatibility container uses host networking plus Docker API access; enabled only by NEMOCLAW_OPENSHELL_GATEWAY_CONTAINER_PATCH=1. Review/removal conditions: docs/security/openshell-0.0.71-gateway-auth-review.md#source-of-truth-boundaries.",
   );
   log(
     "  Compatibility gateway bind: 127.0.0.1 main listener plus OpenShell Docker-driver bridge reachability.",

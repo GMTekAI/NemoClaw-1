@@ -5,7 +5,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+import { prepareContainerizedDockerDriverGatewayLaunch } from "../../../dist/lib/onboard/docker-driver-gateway-compat";
 
 import {
   buildDockerDriverGatewayLaunch,
@@ -227,11 +229,37 @@ describe("docker-driver-gateway compatibility container", () => {
       "  Compatibility gateway bind: 127.0.0.1 main listener plus OpenShell Docker-driver bridge reachability.",
     );
     expect(warnings).toEqual([
-      "  SECURITY NOTICE: compatibility container uses host networking plus Docker API access; enabled only by NEMOCLAW_OPENSHELL_GATEWAY_CONTAINER_PATCH=1.",
+      "  SECURITY NOTICE: compatibility container uses host networking plus Docker API access; enabled only by NEMOCLAW_OPENSHELL_GATEWAY_CONTAINER_PATCH=1. Review/removal conditions: docs/security/openshell-0.0.71-gateway-auth-review.md#source-of-truth-boundaries.",
     ]);
     expect(messages).toContain(
       "  Gateway auth boundary: host-side OpenShell CLI uses local mTLS; sandbox callbacks use mTLS plus OpenShell gateway JWT.",
     );
+  });
+
+  it("fails within the bounded dockerForceRm timeout when Docker hangs", () => {
+    const timeoutError = Object.assign(new Error("spawnSync docker ETIMEDOUT"), {
+      code: "ETIMEDOUT",
+    });
+    const removeContainer = vi.fn(() => ({ error: timeoutError })) as unknown as NonNullable<
+      Parameters<typeof prepareContainerizedDockerDriverGatewayLaunch>[1]
+    >;
+    const launch = {
+      command: "docker",
+      args: [],
+      env: {},
+      mode: "container" as const,
+      processGatewayBin: null,
+      containerName: "nemoclaw-openshell-gateway",
+    };
+
+    expect(() => prepareContainerizedDockerDriverGatewayLaunch(launch, removeContainer)).toThrow(
+      /Failed to remove prior OpenShell compatibility gateway container.*ETIMEDOUT/,
+    );
+    expect(removeContainer).toHaveBeenCalledWith("nemoclaw-openshell-gateway", {
+      ignoreError: true,
+      suppressOutput: true,
+      timeout: 30_000,
+    });
   });
 
   it("rejects wildcard binds for the compatibility gateway", () => {

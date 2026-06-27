@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -12,6 +13,90 @@ import {
   jwtBundlePaths,
   writeGatewayConfig,
 } from "../../../test/support/openshell-gateway-config-helpers";
+import { ensureDockerDriverGatewayJwtBundle } from "./docker-driver-gateway-config";
+
+const CONCURRENT_CALLER_COUNT = 12;
+
+function spawnConcurrentJwtBundleCaller(
+  stateDir: string,
+  startPath: string,
+): {
+  ready: Promise<void>;
+  done: Promise<{ code: number | null; stderr: string; stdout: string }>;
+} {
+  const script = String.raw`
+const crypto = (await import("node:crypto")).default;
+const fs = (await import("node:fs")).default;
+
+const loaded = await import("./src/lib/onboard/docker-driver-gateway-config.ts");
+const ensureDockerDriverGatewayJwtBundle =
+  (loaded.default ?? loaded).ensureDockerDriverGatewayJwtBundle;
+process.stdout.write("READY\n");
+const waitView = new Int32Array(new SharedArrayBuffer(4));
+const deadline = Date.now() + 15_000;
+while (!fs.existsSync(process.env.NEMOCLAW_TEST_JWT_START)) {
+  if (Date.now() >= deadline) throw new Error("timed out waiting for concurrent JWT start");
+  Atomics.wait(waitView, 0, 0, 5);
+}
+const bundle = ensureDockerDriverGatewayJwtBundle(process.env.NEMOCLAW_TEST_JWT_STATE_DIR);
+const signingKeyHash = crypto
+  .createHash("sha256")
+  .update(fs.readFileSync(bundle.signingKeyPath))
+  .digest("hex");
+const kid = fs.readFileSync(bundle.kidPath, "utf8").trim();
+process.stdout.write("RESULT " + JSON.stringify({ kid, signingKeyHash }) + "\n");
+`;
+  const child = spawn(
+    process.execPath,
+    ["--import", "tsx", "--input-type=module", "--eval", script],
+    {
+      cwd: path.resolve(import.meta.dirname, "../../.."),
+      env: {
+        ...process.env,
+        NEMOCLAW_TEST_JWT_START: startPath,
+        NEMOCLAW_TEST_JWT_STATE_DIR: stateDir,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  let stdout = "";
+  let stderr = "";
+  let readySettled = false;
+  let resolveReady!: () => void;
+  let rejectReady!: (error: Error) => void;
+  const ready = new Promise<void>((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+  const readyTimeout = setTimeout(() => {
+    if (!readySettled) rejectReady(new Error(`JWT child did not become ready: ${stderr}`));
+  }, 15_000);
+  child.stdout.on("data", (chunk: Buffer) => {
+    stdout += chunk.toString("utf8");
+    if (!readySettled && stdout.includes("READY\n")) {
+      readySettled = true;
+      clearTimeout(readyTimeout);
+      resolveReady();
+    }
+  });
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString("utf8");
+  });
+  const done = new Promise<{ code: number | null; stderr: string; stdout: string }>(
+    (resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", (code) => {
+        clearTimeout(readyTimeout);
+        if (!readySettled) {
+          readySettled = true;
+          rejectReady(new Error(`JWT child exited before ready: ${stderr}`));
+        }
+        resolve({ code, stderr, stdout });
+      });
+    },
+  );
+  return { ready, done };
+}
 
 describe("docker-driver-gateway JWT bundle", () => {
   it("preserves a complete gateway JWT bundle across config rewrites", () => {
@@ -122,17 +207,52 @@ describe("docker-driver-gateway JWT bundle", () => {
     }
   });
 
-  it("fails fast while another process is generating the gateway JWT bundle", () => {
+  it("supports a bounded no-wait policy while another process owns the JWT lock", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-config-"));
     try {
       fs.writeFileSync(path.join(stateDir, ".jwt-generating"), "other-process\n", {
         mode: 0o600,
       });
 
-      expect(() => writeGatewayConfig(stateDir)).toThrow(
+      expect(() => ensureDockerDriverGatewayJwtBundle(stateDir, { lockWaitMs: 0 })).toThrow(
         /JWT bundle generation is already in progress/,
       );
       expect(fs.existsSync(path.join(stateDir, "jwt"))).toBe(false);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("serializes 12 concurrent callers onto one valid gateway JWT bundle", {
+    timeout: 30_000,
+  }, async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-config-"));
+    const startPath = path.join(stateDir, ".start-concurrent-callers");
+    try {
+      const callers = Array.from({ length: CONCURRENT_CALLER_COUNT }, () =>
+        spawnConcurrentJwtBundleCaller(stateDir, startPath),
+      );
+      await Promise.all(callers.map((caller) => caller.ready));
+      fs.writeFileSync(startPath, "start\n", { mode: 0o600 });
+
+      const results = await Promise.all(callers.map((caller) => caller.done));
+      expect(results.map((result) => result.code)).toEqual(Array(CONCURRENT_CALLER_COUNT).fill(0));
+      expect(results.map((result) => result.stderr)).toEqual(
+        Array(CONCURRENT_CALLER_COUNT).fill(""),
+      );
+      const published = results.map((result) => {
+        const line = result.stdout.split("\n").find((candidate) => candidate.startsWith("RESULT "));
+        expect(line, result.stdout).toBeDefined();
+        return JSON.parse(line?.slice("RESULT ".length) ?? "{}") as {
+          kid: string;
+          signingKeyHash: string;
+        };
+      });
+      expect(new Set(published.map((entry) => entry.kid)).size).toBe(1);
+      expect(new Set(published.map((entry) => entry.signingKeyHash)).size).toBe(1);
+      expectEd25519BundleSignsAndVerifies(jwtBundlePaths(stateDir));
+      expect(fs.existsSync(path.join(stateDir, ".jwt-generating"))).toBe(false);
+      expect(fs.readdirSync(stateDir).filter((entry) => entry.startsWith(".jwt-tmp-"))).toEqual([]);
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
@@ -176,7 +296,7 @@ describe("docker-driver-gateway JWT bundle", () => {
       throw error;
     });
     try {
-      expect(() => writeGatewayConfig(stateDir)).toThrow(
+      expect(() => ensureDockerDriverGatewayJwtBundle(stateDir, { lockWaitMs: 0 })).toThrow(
         /JWT bundle generation is already in progress/,
       );
 

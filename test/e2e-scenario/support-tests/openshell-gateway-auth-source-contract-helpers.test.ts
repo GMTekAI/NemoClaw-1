@@ -3,9 +3,12 @@
 
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { buildSandboxTokenContainerProbeDockerArgs } from "../live/openshell-gateway-auth-source-contract-helpers.ts";
+import {
+  buildSandboxTokenContainerProbeDockerArgs,
+  skipUnavailableProbeImage,
+} from "../live/openshell-gateway-auth-source-contract-helpers.ts";
 
 function valuesAfterFlag(args: string[], flag: string): string[] {
   return args.flatMap((arg, index) => (arg === flag ? [args[index + 1] ?? ""] : []));
@@ -70,5 +73,26 @@ describe("OpenShell gateway auth source contract helpers", () => {
 
     expect(valuesAfterFlag(args, "--network")).toEqual(["host"]);
     expect(valuesAfterFlag(args, "--add-host")).toEqual(["host.openshell.internal:127.0.0.1"]);
+  });
+
+  it("hard-fails unavailable Docker probe images on GitHub Actions", () => {
+    const skip = vi.fn();
+
+    expect(() =>
+      skipUnavailableProbeImage(
+        { status: 125, stdout: "", stderr: "toomanyrequests: rate limit exceeded" },
+        skip,
+        true,
+      ),
+    ).toThrow(/Docker probe image was unavailable.*toomanyrequests/);
+    expect(skip).not.toHaveBeenCalled();
+  });
+
+  it("allows local runs to skip when the Docker probe image is unavailable", () => {
+    const skip = vi.fn();
+
+    skipUnavailableProbeImage({ status: 125, stdout: "", stderr: "manifest unknown" }, skip, false);
+
+    expect(skip).toHaveBeenCalledWith("Docker probe image was unavailable: manifest unknown");
   });
 });

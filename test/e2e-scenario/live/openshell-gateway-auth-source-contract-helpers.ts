@@ -40,7 +40,7 @@ type GrpcResult = {
   httpStatus: number;
 };
 
-type SpawnResult = {
+export type SpawnResult = {
   status: number | null;
   stderr: string;
   stdout: string;
@@ -530,14 +530,20 @@ async function requireDockerDaemon(options: {
   }
 }
 
-function skipUnavailableProbeImage(result: SpawnResult, skip: SkipFn): void {
+export function skipUnavailableProbeImage(
+  result: SpawnResult,
+  skip: SkipFn,
+  githubActions = process.env.GITHUB_ACTIONS === "true",
+): void {
   if (
     result.status !== 0 &&
     /pull access denied|manifest unknown|no matching manifest|i\/o timeout|TLS handshake timeout|toomanyrequests|network is unreachable/i.test(
       commandOutput(result),
     )
   ) {
-    skip(`Docker probe image was unavailable: ${commandOutput(result).slice(0, 500)}`);
+    const message = `Docker probe image was unavailable: ${commandOutput(result).slice(0, 500)}`;
+    if (githubActions) throw new Error(message);
+    skip(message);
   }
 }
 

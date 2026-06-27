@@ -17,6 +17,29 @@ const PRIVATE_KEY_MARKER = [
 ].join("\n");
 
 describe("docker-driver-gateway-local-tls errors", () => {
+  it("redacts state paths and private key material from certgen spawn errors", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-tls-error-"));
+    try {
+      expect(() =>
+        ensureDockerDriverGatewayLocalTlsBundle({
+          env: { PATH: "/usr/bin" },
+          gatewayBin: "/opt/openshell/openshell-gateway",
+          stateDir,
+          spawnSyncImpl: (() => ({
+            error: new Error(
+              `spawn failed for ${path.join(stateDir, "tls", "client", "tls.key")}\n${PRIVATE_KEY_MARKER}`,
+            ),
+            status: null,
+            stdout: "",
+            stderr: "",
+          })) as never,
+        }),
+      ).toThrow(/<stateDir>\/tls\/client\/tls\.key.*<redacted private key>/s);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("redacts state paths and private key material from certgen failures", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-tls-error-"));
     let message = "";

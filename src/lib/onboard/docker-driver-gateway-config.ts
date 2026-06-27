@@ -18,6 +18,9 @@ export const DOCKER_DRIVER_GATEWAY_JWT_TTL_SECS = 3600;
 const GATEWAY_JWT_DIR_NAME = "jwt";
 const GATEWAY_JWT_TMP_PREFIX = ".jwt-tmp-";
 const GATEWAY_JWT_GENERATING_NAME = ".jwt-generating";
+const GATEWAY_JWT_LOCK_WAIT_MS = 5_000;
+const GATEWAY_JWT_LOCK_RETRY_MS = 20;
+const GATEWAY_JWT_LOCK_WAIT_VIEW = new Int32Array(new SharedArrayBuffer(4));
 
 export type DockerDriverGatewayJwtBundle = {
   signingKeyPath: string;
@@ -154,9 +157,12 @@ function removeStaleDockerDriverGatewayJwtGenerationLock(lockPath: string): bool
   }
 }
 
-function acquireDockerDriverGatewayJwtGenerationLock(stateDir: string): () => void {
+function acquireDockerDriverGatewayJwtGenerationLock(
+  stateDir: string,
+  lockWaitMs: number,
+): () => void {
   const lockPath = path.join(stateDir, GATEWAY_JWT_GENERATING_NAME);
-  let staleRecoveryAttempted = false;
+  const deadline = Date.now() + Math.max(0, lockWaitMs);
 
   while (true) {
     let fd: number | null = null;
@@ -184,16 +190,24 @@ function acquireDockerDriverGatewayJwtGenerationLock(stateDir: string): () => vo
       if (created) fs.rmSync(lockPath, { force: true });
       if (
         (error as NodeJS.ErrnoException).code === "EEXIST" &&
-        !staleRecoveryAttempted &&
         removeStaleDockerDriverGatewayJwtGenerationLock(lockPath)
       ) {
-        staleRecoveryAttempted = true;
         continue;
       }
       if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        const remainingMs = deadline - Date.now();
+        if (remainingMs > 0) {
+          Atomics.wait(
+            GATEWAY_JWT_LOCK_WAIT_VIEW,
+            0,
+            0,
+            Math.min(GATEWAY_JWT_LOCK_RETRY_MS, remainingMs),
+          );
+          continue;
+        }
         throw new Error(
           "OpenShell gateway JWT bundle generation is already in progress for this state directory; " +
-            "concurrent gateway starts for the same state directory are unsupported. Retry after the other start completes.",
+            `it did not complete within ${Math.max(0, lockWaitMs)}ms.`,
         );
       }
       throw error;
@@ -243,14 +257,20 @@ function createAtomicDockerDriverGatewayJwtBundle(
   }
 }
 
-export function ensureDockerDriverGatewayJwtBundle(stateDir: string): DockerDriverGatewayJwtBundle {
+export function ensureDockerDriverGatewayJwtBundle(
+  stateDir: string,
+  options: { lockWaitMs?: number } = {},
+): DockerDriverGatewayJwtBundle {
   const jwtDir = path.join(stateDir, GATEWAY_JWT_DIR_NAME);
   const bundle = dockerDriverGatewayJwtBundleForDir(jwtDir);
   const files = [bundle.signingKeyPath, bundle.publicKeyPath, bundle.kidPath];
 
   fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   fs.chmodSync(stateDir, 0o700);
-  const releaseLock = acquireDockerDriverGatewayJwtGenerationLock(stateDir);
+  const releaseLock = acquireDockerDriverGatewayJwtGenerationLock(
+    stateDir,
+    options.lockWaitMs ?? GATEWAY_JWT_LOCK_WAIT_MS,
+  );
   try {
     cleanupStaleDockerDriverGatewayJwtTempDirs(stateDir);
 

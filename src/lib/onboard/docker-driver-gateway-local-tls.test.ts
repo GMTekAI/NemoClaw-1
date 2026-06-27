@@ -361,11 +361,11 @@ describe("docker-driver-gateway-local-tls", () => {
     }
   });
 
-  it("tolerates certificate clock skew at the not-before boundary", () => {
+  it("reuses the bundle at the exact five-minute not-before skew transition", () => {
     expectCompleteBundleReusedAt(TEST_CERT_SKEW_BOUNDARY_NOT_YET_VALID_AT);
   });
 
-  it("tolerates certificate clock skew at the not-after boundary", () => {
+  it("reuses the bundle at the exact five-minute not-after skew transition", () => {
     expectCompleteBundleReusedAt(TEST_CERT_SKEW_BOUNDARY_EXPIRED_AT);
   });
 });

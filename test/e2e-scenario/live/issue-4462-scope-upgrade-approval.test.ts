@@ -125,101 +125,102 @@ raise SystemExit(1)
 PY
 }
 
-seed_initial_pairing() {
-  local request_id="$1"
-  python3 - "$request_id" <<'PY'
-import json, os, secrets, sys, time
+select_paired_cli_device() {
+python3 - <<'PY'
+import json, sys
+state=json.load(sys.stdin)
+def norm(v): return str(v or '').strip()
+def is_cli(e): return norm(e.get('clientMode')).lower() == 'cli' or 'cli' in norm(e.get('clientId')).lower()
+for dev in sorted([e for e in state.get('paired') or [] if isinstance(e, dict)], key=lambda e:e.get('approvedAtMs') or 0, reverse=True):
+    scopes={norm(s) for s in (dev.get('approvedScopes') or dev.get('scopes') or []) if norm(s)}
+    if is_cli(dev) and norm(dev.get('deviceId')) and 'operator.admin' not in scopes:
+        print(norm(dev.get('deviceId')))
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
+rotate_cli_to_pairing_scope() {
+  local device_id="$1" rotate_output
+  rotate_output="$(
+    unset OPENCLAW_GATEWAY_URL OPENCLAW_GATEWAY_PORT OPENCLAW_GATEWAY_TOKEN
+    command openclaw devices rotate --device "$device_id" --role operator \
+      --scope operator.pairing --json 2>&1
+  )"
+  (
+    local rotate_log
+    umask 077
+    rotate_log="$(mktemp /tmp/issue4462-rotate.XXXXXX)"
+    trap 'rm -f "$rotate_log"' EXIT
+    printf '%s\n' "$rotate_output" >"$rotate_log"
+    python3 - "$device_id" "$rotate_log" <<'PY'
+import json, os, sys
 from pathlib import Path
 
-requested_request_id = sys.argv[1]
-root = Path(os.environ.get('OPENCLAW_STATE_DIR') or '/sandbox/.openclaw')
-devices_dir = root / 'devices'
-pending_path = devices_dir / 'pending.json'
-paired_path = devices_dir / 'paired.json'
-auth_path = root / 'identity' / 'device-auth.json'
-
-def load(path):
+want=sys.argv[1]
+raw=Path(sys.argv[2]).read_text(encoding='utf-8')
+dec=json.JSONDecoder()
+result=None
+for idx,ch in enumerate(raw):
+    if ch != '{':
+        continue
     try:
-        value = json.loads(path.read_text(encoding='utf-8'))
-    except FileNotFoundError:
-        return {}
-    return value if isinstance(value, dict) else {}
+        doc,_=dec.raw_decode(raw[idx:])
+    except Exception:
+        continue
+    if doc.get('deviceId') == want and isinstance(doc.get('token'), str):
+        result=doc
+        break
+if result is None:
+    raise SystemExit('device token rotation did not return the expected JSON')
+scopes={str(scope).strip() for scope in result.get('scopes') or [] if str(scope).strip()}
+if scopes != {'operator.pairing'}:
+    raise SystemExit(f'unexpected rotated scopes: {sorted(scopes)}')
 
-def write(path, value, mode):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name('.' + path.name + '.tmp')
-    with tmp.open('w', encoding='utf-8') as handle:
-        handle.write(json.dumps(value, indent=2, sort_keys=True) + '\n')
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(tmp, path)
-    try:
-        os.chmod(path, mode)
-    except PermissionError:
-        pass
+root=Path(os.environ.get('OPENCLAW_STATE_DIR') or '/sandbox/.openclaw')
+identity_path=root / 'identity' / 'device.json'
+auth_path=root / 'identity' / 'device-auth.json'
+paired_path=root / 'devices' / 'paired.json'
+identity=json.loads(identity_path.read_text(encoding='utf-8'))
+if str(identity.get('deviceId') or '').strip() != want:
+    raise SystemExit('rotated device does not match the persisted CLI identity')
 
-def norm(value):
-    return str(value or '').strip()
+paired=json.loads(paired_path.read_text(encoding='utf-8'))
+paired_key=next((key for key,value in paired.items() if isinstance(value, dict) and str(value.get('deviceId') or '').strip() == want), None)
+if paired_key is None:
+    raise SystemExit('rotated device is missing from paired state')
+paired_device=paired[paired_key]
+paired_device['scopes']=['operator.pairing']
+paired_device['approvedScopes']=['operator.pairing']
+paired_tmp=paired_path.with_name('.paired.json.tmp')
+paired_tmp.write_text(json.dumps(paired, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+os.chmod(paired_tmp, 0o660)
+os.replace(paired_tmp, paired_path)
 
-def is_cli(entry):
-    return norm(entry.get('clientMode')).lower() == 'cli' or 'cli' in norm(entry.get('clientId')).lower()
-
-def is_operator(entry):
-    return 'operator' in {norm(role) for role in (entry.get('roles') or [entry.get('role')]) if norm(role)}
-
-pending = load(pending_path)
-paired = load(paired_path)
-candidates = [
-    (item.get('ts') or 0, key, item)
-    for key, item in pending.items()
-    if isinstance(item, dict)
-    and is_cli(item)
-    and is_operator(item)
-    and norm(item.get('requestId'))
-    and norm(item.get('deviceId'))
-    and 'operator.admin' not in set(item.get('scopes') or item.get('requestedScopes') or [])
-]
-matches = [row for row in candidates if norm(row[2].get('requestId')) == requested_request_id]
-if matches:
-    _, request_key, request = matches[0]
-elif candidates:
-    _, request_key, request = sorted(candidates, reverse=True)[0]
-else:
-    if any(isinstance(item, dict) and is_cli(item) for item in paired.values()):
-        print(json.dumps({'requestId': requested_request_id, 'status': 'already-paired'}))
-        raise SystemExit(0)
-    raise SystemExit('initial CLI pairing request disappeared without a paired device')
-
-approved_scopes = ['operator.pairing']
-now = int(time.time() * 1000)
-token = secrets.token_urlsafe(32)
-device_id = norm(request.get('deviceId'))
-device = {
-    'deviceId': device_id,
-    'publicKey': request.get('publicKey'),
-    'displayName': request.get('displayName'),
-    'platform': request.get('platform'),
-    'deviceFamily': request.get('deviceFamily'),
-    'clientId': request.get('clientId'),
-    'clientMode': request.get('clientMode'),
+try:
+    auth=json.loads(auth_path.read_text(encoding='utf-8'))
+except FileNotFoundError:
+    auth={}
+if not isinstance(auth, dict) or auth.get('deviceId') != want:
+    auth={'version': 1, 'deviceId': want, 'tokens': {}}
+tokens=auth.get('tokens') if isinstance(auth.get('tokens'), dict) else {}
+tokens['operator']={
+    'token': result['token'],
     'role': 'operator',
-    'roles': ['operator'],
-    'scopes': approved_scopes,
-    'approvedScopes': approved_scopes,
-    'remoteIp': request.get('remoteIp'),
-    'tokens': {'operator': {'token': token, 'role': 'operator', 'scopes': approved_scopes, 'createdAtMs': now, 'updatedAtMs': now}},
-    'createdAtMs': now,
-    'approvedAtMs': now,
+    'scopes': ['operator.pairing'],
+    'updatedAtMs': result.get('rotatedAtMs'),
 }
-device = {key: value for key, value in device.items() if value is not None}
-pending.pop(request_key, None)
-paired[device_id] = device
-auth = {'version': 1, 'deviceId': device_id, 'tokens': {'operator': {'token': token, 'role': 'operator', 'scopes': approved_scopes, 'updatedAtMs': now}}}
-write(pending_path, pending, 0o660)
-write(paired_path, paired, 0o660)
-write(auth_path, auth, 0o600)
-print(json.dumps({'requestId': norm(request.get('requestId')), 'deviceId': device_id, 'approvedScopes': approved_scopes}, sort_keys=True))
+auth['version']=1
+auth['deviceId']=want
+auth['tokens']=tokens
+auth_path.parent.mkdir(parents=True, exist_ok=True)
+tmp=auth_path.with_name('.device-auth.json.tmp')
+tmp.write_text(json.dumps(auth, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+os.chmod(tmp, 0o600)
+os.replace(tmp, auth_path)
+print(json.dumps({'deviceId': want, 'scopes': sorted(scopes)}, sort_keys=True))
 PY
+  )
 }
 
 select_scope_request() {
@@ -276,10 +277,13 @@ approve_request() {
   approve_log="/tmp/issue4462-approve-$request_id.log"
   printf '%s\n' "$approve_output" >"$approve_log"
   python3 - "$request_id" "$approve_log" <<'PY'
-import json, sys
+import json, os, sys
+from pathlib import Path
+
 want=sys.argv[1]
 raw=open(sys.argv[2], encoding='utf-8').read()
 dec=json.JSONDecoder()
+approved=None
 for idx,ch in enumerate(raw):
     if ch != '{':
         continue
@@ -288,9 +292,51 @@ for idx,ch in enumerate(raw):
     except Exception:
         continue
     if doc.get('requestId') == want:
-        raise SystemExit(0)
-print(raw, file=sys.stderr)
-raise SystemExit(1)
+        approved=doc
+        break
+if approved is None:
+    print(raw, file=sys.stderr)
+    raise SystemExit(1)
+
+device=approved.get('device') if isinstance(approved.get('device'), dict) else {}
+device_id=str(device.get('deviceId') or '').strip()
+if not device_id:
+    raise SystemExit('approval response did not include a device id')
+root=Path(os.environ.get('OPENCLAW_STATE_DIR') or '/sandbox/.openclaw')
+identity=json.loads((root / 'identity' / 'device.json').read_text(encoding='utf-8'))
+if str(identity.get('deviceId') or '').strip() != device_id:
+    raise SystemExit('approved device does not match the persisted CLI identity')
+paired=json.loads((root / 'devices' / 'paired.json').read_text(encoding='utf-8'))
+paired_device=next((value for value in paired.values() if isinstance(value, dict) and str(value.get('deviceId') or '').strip() == device_id), None)
+if paired_device is None:
+    raise SystemExit('approved device is missing from paired state')
+tokens=paired_device.get('tokens') if isinstance(paired_device.get('tokens'), dict) else {}
+operator=tokens.get('operator') if isinstance(tokens.get('operator'), dict) else {}
+if not isinstance(operator.get('token'), str) or not operator.get('token'):
+    raise SystemExit('approved device has no operator token')
+auth_path=root / 'identity' / 'device-auth.json'
+try:
+    auth=json.loads(auth_path.read_text(encoding='utf-8'))
+except FileNotFoundError:
+    auth={}
+if not isinstance(auth, dict) or auth.get('deviceId') != device_id:
+    auth={'version': 1, 'deviceId': device_id, 'tokens': {}}
+auth_tokens=auth.get('tokens') if isinstance(auth.get('tokens'), dict) else {}
+auth_tokens['operator']={
+    'token': operator['token'],
+    'role': 'operator',
+    'scopes': operator.get('scopes') or [],
+    'updatedAtMs': operator.get('updatedAtMs') or operator.get('rotatedAtMs') or operator.get('createdAtMs'),
+}
+auth['version']=1
+auth['deviceId']=device_id
+auth['tokens']=auth_tokens
+auth_path.parent.mkdir(parents=True, exist_ok=True)
+tmp=auth_path.with_name('.device-auth.json.tmp')
+tmp.write_text(json.dumps(auth, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+os.chmod(tmp, 0o600)
+os.replace(tmp, auth_path)
+print(json.dumps({'deviceId': device_id, 'requestId': want}, sort_keys=True))
 PY
 }
 
@@ -312,9 +358,18 @@ if [ -z "$initial_request_id" ]; then
   initial_request_id="$(printf '%s' "$state" | select_initial_pairing_request 2>/dev/null || true)"
 fi
 if [ -n "$initial_request_id" ]; then
-  seed_initial_pairing "$initial_request_id" >/tmp/issue4462-initial-pairing.log
+  approve_request "$initial_request_id"
   state="$(state_json)"
 fi
+paired_device_id="$(printf '%s' "$state" | select_paired_cli_device 2>/dev/null || true)"
+if [ -z "$paired_device_id" ]; then
+  echo "NO_INITIAL_PAIRED_CLI_DEVICE" >&2
+  cat /tmp/issue4462-bootstrap-agent.log >&2 2>/dev/null || true
+  printf '%s\n' "$state" >&2
+  exit 5
+fi
+rotate_cli_to_pairing_scope "$paired_device_id" >/tmp/issue4462-initial-pairing.log
+state="$(state_json)"
 request_id="$(printf '%s' "$state" | select_scope_request 2>/dev/null || true)"
 if [ -z "$request_id" ]; then
   session_id="issue-4462-trigger-$(date +%s)-$$"
