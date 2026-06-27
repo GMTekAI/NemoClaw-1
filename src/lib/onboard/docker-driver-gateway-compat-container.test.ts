@@ -91,6 +91,8 @@ describe("docker-driver-gateway compatibility container", () => {
       expect(launch.args).not.toContain("ubuntu:24.04");
       expect(launch.args).not.toContain("--publish");
       expect(launch.args).not.toContain("-p");
+      expect(launch.args).toContain(`${dockerSocket}:${dockerSocket}:ro`);
+      expect(launch.args).not.toContain(`${dockerSocket}:${dockerSocket}:rw`);
       expect(launch.env.OPENSHELL_DOCKER_SUPERVISOR_BIN).toBe(sandboxBin);
       expect(launch.env.DOCKER_HOST).toBe(`unix://${dockerSocket}`);
       expect(launch.env.OPENSHELL_BIND_ADDRESS).toBe("127.0.0.1");
@@ -223,7 +225,7 @@ describe("docker-driver-gateway compatibility container", () => {
       "  Compatibility gateway bind: 127.0.0.1 main listener plus OpenShell Docker-driver bridge reachability.",
     );
     expect(messages).toContain(
-      "  Compatibility container trust boundary: host networking plus Docker API access; disable with NEMOCLAW_OPENSHELL_GATEWAY_CONTAINER_PATCH=0 on untrusted hosts.",
+      "  Compatibility container trust boundary: host networking plus Docker API access; enabled only by NEMOCLAW_OPENSHELL_GATEWAY_CONTAINER_PATCH=1.",
     );
     expect(messages).toContain(
       "  Gateway auth boundary: host-side OpenShell CLI uses local mTLS; sandbox callbacks use mTLS plus OpenShell gateway JWT.",

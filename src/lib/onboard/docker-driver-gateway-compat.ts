@@ -107,10 +107,11 @@ export function shouldUseContainerizedGateway(options: {
   );
   if (!required) return { useContainer: false };
   if (compareDottedVersions(required, host) <= 0) return { useContainer: false };
-  return {
-    useContainer: true,
-    reason: `host glibc ${host} is older than openshell-gateway requirement ${required}`,
-  };
+  throw new Error(
+    `OpenShell gateway compatibility container requires explicit opt-in: host glibc ${host} is older than openshell-gateway requirement ${required}. ` +
+      "This mode uses host networking and read-only Docker socket access. " +
+      "Set NEMOCLAW_OPENSHELL_GATEWAY_CONTAINER_PATCH=1 to opt in, or install an OpenShell gateway binary compatible with this host.",
+  );
 }
 
 function addVolume(args: string[], hostPath: string, containerPath = hostPath, mode = "rw"): void {
@@ -274,7 +275,7 @@ export function logContainerizedDockerDriverGatewayLaunch(
   log(`  OpenShell gateway compatibility patch active (${launch.reason}).`);
   log("  Running openshell-gateway inside a Docker compatibility container.");
   log(
-    "  Compatibility container trust boundary: host networking plus Docker API access; disable with NEMOCLAW_OPENSHELL_GATEWAY_CONTAINER_PATCH=0 on untrusted hosts.",
+    "  Compatibility container trust boundary: host networking plus Docker API access; enabled only by NEMOCLAW_OPENSHELL_GATEWAY_CONTAINER_PATCH=1.",
   );
   log(
     "  Compatibility gateway bind: 127.0.0.1 main listener plus OpenShell Docker-driver bridge reachability.",

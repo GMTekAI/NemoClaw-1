@@ -39,12 +39,21 @@ describe("docker-driver-gateway-launch", () => {
     ]);
   });
 
-  it("selects the containerized gateway only for affected Linux hosts or explicit force", () => {
-    expect(
+  it("requires explicit opt-in before selecting the containerized gateway", () => {
+    expect(() =>
       shouldUseContainerizedGateway({
         gatewayBin: "/tmp/openshell-gateway",
         platform: "linux",
         env: {},
+        hostGlibcVersion: "2.35",
+        requiredGlibcVersions: ["2.38", "2.39"],
+      }),
+    ).toThrow(/requires explicit opt-in/);
+    expect(
+      shouldUseContainerizedGateway({
+        gatewayBin: "/tmp/openshell-gateway",
+        platform: "linux",
+        env: { NEMOCLAW_OPENSHELL_GATEWAY_CONTAINER_PATCH: "1" },
         hostGlibcVersion: "2.35",
         requiredGlibcVersions: ["2.38", "2.39"],
       }),
