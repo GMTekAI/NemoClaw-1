@@ -4,6 +4,7 @@
   "legacyMaxLines": {
     "nemoclaw/src/commands/migration-state.test.ts": 1566,
     "src/lib/inference/nim.test.ts": 2068,
+    "test/e2e-script-workflow.test.ts": 1517,
     "src/lib/onboard/preflight.test.ts": 1905,
     "test/channels-add-preset.test.ts": 1871,
     "test/generate-openclaw-config.test.ts": 1984,
