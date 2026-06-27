@@ -122,6 +122,22 @@ describe("docker-driver-gateway JWT bundle", () => {
     }
   });
 
+  it("fails fast while another process is generating the gateway JWT bundle", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-config-"));
+    try {
+      fs.writeFileSync(path.join(stateDir, ".jwt-generating"), "other-process\n", {
+        mode: 0o600,
+      });
+
+      expect(() => writeGatewayConfig(stateDir)).toThrow(
+        /JWT bundle generation is already in progress/,
+      );
+      expect(fs.existsSync(path.join(stateDir, "jwt"))).toBe(false);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("treats the gateway config file as the final atomic commitment record", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-config-"));
     try {

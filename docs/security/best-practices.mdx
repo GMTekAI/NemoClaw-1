@@ -476,6 +476,8 @@ On Linux hosts whose glibc is older than the OpenShell gateway binary requires, 
 | Risk if relaxed | The Docker socket remains a privileged host API even when bind-mounted read-only. Treat this mode as equivalent to trusting the host user that can drive Docker, and do not enable it on untrusted shared hosts. |
 | Recommendation | Prefer a directly supported OpenShell gateway binary or host glibc level. Use the compatibility container only as a local upgrade bridge for trusted hosts that still need the OpenShell 0.0.67 Docker-driver gateway. |
 
+See [OpenShell 0.0.67 Gateway Auth Review](./openshell-0.0.67-gateway-auth-review) for source-of-truth boundaries, acceptance mapping, and contract coverage.
+
 ### Insecure Auth Derivation
 
 The `allowInsecureAuth` setting controls whether the gateway permits non-HTTPS authentication.

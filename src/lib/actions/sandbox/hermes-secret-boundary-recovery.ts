@@ -84,10 +84,15 @@ export function enforceHermesSecretBoundaryOnRunningGateway(
     return { refused: false };
   }
   if (stdoutMarker === SECRET_BOUNDARY_VALIDATOR_MISSING_MARKER) {
+    printValidatorStderr(result.stderr);
+    console.error("");
     console.error(
-      `  [boundary] Hermes secret-boundary validator missing in sandbox '${sandboxName}'; recover proceeded without re-evaluating /sandbox/.hermes/.env. Re-image the sandbox to enable per-run enforcement.`,
+      `  ${R}Hermes secret-boundary validator missing in sandbox '${sandboxName}'.${R}`,
     );
-    return { refused: false };
+    console.error(
+      "  Refusing recovery because /sandbox/.hermes/.env could not be re-evaluated. Re-image the sandbox with a current Hermes build.",
+    );
+    return { refused: true, reason: "inconclusive", stderr: result.stderr };
   }
   printValidatorStderr(result.stderr);
   console.error("");

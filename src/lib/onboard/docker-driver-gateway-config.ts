@@ -17,6 +17,7 @@ export const DOCKER_DRIVER_GATEWAY_CONFIG_NAME = "openshell-gateway.toml";
 export const DOCKER_DRIVER_GATEWAY_JWT_TTL_SECS = 3600;
 const GATEWAY_JWT_DIR_NAME = "jwt";
 const GATEWAY_JWT_TMP_PREFIX = ".jwt-tmp-";
+const GATEWAY_JWT_GENERATING_NAME = ".jwt-generating";
 
 export type DockerDriverGatewayJwtBundle = {
   signingKeyPath: string;
@@ -118,6 +119,31 @@ function cleanupStaleDockerDriverGatewayJwtTempDirs(stateDir: string): void {
   }
 }
 
+function acquireDockerDriverGatewayJwtGenerationLock(stateDir: string): () => void {
+  const lockPath = path.join(stateDir, GATEWAY_JWT_GENERATING_NAME);
+  let fd: number | null = null;
+  try {
+    fd = fs.openSync(
+      lockPath,
+      fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY,
+      0o600,
+    );
+    fs.writeSync(fd, `${process.pid}\n`);
+    fs.closeSync(fd);
+    fd = null;
+    return () => fs.rmSync(lockPath, { force: true });
+  } catch (error) {
+    if (fd !== null) fs.closeSync(fd);
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      throw new Error(
+        "OpenShell gateway JWT bundle generation is already in progress for this state directory; " +
+          "concurrent gateway starts for the same state directory are unsupported. Retry after the other start completes.",
+      );
+    }
+    throw error;
+  }
+}
+
 function writeNewDockerDriverGatewayJwtBundle(
   bundle: DockerDriverGatewayJwtBundle,
 ): DockerDriverGatewayJwtBundle {
@@ -167,26 +193,31 @@ export function ensureDockerDriverGatewayJwtBundle(stateDir: string): DockerDriv
 
   fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   fs.chmodSync(stateDir, 0o700);
-  cleanupStaleDockerDriverGatewayJwtTempDirs(stateDir);
+  const releaseLock = acquireDockerDriverGatewayJwtGenerationLock(stateDir);
+  try {
+    cleanupStaleDockerDriverGatewayJwtTempDirs(stateDir);
 
-  const present = existingFileCount(files);
-  if (present === files.length) {
-    normalizeDockerDriverGatewayJwtBundlePermissions(bundle);
-    if (dockerDriverGatewayJwtBundleIsValid(bundle)) {
-      return bundle;
+    const present = existingFileCount(files);
+    if (present === files.length) {
+      normalizeDockerDriverGatewayJwtBundlePermissions(bundle);
+      if (dockerDriverGatewayJwtBundleIsValid(bundle)) {
+        return bundle;
+      }
+      // Complete-but-invalid local auth material is unsafe to reuse because
+      // OpenShell loads these files as one Ed25519 gateway_jwt bundle.
+      fs.rmSync(jwtDir, { recursive: true, force: true });
+    } else if (present > 0) {
+      // Invalid state boundary: this directory is NemoClaw-owned local gateway
+      // state, and a manual edit or interrupted prior write can leave only part
+      // of the OpenShell v0.0.67 gateway_jwt bundle. OpenShell requires all three
+      // files to agree, so the safe source of truth is a freshly generated local
+      // bundle, staged outside the final jwt directory and renamed into place.
+      fs.rmSync(jwtDir, { recursive: true, force: true });
     }
-    // Complete-but-invalid local auth material is unsafe to reuse because
-    // OpenShell loads these files as one Ed25519 gateway_jwt bundle.
-    fs.rmSync(jwtDir, { recursive: true, force: true });
-  } else if (present > 0) {
-    // Invalid state boundary: this directory is NemoClaw-owned local gateway
-    // state, and a manual edit or interrupted prior write can leave only part
-    // of the OpenShell v0.0.67 gateway_jwt bundle. OpenShell requires all three
-    // files to agree, so the safe source of truth is a freshly generated local
-    // bundle, staged outside the final jwt directory and renamed into place.
-    fs.rmSync(jwtDir, { recursive: true, force: true });
+    return createAtomicDockerDriverGatewayJwtBundle(stateDir, bundle);
+  } finally {
+    releaseLock();
   }
-  return createAtomicDockerDriverGatewayJwtBundle(stateDir, bundle);
 }
 
 function gatewayIdForStateDir(stateDir: string): string {

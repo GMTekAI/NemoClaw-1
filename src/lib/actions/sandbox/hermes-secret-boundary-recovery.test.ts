@@ -106,7 +106,7 @@ describe("enforceHermesSecretBoundaryOnRunningGateway", () => {
     expect(result).toEqual({ refused: false });
   });
 
-  it("allows recovery with a warning when an older sandbox image lacks the validator", () => {
+  it("refuses recovery when an older sandbox image lacks the validator", () => {
     mockSandboxAgent("hermes");
     const exec = vi.fn(() =>
       makeExecResult(`${SECRET_BOUNDARY_VALIDATOR_MISSING_MARKER}\n`, "missing\n"),
@@ -114,7 +114,7 @@ describe("enforceHermesSecretBoundaryOnRunningGateway", () => {
 
     const result = enforceHermesSecretBoundaryOnRunningGateway(SANDBOX, HERMES_AGENT, exec);
 
-    expect(result).toEqual({ refused: false });
+    expect(result).toEqual({ refused: true, reason: "inconclusive", stderr: "missing\n" });
     expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("validator missing"));
   });
 });
