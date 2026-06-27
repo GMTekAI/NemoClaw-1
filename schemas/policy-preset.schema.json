@@ -72,11 +72,53 @@
           "minItems": 1
         }
       },
-      "if": {
-        "properties": { "protocol": { "enum": ["rest", "websocket", "json-rpc", "mcp"] } },
-        "required": ["protocol"]
-      },
-      "then": { "required": ["rules"] }
+      "allOf": [
+        {
+          "if": {
+            "properties": { "protocol": { "enum": ["rest", "websocket"] } },
+            "required": ["protocol"]
+          },
+          "then": {
+            "anyOf": [
+              { "required": ["rules"] },
+              { "required": ["access"] }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": { "protocol": { "const": "json-rpc" } },
+            "required": ["protocol"]
+          },
+          "then": {
+            "required": ["rules"],
+            "not": { "required": ["access"] }
+          }
+        },
+        {
+          "if": {
+            "properties": { "protocol": { "const": "mcp" } },
+            "required": ["protocol"]
+          },
+          "then": {
+            "not": { "required": ["access"] },
+            "anyOf": [
+              { "required": ["rules"] },
+              {
+                "required": ["mcp"],
+                "properties": {
+                  "mcp": {
+                    "required": ["allow_all_known_mcp_methods"],
+                    "properties": {
+                      "allow_all_known_mcp_methods": { "const": true }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
     },
     "rule": {
       "type": "object",

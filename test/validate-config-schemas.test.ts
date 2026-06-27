@@ -406,7 +406,7 @@ describe("sandbox-policy.schema.json", () => {
     expectValid(validate, valid, "json-rpc and mcp policy");
   });
 
-  it("rejects sandbox-policy MCP endpoints without rules or explicit full access", () => {
+  it("rejects sandbox-policy MCP endpoints without rules or explicit MCP allow-all", () => {
     const bad = {
       version: 1,
       network_policies: {
@@ -425,6 +425,69 @@ describe("sandbox-policy.schema.json", () => {
       },
     };
     expect(validate(bad)).toBe(false);
+  });
+
+  it("accepts sandbox-policy MCP endpoint allow-all without REST access presets", () => {
+    const valid = {
+      version: 1,
+      network_policies: {
+        mcp_bridge: {
+          name: "MCP Bridge",
+          binaries: [{ path: "/usr/local/bin/mcporter" }],
+          endpoints: [
+            {
+              host: "host.openshell.internal",
+              port: 31337,
+              protocol: "mcp",
+              mcp: { max_body_bytes: 131072, allow_all_known_mcp_methods: true },
+            },
+          ],
+        },
+      },
+    };
+    expectValid(validate, valid, "mcp policy allow-all");
+  });
+
+  it("rejects sandbox-policy JSON-RPC and MCP endpoints with REST access presets", () => {
+    const base = {
+      version: 1,
+      network_policies: {
+        rpc: {
+          name: "RPC",
+          binaries: [{ path: "/usr/local/bin/mcporter" }],
+          endpoints: [
+            {
+              host: "rpc.example.com",
+              port: 443,
+              protocol: "json-rpc",
+              access: "full",
+              rules: [{ allow: { method: "initialize" } }],
+            },
+          ],
+        },
+      },
+    };
+    expect(validate(base)).toBe(false);
+
+    const mcp = {
+      version: 1,
+      network_policies: {
+        rpc: {
+          name: "RPC",
+          binaries: [{ path: "/usr/local/bin/mcporter" }],
+          endpoints: [
+            {
+              host: "mcp.example.com",
+              port: 443,
+              protocol: "mcp",
+              access: "full",
+              mcp: { allow_all_known_mcp_methods: true },
+            },
+          ],
+        },
+      },
+    };
+    expect(validate(mcp)).toBe(false);
   });
 
   it("rejects sandbox-policy endpoint with protocol websocket but no rules or access", () => {
@@ -627,6 +690,67 @@ describe("policy-preset.schema.json", () => {
     const invalidMatcher = cloneObject(base) as McpPresetFixture;
     invalidMatcher.network_policies.mcp_bridge.endpoints[0]!.deny_rules = [{ tool: { any: [] } }];
     expect(validate(invalidMatcher)).toBe(false);
+  });
+
+  it("accepts preset MCP allow-all and rejects JSON-RPC or MCP access presets", () => {
+    const allowAll = {
+      preset: { name: "mcp", description: "MCP" },
+      network_policies: {
+        mcp_bridge: {
+          name: "MCP Bridge",
+          binaries: [{ path: "/usr/local/bin/mcporter" }],
+          endpoints: [
+            {
+              host: "mcp.example.com",
+              port: 443,
+              protocol: "mcp",
+              mcp: { allow_all_known_mcp_methods: true },
+            },
+          ],
+        },
+      },
+    };
+    expectValid(validate, allowAll, "mcp preset allow-all");
+
+    const jsonRpcAccess = {
+      preset: { name: "mcp", description: "MCP" },
+      network_policies: {
+        mcp_bridge: {
+          name: "MCP Bridge",
+          binaries: [{ path: "/usr/local/bin/mcporter" }],
+          endpoints: [
+            {
+              host: "rpc.example.com",
+              port: 443,
+              protocol: "json-rpc",
+              access: "full",
+              rules: [{ allow: { method: "initialize" } }],
+            },
+          ],
+        },
+      },
+    };
+    expect(validate(jsonRpcAccess)).toBe(false);
+
+    const mcpAccess = {
+      preset: { name: "mcp", description: "MCP" },
+      network_policies: {
+        mcp_bridge: {
+          name: "MCP Bridge",
+          binaries: [{ path: "/usr/local/bin/mcporter" }],
+          endpoints: [
+            {
+              host: "mcp.example.com",
+              port: 443,
+              protocol: "mcp",
+              access: "full",
+              mcp: { allow_all_known_mcp_methods: true },
+            },
+          ],
+        },
+      },
+    };
+    expect(validate(mcpAccess)).toBe(false);
   });
 
   it("rejects preset endpoint with protocol websocket but no rules", () => {

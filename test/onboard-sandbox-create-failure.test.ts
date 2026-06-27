@@ -83,4 +83,37 @@ describe("sandbox create failure diagnostics", () => {
       console.error = originalError;
     }
   });
+
+  it("preserves a bounded gateway tail when sandbox-specific lines are absent", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-create-failure-tail-"));
+    const homeDir = path.join(tmp, "home");
+    const logDir = path.join(homeDir, ".local", "state", "nemoclaw", "openshell-docker-gateway");
+    const gatewayLogPath = path.join(logDir, "openshell-gateway.log");
+    fs.mkdirSync(logDir, { recursive: true });
+    fs.writeFileSync(
+      gatewayLogPath,
+      [
+        "2026-05-12T20:30:00Z INFO gateway starting",
+        "2026-05-12T20:30:01Z WARN gateway exited before request dispatch",
+      ].join("\n"),
+    );
+
+    const diagnostics = collectSandboxCreateFailureDiagnostics("my-assistant", {
+      homeDir,
+      now: new Date("2026-05-12T20:35:00.000Z"),
+    });
+
+    expect(diagnostics?.gatewayTailPath).toBe(
+      path.join(diagnostics!.dir, "openshell-gateway-tail.log"),
+    );
+    expect(fs.readFileSync(diagnostics!.gatewayTailPath!, "utf-8")).toContain(
+      "gateway exited before request dispatch",
+    );
+    expect(diagnostics?.summaryLines).toContain(
+      "2026-05-12T20:30:01Z WARN gateway exited before request dispatch",
+    );
+    expect(fs.readFileSync(path.join(diagnostics!.dir, "summary.txt"), "utf-8")).toContain(
+      "gateway_tail=",
+    );
+  });
 });
