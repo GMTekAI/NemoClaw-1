@@ -15,7 +15,7 @@ const PATCH_OPENCLAW_CHAT_SEND = path.join(REPO_ROOT, "scripts", "patch-openclaw
 const PATCH_OPENCLAW_ISSUE_4434_DIAGNOSTICS = path.join(
   REPO_ROOT,
   "scripts",
-  "patch-openclaw-issue-4434-diagnostics.js",
+  "patch-openclaw-issue-4434-diagnostics.ts",
 );
 
 function readRequiredDockerArg(name: string): string {

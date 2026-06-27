@@ -115,10 +115,10 @@ ENV NPM_CONFIG_AUDIT=false \
 RUN npm ci --omit=dev
 COPY scripts/patch-openclaw-tool-catalog.js /usr/local/lib/nemoclaw/patch-openclaw-tool-catalog.js
 COPY scripts/patch-openclaw-chat-send.js /usr/local/lib/nemoclaw/patch-openclaw-chat-send.js
-COPY scripts/patch-openclaw-issue-4434-diagnostics.js /usr/local/lib/nemoclaw/patch-openclaw-issue-4434-diagnostics.js
+COPY scripts/patch-openclaw-issue-4434-diagnostics.ts /usr/local/lib/nemoclaw/patch-openclaw-issue-4434-diagnostics.ts
 RUN chmod 755 /usr/local/lib/nemoclaw/patch-openclaw-tool-catalog.js \
         /usr/local/lib/nemoclaw/patch-openclaw-chat-send.js \
-        /usr/local/lib/nemoclaw/patch-openclaw-issue-4434-diagnostics.js
+        /usr/local/lib/nemoclaw/patch-openclaw-issue-4434-diagnostics.ts
 
 # Pre-install the codex-acp package so the embedded ACPx runtime can
 # call the local binary instead of `npx @zed-industries/codex-acp`.
@@ -613,7 +613,7 @@ RUN node /usr/local/lib/nemoclaw/patch-openclaw-chat-send.js \
 # Removal criteria: drop when upstream OpenClaw emits these structured fields
 # from its assistant error formatter for unreachable inference failures.
 # hadolint ignore=DL3059
-RUN node /usr/local/lib/nemoclaw/patch-openclaw-issue-4434-diagnostics.js \
+RUN node --experimental-strip-types /usr/local/lib/nemoclaw/patch-openclaw-issue-4434-diagnostics.ts \
     /usr/local/lib/node_modules/openclaw/dist
 
 # Run the compact tool catalog shim for OpenClaw selection runtimes that still

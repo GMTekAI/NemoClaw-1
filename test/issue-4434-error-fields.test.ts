@@ -94,7 +94,7 @@ describe("issue #4434 full OpenClaw TUI error guard", () => {
     const bashGuard = fs.readFileSync(LIVE_BASH_GUARD, "utf-8");
     const vitestGuard = fs.readFileSync(LIVE_VITEST_GUARD, "utf-8");
     expect(review).toContain("test/issue-4434-error-fields.test.ts");
-    expect(review).toContain("scripts/patch-openclaw-issue-4434-diagnostics.js");
+    expect(review).toContain("scripts/patch-openclaw-issue-4434-diagnostics.ts");
     expect(review).toContain("Issue #4434 full live acceptance");
     for (const guard of [bashGuard, vitestGuard]) {
       expect(guard).toContain("http");

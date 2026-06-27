@@ -23,7 +23,7 @@ const positional = args.filter((value) => value !== AUDIT_FLAG);
 const distDir = positional[0];
 
 if (!distDir || positional.length > 1) {
-  console.error("Usage: patch-openclaw-issue-4434-diagnostics.js [--audit] <openclaw-dist-dir>");
+  console.error("Usage: patch-openclaw-issue-4434-diagnostics.ts [--audit] <openclaw-dist-dir>");
   process.exit(EXIT_USAGE);
 }
 
