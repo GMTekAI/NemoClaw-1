@@ -735,6 +735,21 @@ export function checkAndRecoverSandboxProcesses(
       }
       return { checked: true, wasRunning: false, recovered: false, forwardRecovered: false };
     }
+    const enforcement = enforceHermesSecretBoundaryOnRunningGateway(
+      sandboxName,
+      recoveryAgent,
+      executeSandboxExecCommand,
+    );
+    if (enforcement?.refused) {
+      return {
+        checked: true,
+        wasRunning: false,
+        recovered: false,
+        forwardRecovered: false,
+        secretBoundaryRefused: true,
+        secretBoundaryReason: enforcement.reason,
+      };
+    }
     const forwardRecovered = ensureSandboxPortForward(sandboxName);
     const dashboardForwardRecovered = ensureHermesDashboardPortForwardIfEnabled(sandboxName);
     const messagingForwardRecovered = recoverMessagingHostForward(sandboxName, { quiet });

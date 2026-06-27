@@ -7,6 +7,7 @@ import path from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
+import { DOCKER_DRIVER_GATEWAY_JWT_TTL_SECS } from "./docker-driver-gateway-config";
 import {
   assertDockerDriverGatewayAuthConfigSafe,
   assertDockerDriverGatewayBindAddressSafe,
@@ -18,6 +19,18 @@ import {
 
 function writeSafeGatewayAuthConfig(dir: string): string {
   const configPath = path.join(dir, "openshell-gateway.toml");
+  const jwtDir = path.join(dir, "jwt");
+  const signingKeyPath = path.join(jwtDir, "signing.pem");
+  const publicKeyPath = path.join(jwtDir, "public.pem");
+  const kidPath = path.join(jwtDir, "kid");
+  fs.mkdirSync(jwtDir, { recursive: true, mode: 0o700 });
+  for (const [filePath, value] of [
+    [signingKeyPath, "test signing key\n"],
+    [publicKeyPath, "test public key\n"],
+    [kidPath, "test-kid\n"],
+  ]) {
+    fs.writeFileSync(filePath, value, { mode: 0o600 });
+  }
   fs.writeFileSync(
     configPath,
     [
@@ -29,6 +42,13 @@ function writeSafeGatewayAuthConfig(dir: string): string {
       "",
       "[openshell.gateway.mtls_auth]",
       "enabled = true",
+      "",
+      "[openshell.gateway.gateway_jwt]",
+      `signing_key_path = ${JSON.stringify(signingKeyPath)}`,
+      `public_key_path = ${JSON.stringify(publicKeyPath)}`,
+      `kid_path = ${JSON.stringify(kidPath)}`,
+      'gateway_id = "nemoclaw-test"',
+      `ttl_secs = ${DOCKER_DRIVER_GATEWAY_JWT_TTL_SECS}`,
       "",
       "[openshell.gateway.auth]",
       "allow_unauthenticated_users = false",
@@ -119,6 +139,73 @@ describe("buildDockerDriverGatewayEnv", () => {
           OPENSHELL_GATEWAY_CONFIG: configPath,
         }),
       ).toThrow(/allow_unauthenticated_users=false/);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects configs missing any required gateway JWT entry", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-env-"));
+    try {
+      for (const key of [
+        "signing_key_path",
+        "public_key_path",
+        "kid_path",
+        "gateway_id",
+        "ttl_secs",
+      ]) {
+        const configPath = writeSafeGatewayAuthConfig(stateDir);
+        const config = fs
+          .readFileSync(configPath, "utf-8")
+          .replace(new RegExp(`^${key} = .+\\n`, "m"), "");
+        fs.writeFileSync(configPath, config);
+
+        expect(() =>
+          assertDockerDriverGatewayAuthConfigSafe({
+            OPENSHELL_BIND_ADDRESS: "127.0.0.1",
+            OPENSHELL_GATEWAY_CONFIG: configPath,
+          }),
+        ).toThrow(new RegExp(`gateway_jwt\\.${key}`));
+      }
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a gateway JWT TTL outside NemoClaw's bounded value", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-env-"));
+    try {
+      const configPath = writeSafeGatewayAuthConfig(stateDir);
+      fs.writeFileSync(
+        configPath,
+        fs
+          .readFileSync(configPath, "utf-8")
+          .replace(`ttl_secs = ${DOCKER_DRIVER_GATEWAY_JWT_TTL_SECS}`, "ttl_secs = 7200"),
+      );
+
+      expect(() =>
+        assertDockerDriverGatewayAuthConfigSafe({
+          OPENSHELL_BIND_ADDRESS: "127.0.0.1",
+          OPENSHELL_GATEWAY_CONFIG: configPath,
+        }),
+      ).toThrow(`gateway_jwt.ttl_secs=${DOCKER_DRIVER_GATEWAY_JWT_TTL_SECS}`);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects gateway JWT paths whose referenced file is absent", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-env-"));
+    try {
+      const configPath = writeSafeGatewayAuthConfig(stateDir);
+      fs.rmSync(path.join(stateDir, "jwt", "kid"));
+
+      expect(() =>
+        assertDockerDriverGatewayAuthConfigSafe({
+          OPENSHELL_BIND_ADDRESS: "127.0.0.1",
+          OPENSHELL_GATEWAY_CONFIG: configPath,
+        }),
+      ).toThrow(/gateway_jwt\.kid_path must reference an existing readable file/);
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
@@ -328,5 +415,51 @@ describe("writeDockerGatewayDebEnvOverride", () => {
         verifySandboxBridgeGatewayReachableOrExit: async () => undefined,
       }),
     ).toThrow(/not supported for the OpenShell Docker-driver gateway/);
+  });
+
+  it("rejects incomplete gateway JWT config before writing env or starting the service", () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-env-"));
+    const envFile = path.join(tempHome, ".config", "openshell", "gateway.env");
+    const startService = vi.fn();
+    const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(tempHome);
+    try {
+      for (const key of [
+        "signing_key_path",
+        "public_key_path",
+        "kid_path",
+        "gateway_id",
+        "ttl_secs",
+      ]) {
+        const configPath = writeSafeGatewayAuthConfig(tempHome);
+        fs.writeFileSync(
+          configPath,
+          fs.readFileSync(configPath, "utf-8").replace(new RegExp(`^${key} = .+\\n`, "m"), ""),
+        );
+
+        expect(() =>
+          startPackageManagedDockerDriverGatewayWithEnvOverride({
+            clearDockerDriverGatewayRuntimeFiles: vi.fn(),
+            exitOnFailure: false,
+            gatewayEnv: {
+              OPENSHELL_BIND_ADDRESS: "127.0.0.1",
+              OPENSHELL_GATEWAY_CONFIG: configPath,
+            },
+            gatewayName: "nemoclaw",
+            hasOpenShellGatewayUserService: () => true,
+            registerDockerDriverGatewayEndpoint: () => true,
+            runCaptureOpenshell: () => "",
+            skipSandboxBridgeReachability: false,
+            startOpenShellGatewayUserService: startService,
+            verifySandboxBridgeGatewayReachableOrExit: async () => undefined,
+          }),
+        ).toThrow(new RegExp(`gateway_jwt\\.${key}`));
+      }
+
+      expect(startService).not.toHaveBeenCalled();
+      expect(fs.existsSync(envFile)).toBe(false);
+    } finally {
+      homedirSpy.mockRestore();
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
   });
 });

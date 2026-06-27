@@ -12,7 +12,10 @@ import {
   WILDCARD_GATEWAY_BIND_ADDRESS,
 } from "../core/gateway-address";
 import { GATEWAY_PORT } from "../core/ports";
-import { prepareDockerDriverGatewayConfigEnv } from "./docker-driver-gateway-config";
+import {
+  DOCKER_DRIVER_GATEWAY_JWT_TTL_SECS,
+  prepareDockerDriverGatewayConfigEnv,
+} from "./docker-driver-gateway-config";
 import { buildDockerDriverGatewayLocalTlsEnv } from "./docker-driver-gateway-local-tls";
 import {
   hasOpenShellGatewayUserService,
@@ -76,31 +79,81 @@ export function assertDockerDriverGatewayBindAddressSafe(gatewayEnv: Record<stri
   );
 }
 
-function parseTomlBooleanValues(toml: string): Map<string, boolean> {
-  const values = new Map<string, boolean>();
+type TomlScalar = boolean | number | string;
+
+function parseTomlScalar(raw: string): TomlScalar | undefined {
+  const booleanMatch = raw.match(/^(true|false)(?:\s+#.*)?$/);
+  if (booleanMatch?.[1]) return booleanMatch[1] === "true";
+  const integerMatch = raw.match(/^(\d+)(?:\s+#.*)?$/);
+  if (integerMatch?.[1]) return Number(integerMatch[1]);
+  const stringMatch = raw.match(/^("(?:[^"\\]|\\.)*")(?:\s+#.*)?$/);
+  if (!stringMatch?.[1]) return undefined;
+  try {
+    const value: unknown = JSON.parse(stringMatch[1]);
+    return typeof value === "string" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseTomlScalarValues(toml: string): Map<string, TomlScalar> {
+  const values = new Map<string, TomlScalar>();
   let section = "";
   for (const rawLine of toml.split("\n")) {
-    const line = rawLine.replace(/#.*/, "").trim();
+    const line = rawLine.trim();
     const sectionMatch = line.match(/^\[([A-Za-z0-9_.-]+)\]$/);
     if (sectionMatch?.[1]) {
       section = sectionMatch[1];
       continue;
     }
-    const booleanMatch = line.match(/^([A-Za-z0-9_]+)\s*=\s*(true|false)$/);
-    if (booleanMatch?.[1] && booleanMatch[2]) {
-      values.set(`${section}.${booleanMatch[1]}`, booleanMatch[2] === "true");
-    }
+    const assignmentMatch = line.match(/^([A-Za-z0-9_]+)\s*=\s*(.+)$/);
+    if (!assignmentMatch?.[1] || !assignmentMatch[2]) continue;
+    const value = parseTomlScalar(assignmentMatch[2]);
+    if (value !== undefined) values.set(`${section}.${assignmentMatch[1]}`, value);
   }
   return values;
 }
 
-function assertTomlBoolean(values: Map<string, boolean>, key: string, expected: boolean): void {
+function assertTomlBoolean(values: Map<string, TomlScalar>, key: string, expected: boolean): void {
   const actual = values.get(key);
   if (actual === expected) return;
   throw new Error(
     `OpenShell Docker-driver gateway config must set ${key}=${expected}; found ${
       actual === undefined ? "missing" : actual
     }`,
+  );
+}
+
+function assertTomlString(values: Map<string, TomlScalar>, key: string): string {
+  const actual = values.get(key);
+  if (typeof actual === "string" && actual.trim()) return actual;
+  throw new Error(`OpenShell Docker-driver gateway config must set non-empty ${key}`);
+}
+
+function assertTomlInteger(values: Map<string, TomlScalar>, key: string, expected: number): void {
+  const actual = values.get(key);
+  if (actual === expected) return;
+  throw new Error(
+    `OpenShell Docker-driver gateway config must set ${key}=${expected}; found ${
+      actual === undefined ? "missing" : String(actual)
+    }`,
+  );
+}
+
+function assertGatewayJwtFile(key: string, filePath: string): void {
+  if (!path.isAbsolute(filePath)) {
+    throw new Error(`OpenShell Docker-driver gateway config ${key} must be an absolute path`);
+  }
+  try {
+    if (fs.statSync(filePath).isFile()) {
+      fs.accessSync(filePath, fs.constants.R_OK);
+      return;
+    }
+  } catch {
+    // Fall through to the fail-closed error below.
+  }
+  throw new Error(
+    `OpenShell Docker-driver gateway config ${key} must reference an existing readable file`,
   );
 }
 
@@ -111,11 +164,21 @@ export function assertDockerDriverGatewayAuthConfigSafe(gatewayEnv: Record<strin
     throw new Error("OpenShell Docker-driver gateway requires OPENSHELL_GATEWAY_CONFIG");
   }
   const toml = fs.readFileSync(configPath, "utf-8");
-  const values = parseTomlBooleanValues(toml);
+  const values = parseTomlScalarValues(toml);
   assertTomlBoolean(values, "openshell.gateway.disable_tls", false);
   assertTomlBoolean(values, "openshell.gateway.tls.require_client_auth", true);
   assertTomlBoolean(values, "openshell.gateway.mtls_auth.enabled", true);
   assertTomlBoolean(values, "openshell.gateway.auth.allow_unauthenticated_users", false);
+  for (const key of ["signing_key_path", "public_key_path", "kid_path"] as const) {
+    const fullKey = `openshell.gateway.gateway_jwt.${key}`;
+    assertGatewayJwtFile(fullKey, assertTomlString(values, fullKey));
+  }
+  assertTomlString(values, "openshell.gateway.gateway_jwt.gateway_id");
+  assertTomlInteger(
+    values,
+    "openshell.gateway.gateway_jwt.ttl_secs",
+    DOCKER_DRIVER_GATEWAY_JWT_TTL_SECS,
+  );
 }
 
 export function getDockerDriverGatewayEndpoint(): string {

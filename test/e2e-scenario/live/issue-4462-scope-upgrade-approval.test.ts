@@ -111,9 +111,9 @@ PY
 }
 
 select_initial_pairing_request() {
-python3 - <<'PY'
-import json, sys
-state=json.load(sys.stdin)
+python3 - 3<&0 <<'PY'
+import json, os
+state=json.load(os.fdopen(3))
 def norm(v): return str(v or '').strip()
 def is_cli(e): return norm(e.get('clientMode')).lower() == 'cli' or 'cli' in norm(e.get('clientId')).lower()
 paired={norm(e.get('deviceId')) for e in state.get('paired') or [] if isinstance(e, dict)}
@@ -126,9 +126,9 @@ PY
 }
 
 select_paired_cli_device() {
-python3 - <<'PY'
-import json, sys
-state=json.load(sys.stdin)
+python3 - 3<&0 <<'PY'
+import json, os
+state=json.load(os.fdopen(3))
 def norm(v): return str(v or '').strip()
 def is_cli(e): return norm(e.get('clientMode')).lower() == 'cli' or 'cli' in norm(e.get('clientId')).lower()
 for dev in sorted([e for e in state.get('paired') or [] if isinstance(e, dict)], key=lambda e:e.get('approvedAtMs') or 0, reverse=True):
@@ -224,18 +224,24 @@ PY
 }
 
 select_scope_request() {
-python3 - <<'PY'
-import json, sys
-state=json.load(sys.stdin)
+  local expected_device_id="$1"
+python3 - "$expected_device_id" 3<&0 <<'PY'
+import json, os, sys
+state=json.load(os.fdopen(3))
+expected_device_id=sys.argv[1]
 def norm(v): return str(v or '').strip()
 def is_cli(e): return norm(e.get('clientMode')).lower() == 'cli' or 'cli' in norm(e.get('clientId')).lower()
 def scopes(e): return {norm(s) for s in (e.get('scopes') or e.get('requestedScopes') or []) if norm(s)}
 def approved(e): return {norm(s) for s in (e.get('approvedScopes') or e.get('scopes') or []) if norm(s)}
 paired={norm(e.get('deviceId')): e for e in state.get('paired') or [] if isinstance(e, dict)}
 for req in sorted([e for e in state.get('pending') or [] if isinstance(e, dict)], key=lambda e:e.get('ts') or 0, reverse=True):
-    p=paired.get(norm(req.get('deviceId')))
+    request_device_id=norm(req.get('deviceId'))
+    if request_device_id != expected_device_id:
+        continue
+    p=paired.get(request_device_id)
     requested=scopes(req)
-    if is_cli(req) and p and {'operator.write','operator.read'}.intersection(requested) and not requested.issubset(approved(p)):
+    is_upgrade = p is None or not requested.issubset(approved(p))
+    if is_cli(req) and {'operator.write','operator.read'}.intersection(requested) and is_upgrade and norm(req.get('requestId')):
         print(norm(req.get('requestId')))
         raise SystemExit(0)
 raise SystemExit(1)
@@ -250,14 +256,16 @@ contains_integer_42() {
 }
 
 assert_agent_scopes_without_admin() {
-python3 - <<'PY'
-import json, sys
-state=json.load(sys.stdin)
+  local expected_device_id="$1"
+python3 - "$expected_device_id" 3<&0 <<'PY'
+import json, os, sys
+state=json.load(os.fdopen(3))
+expected_device_id=sys.argv[1]
 def norm(v): return str(v or '').strip()
 def is_cli(e): return norm(e.get('clientMode')).lower() == 'cli' or 'cli' in norm(e.get('clientId')).lower()
 def scopes(e): return {norm(s) for s in (e.get('approvedScopes') or e.get('scopes') or []) if norm(s)}
 for dev in state.get('paired') or []:
-    if not isinstance(dev, dict) or not is_cli(dev):
+    if not isinstance(dev, dict) or not is_cli(dev) or norm(dev.get('deviceId')) != expected_device_id:
         continue
     approved=scopes(dev)
     if 'operator.admin' in approved:
@@ -370,7 +378,7 @@ if [ -z "$paired_device_id" ]; then
 fi
 rotate_cli_to_pairing_scope "$paired_device_id" >/tmp/issue4462-initial-pairing.log
 state="$(state_json)"
-request_id="$(printf '%s' "$state" | select_scope_request 2>/dev/null || true)"
+request_id="$(printf '%s' "$state" | select_scope_request "$paired_device_id" 2>/dev/null || true)"
 if [ -z "$request_id" ]; then
   session_id="issue-4462-trigger-$(date +%s)-$$"
   rm -f "/sandbox/.openclaw/agents/main/sessions/\${session_id}.jsonl.lock" \
@@ -381,9 +389,9 @@ if [ -z "$request_id" ]; then
   set -e
   printf '%s\n' "$trigger_output" >/tmp/issue4462-trigger-agent.log
   state="$(state_json)"
-  request_id="$(printf '%s' "$state" | select_scope_request 2>/dev/null || true)"
+  request_id="$(printf '%s' "$state" | select_scope_request "$paired_device_id" 2>/dev/null || true)"
   if [ -z "$request_id" ]; then
-    if printf '%s' "$state" | assert_agent_scopes_without_admin >/tmp/issue4462-approved-device.txt 2>/tmp/issue4462-approved-device.err; then
+    if printf '%s' "$state" | assert_agent_scopes_without_admin "$paired_device_id" >/tmp/issue4462-approved-device.txt 2>/tmp/issue4462-approved-device.err; then
       echo "SCOPE_ALREADY_APPROVED=$(cat /tmp/issue4462-approved-device.txt)"
     elif [ "$trigger_rc" -eq 0 ] && ! grep -Eiq 'EMBEDDED FALLBACK|scope upgrade pending approval|pairing required|fallbackFrom[": ]+gateway|transport[": ]+embedded' /tmp/issue4462-trigger-agent.log \
       && contains_integer_42 </tmp/issue4462-trigger-agent.log; then
@@ -404,8 +412,8 @@ if [ -n "$request_id" ]; then
 fi
 
 state="$(state_json)"
-printf '%s' "$state" | assert_agent_scopes_without_admin >/tmp/issue4462-final-device.txt
-if printf '%s' "$state" | select_scope_request >/tmp/issue4462-pending-after.txt 2>/dev/null; then
+printf '%s' "$state" | assert_agent_scopes_without_admin "$paired_device_id" >/tmp/issue4462-final-device.txt
+if printf '%s' "$state" | select_scope_request "$paired_device_id" >/tmp/issue4462-pending-after.txt 2>/dev/null; then
   echo "PENDING_AFTER_APPROVAL=$(cat /tmp/issue4462-pending-after.txt)" >&2
   exit 6
 fi
