@@ -577,6 +577,7 @@ exit 0`,
     });
     expect(result.status).toBe(0);
     expect(result.stdout).toMatch(/dev channel/);
+    expect(result.stdout).toMatch(/Dev channel install skips SHA-256 verification/);
   });
 
   it("upgrades stable OpenShell when the dev channel is requested", () => {

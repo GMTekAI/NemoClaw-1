@@ -12,10 +12,20 @@ describe("markerless recovery output", () => {
     expect(
       outputLooksLikeMarkerlessGatewayLaunch({
         status: 0,
-        stdout: "launcher started without legacy recovery marker",
+        stdout: "OpenClaw gateway launcher started without legacy recovery marker",
         stderr: "",
       }),
     ).toBe(true);
+  });
+
+  it("ignores generic launcher output without gateway-specific wording", () => {
+    expect(
+      outputLooksLikeMarkerlessGatewayLaunch({
+        status: 0,
+        stdout: "launcher started for debugging",
+        stderr: "",
+      }),
+    ).toBe(false);
   });
 
   it("rejects failed or unrelated output", () => {
@@ -47,7 +57,7 @@ describe("markerless recovery output", () => {
       sandboxRecoveryAttemptFromExecResult(
         {
           status: 0,
-          stdout: "launcher started without legacy recovery marker",
+          stdout: "OpenClaw gateway launcher started without legacy recovery marker",
           stderr: "",
         },
         false,

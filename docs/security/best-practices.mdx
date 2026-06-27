@@ -465,6 +465,17 @@ NemoClaw binds the OpenShell gateway to loopback by default.
 | Risk if relaxed | Other hosts on the network may be able to reach the OpenShell gateway. Docker-driver gateways on OpenShell 0.0.67 reject wildcard gateway binds while gateway JWT auth is active. |
 | Recommendation | Keep the gateway loopback default and expose only the dashboard forward when remote access is needed. |
 
+### Gateway Compatibility Container
+
+On Linux hosts whose glibc is older than the OpenShell gateway binary requires, NemoClaw can run `openshell-gateway` in a Docker compatibility container so the Docker-driver gateway still starts.
+
+| Aspect | Detail |
+|---|---|
+| Default | The compatibility container keeps the main gateway listener on `127.0.0.1`, uses host networking so OpenShell computes the same Docker bridge callback addresses as a host-side gateway, mounts the Docker socket read-only, drops Linux capabilities, sets `no-new-privileges`, and publishes no extra Docker ports. |
+| What you can change | Disable the compatibility path with `NEMOCLAW_OPENSHELL_GATEWAY_CONTAINER_PATCH=0`, or run on a host/OpenShell build combination where the gateway binary launches directly. |
+| Risk if relaxed | The Docker socket remains a privileged host API even when bind-mounted read-only. Treat this mode as equivalent to trusting the host user that can drive Docker, and do not enable it on untrusted shared hosts. |
+| Recommendation | Prefer a directly supported OpenShell gateway binary or host glibc level. Use the compatibility container only as a local upgrade bridge for trusted hosts that still need the OpenShell 0.0.67 Docker-driver gateway. |
+
 ### Insecure Auth Derivation
 
 The `allowInsecureAuth` setting controls whether the gateway permits non-HTTPS authentication.

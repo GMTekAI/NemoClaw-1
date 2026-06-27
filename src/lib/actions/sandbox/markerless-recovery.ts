@@ -29,11 +29,16 @@ export function outputLooksLikeMarkerlessGatewayLaunch(
   }
   // Source boundary: newer OpenShell sandbox exec/relaunch output can omit the
   // legacy NemoClaw recovery markers even when the gateway launcher started.
-  // This broad text heuristic only marks "may have started"; recovery is not
-  // accepted until waitForRecoveredSandboxGateway() verifies a serving gateway.
+  // This text heuristic only marks "may have started"; recovery is not accepted
+  // until waitForRecoveredSandboxGateway() verifies a serving gateway. Require
+  // gateway/OpenClaw-specific wording so unrelated sandbox output like
+  // "launcher started for debugging" does not burn the health-probe timeout.
   // Remove this shim when OpenShell exposes a stable machine-readable recovery
   // marker for sandbox exec relaunch output.
-  return /\b(gateway|openclaw|launcher|started|nohup)\b/i.test(output);
+  return (
+    /\b(gateway|openclaw)\b/i.test(output) &&
+    /\b(gateway run|launcher|started|nohup)\b/i.test(output)
+  );
 }
 
 export function sandboxRecoveryAttemptFromExecResult(

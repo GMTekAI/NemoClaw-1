@@ -58,6 +58,10 @@ else
   RESOLVED_CHANNEL="$CHANNEL"
 fi
 
+if [ "$RESOLVED_CHANNEL" = "dev" ]; then
+  warn "Dev channel install skips SHA-256 verification. Use only in trusted environments."
+fi
+
 # Honour the TS installer's blueprint-derived env overrides only on the stable
 # channel — the dev channel installs from the `dev` tag and uses DEV_MIN_VERSION
 # instead, so a malformed override should not abort a dev install (#3446 review).
