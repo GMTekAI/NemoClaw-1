@@ -100,6 +100,11 @@ describe("OpenClaw 2026.6.9 dependency review contract", () => {
     );
     expect(review).toContain("unsafe reported archive filenames");
     expect(review).toContain("no installer code consumes raw `npm pack --json` filenames");
+    expect(review).toContain("`PRA-5` #4434 partial acceptance is explicitly accepted");
+    expect(review).toContain("3/3 fields are present in the NemoClaw-patched runtime output");
+    expect(review).toContain(
+      "3/3 fields are missing in the upstream-shaped `openclaw@2026.6.9` output",
+    );
     expect(review).toContain("OpenClaw Patch Source-of-Truth Table");
     expect(review).toContain(
       "| Patch | Invalid state | Source boundary | Why upstream/source cannot be fixed here | Regression test | Removal condition |",
