@@ -1150,6 +1150,239 @@ function validateNetworkPolicyVitestJob(
   }
 }
 
+function validateMcpBridgeVitestJob(
+  errors: string[],
+  jobs: WorkflowRecord,
+): void {
+  const jobName = "mcp-bridge-vitest";
+  const job = asRecord(jobs[jobName]);
+  if (Object.keys(job).length === 0) {
+    errors.push("workflow missing mcp-bridge-vitest job");
+    return;
+  }
+  if (job["runs-on"] !== "ubuntu-latest") {
+    errors.push("mcp-bridge-vitest job must run on ubuntu-latest");
+  }
+  validateFreeStandingJobSelector(errors, jobs, jobName, "mcp-bridge");
+
+  const jobEnv = asRecord(job.env);
+  if (jobEnv.NEMOCLAW_RUN_E2E_SCENARIOS !== "1") {
+    errors.push("mcp-bridge-vitest job must set NEMOCLAW_RUN_E2E_SCENARIOS=1");
+  }
+  if (jobEnv.NEMOCLAW_MCP_BRIDGE_AGENT_MATRIX !== "1") {
+    errors.push(
+      "mcp-bridge-vitest job must exercise the MCP bridge agent matrix",
+    );
+  }
+  if (
+    jobEnv.E2E_ARTIFACT_DIR !==
+    "${{ github.workspace }}/e2e-artifacts/vitest/mcp-bridge"
+  ) {
+    errors.push(
+      "mcp-bridge-vitest job must write artifacts under e2e-artifacts/vitest/mcp-bridge",
+    );
+  }
+  if (!stringValue(jobEnv.NEMOCLAW_CLI_BIN).includes("bin/nemoclaw.js")) {
+    errors.push(
+      "mcp-bridge-vitest job must point NEMOCLAW_CLI_BIN at the repo CLI",
+    );
+  }
+  if (jobEnv.NEMOCLAW_OPENSHELL_CHANNEL !== "${{ inputs.openshell_channel }}") {
+    errors.push(
+      "mcp-bridge-vitest job must pass openshell_channel to install-openshell.sh",
+    );
+  }
+  if (
+    jobEnv.NEMOCLAW_OPENSHELL_ARTIFACT_RUN_ID !==
+    "${{ inputs.openshell_artifact_run_id }}"
+  ) {
+    errors.push(
+      "mcp-bridge-vitest job must pass openshell_artifact_run_id to install-openshell.sh",
+    );
+  }
+  for (const secret of [
+    "NVIDIA_INFERENCE_API_KEY",
+    "DOCKERHUB_USERNAME",
+    "DOCKERHUB_TOKEN",
+    "GITHUB_TOKEN",
+    "DOCKER_CONFIG",
+  ]) {
+    requireEnvDoesNotExposeSecret(errors, "mcp-bridge-vitest job", jobEnv, secret);
+  }
+
+  const steps = asSteps(job.steps);
+  requireNoDispatchInputInterpolation(errors, steps);
+  for (const step of steps) {
+    const stepName = step.name ?? step.uses ?? "<unnamed>";
+    const stepEnv = asRecord(step.env);
+    if (step.name !== "Authenticate to Docker Hub") {
+      requireEnvDoesNotExposeSecret(
+        errors,
+        `mcp-bridge-vitest step '${stepName}'`,
+        stepEnv,
+        "DOCKERHUB_USERNAME",
+      );
+      requireEnvDoesNotExposeSecret(
+        errors,
+        `mcp-bridge-vitest step '${stepName}'`,
+        stepEnv,
+        "DOCKERHUB_TOKEN",
+      );
+    }
+    for (const secret of ["NVIDIA_INFERENCE_API_KEY", "GITHUB_TOKEN"]) {
+      requireEnvDoesNotExposeSecret(
+        errors,
+        `mcp-bridge-vitest step '${stepName}'`,
+        stepEnv,
+        secret,
+      );
+    }
+  }
+
+  const checkout = steps.find((step) =>
+    stringValue(step.uses).startsWith("actions/checkout@"),
+  );
+  if (!checkout) errors.push("mcp-bridge-vitest job missing checkout step");
+  requireFullShaAction(errors, checkout, "mcp-bridge-vitest checkout");
+  if (asRecord(checkout?.with)["persist-credentials"] !== false) {
+    errors.push("mcp-bridge-vitest checkout step must set persist-credentials=false");
+  }
+
+  const configureDockerAuth = requireJobStep(
+    errors,
+    jobName,
+    steps,
+    "Configure isolated Docker auth directory",
+  );
+  requireRunContains(
+    errors,
+    configureDockerAuth,
+    'echo "DOCKER_CONFIG=${RUNNER_TEMP}/docker-config-mcp-bridge" >> "$GITHUB_ENV"',
+  );
+
+  const auth = requireJobStep(errors, jobName, steps, "Authenticate to Docker Hub");
+  const authEnv = asRecord(auth?.env);
+  if (authEnv.DOCKERHUB_USERNAME !== "${{ secrets.DOCKERHUB_USERNAME }}") {
+    errors.push(
+      "mcp-bridge-vitest Docker auth step must receive DOCKERHUB_USERNAME from secrets",
+    );
+  }
+  if (authEnv.DOCKERHUB_TOKEN !== "${{ secrets.DOCKERHUB_TOKEN }}") {
+    errors.push(
+      "mcp-bridge-vitest Docker auth step must receive DOCKERHUB_TOKEN from secrets",
+    );
+  }
+  requireRunContains(errors, auth, 'mkdir -p "${DOCKER_CONFIG}"');
+  requireRunContains(errors, auth, 'chmod 700 "${DOCKER_CONFIG}"');
+
+  const setupNode = namedStep(steps, "Set up Node");
+  if (!setupNode) errors.push("mcp-bridge-vitest job missing step: Set up Node");
+  requireFullShaAction(errors, setupNode, "mcp-bridge-vitest setup-node");
+
+  const installRootDependencies = requireJobStep(
+    errors,
+    jobName,
+    steps,
+    "Install root dependencies",
+  );
+  requireRunContains(
+    errors,
+    installRootDependencies,
+    "npm ci --ignore-scripts",
+  );
+
+  const buildCli = requireJobStep(errors, jobName, steps, "Build CLI");
+  requireRunContains(errors, buildCli, "npm run build:cli");
+
+  const installOpenShell = requireJobStep(
+    errors,
+    jobName,
+    steps,
+    "Install OpenShell CLI",
+  );
+  const installEnv = asRecord(installOpenShell?.env);
+  requireEnvDoesNotExposeSecret(
+    errors,
+    "mcp-bridge-vitest Install OpenShell CLI step",
+    installEnv,
+    "GH_TOKEN",
+  );
+  if (
+    !stringValue(installEnv.NEMOCLAW_INSTALL_OPENSHELL_GH_TOKEN).includes(
+      "inputs.openshell_channel == 'artifact'",
+    )
+  ) {
+    errors.push(
+      "mcp-bridge-vitest OpenShell install token must be present only for artifact installs",
+    );
+  }
+  requireRunContains(
+    errors,
+    installOpenShell,
+    'if [[ "${NEMOCLAW_OPENSHELL_CHANNEL}" == "artifact" ]]',
+  );
+  requireRunContains(
+    errors,
+    installOpenShell,
+    "bash scripts/install-openshell.sh",
+  );
+
+  const runVitest = requireJobStep(
+    errors,
+    jobName,
+    steps,
+    "Run MCP OpenShell provider live test",
+  );
+  requireRunContains(
+    errors,
+    runVitest,
+    'export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"',
+  );
+  requireRunContains(
+    errors,
+    runVitest,
+    'OPENSHELL_BIN="$(command -v openshell)"',
+  );
+  requireRunContains(errors, runVitest, "export OPENSHELL_BIN");
+  requireRunContains(
+    errors,
+    runVitest,
+    "npx vitest run --project e2e-scenarios-live",
+  );
+  requireRunContains(
+    errors,
+    runVitest,
+    "test/e2e-scenario/live/mcp-bridge.test.ts",
+  );
+
+  const upload = requireJobStep(errors, jobName, steps, "Upload MCP server artifacts");
+  requireFullShaAction(errors, upload, "mcp-bridge-vitest upload-artifact");
+  const uploadWith = asRecord(upload?.with);
+  if (uploadWith.name !== "e2e-vitest-scenarios-mcp-bridge") {
+    errors.push("mcp-bridge-vitest artifact upload name must be stable");
+  }
+  const uploadPath = stringValue(uploadWith.path);
+  requireUploadPathContains(errors, uploadPath, "e2e-artifacts/vitest/mcp-bridge/");
+  if (uploadWith["include-hidden-files"] !== false) {
+    errors.push("mcp-bridge-vitest artifact upload must set include-hidden-files: false");
+  }
+  if (uploadWith["if-no-files-found"] !== "ignore") {
+    errors.push(
+      "mcp-bridge-vitest artifact upload must ignore missing fixture artifacts",
+    );
+  }
+  if (uploadWith["retention-days"] !== 14) {
+    errors.push("mcp-bridge-vitest artifact upload retention-days must be 14");
+  }
+
+  const cleanup = requireJobStep(errors, jobName, steps, "Clean up Docker auth");
+  if (cleanup?.if !== "always()") {
+    errors.push("mcp-bridge-vitest Docker auth cleanup must always run");
+  }
+  requireRunContains(errors, cleanup, "docker logout docker.io");
+  requireRunContains(errors, cleanup, 'rm -rf "${DOCKER_CONFIG}"');
+}
+
 function validateCommonEgressAgentVitestJob(
   errors: string[],
   jobs: WorkflowRecord,
@@ -7789,6 +8022,7 @@ export function validateE2eVitestScenariosWorkflowBoundary(
   validateFreeStandingJobSelector(errors, jobs, "hermes-discord-vitest", "hermes-discord");
   validateHermesRootEntrypointSmokeVitestJob(errors, jobs);
   validateHermesSandboxSecretBoundaryVitestJob(errors, jobs);
+  validateMcpBridgeVitestJob(errors, jobs);
   validateNetworkPolicyVitestJob(errors, jobs);
   validateCommonEgressAgentVitestJob(errors, jobs);
   validateShieldsConfigVitestJob(errors, jobs);

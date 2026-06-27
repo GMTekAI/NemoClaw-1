@@ -464,8 +464,10 @@ describe("fetch-guard patch regression guard", () => {
     expect(stale.calls).toContain(
       `npm install -g --ignore-scripts --no-audit --no-fund --no-progress mcporter@${expectedMcporterVersion}`,
     );
-    expect(fs.readFileSync(DOCKERFILE_BASE, "utf-8")).toContain(
-      `npm install -g --ignore-scripts --no-audit --no-fund --no-progress "mcporter@\${MCPORTER_VERSION}"`,
+    readRequiredMatch(
+      DOCKERFILE_BASE,
+      /npm install -g --ignore-scripts --no-audit --no-fund --no-progress "mcporter@\$\{MCPORTER_VERSION\}"/,
+      "mcporter base install with lifecycle scripts disabled",
     );
     expect(
       dockerRunCommandBetween(
