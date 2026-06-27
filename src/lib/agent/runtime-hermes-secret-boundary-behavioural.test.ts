@@ -290,6 +290,7 @@ describe("Hermes secret-boundary guard — full recovery script behaviour", () =
     expect(recoveryScript).not.toBeNull();
     let stubbed = rewriteRecoveryPreloadPaths(recoveryScript!, opts)
       .replace(new RegExp(HERMES_SECRET_BOUNDARY_VALIDATOR_PATH, "g"), opts.validatorPath)
+      .replace(/\/usr\/local\/bin\/hermes/g, path.join(opts.stubsDir, "hermes"))
       .replace(/\/tmp\/gateway-recovery\.log/g, opts.recoveryLogPath)
       .replace(/\/tmp\/gateway\.log/g, opts.gatewayLogPath)
       .replace(
@@ -472,6 +473,7 @@ describe("Hermes secret-boundary guard — full recovery script behaviour", () =
                 new RegExp(HERMES_SECRET_BOUNDARY_VALIDATOR_PATH, "g"),
                 path.join(validatorRoot, "validate-hermes-env-secret-boundary.py"),
               )
+              .replace(/\/usr\/local\/bin\/hermes/g, path.join(harness.stubsDir, "hermes"))
               .replace(/\/tmp\/gateway-recovery\.log/g, harness.recoveryLogPath)
               .replace(/\/tmp\/nemoclaw-proxy-env\.sh/g, proxyEnvFile)
               .replace(/\/tmp\/gateway\.log/g, harness.gatewayLogPath)
