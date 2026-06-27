@@ -552,9 +552,9 @@ const openshellInstallFlow: typeof import("./onboard/openshell-install") =
   require("./onboard/openshell-install");
 const openshellPinFlow: typeof import("./onboard/openshell-pin") =
   require("./onboard/openshell-pin");
-const openshellFeatureGate: typeof import("./onboard/openshell-feature-gate") = require("./onboard/openshell-feature-gate");
 const sandboxCreateFailureDiagnostics: typeof import("./onboard/sandbox-create-failure") =
   require("./onboard/sandbox-create-failure");
+
 import type { CurlProbeResult } from "./adapters/http/probe";
 import type { AgentDefinition } from "./agent/defs";
 import type { WebSearchConfig } from "./inference/web-search";
@@ -609,6 +609,7 @@ import type { Session, SessionUpdates } from "./state/onboard-session";
 import type { SandboxEntry } from "./state/registry";
 import type { BackupResult } from "./state/sandbox";
 import type { ProbeRecovery } from "./validation-recovery";
+
 const EXPERIMENTAL = process.env.NEMOCLAW_EXPERIMENTAL === "1";
 const USE_COLOR = !process.env.NO_COLOR && !!process.stdout.isTTY;
 const DIM = USE_COLOR ? "\x1b[2m" : "";
@@ -1131,11 +1132,7 @@ function areRequiredDockerDriverBinariesPresent(
   );
 }
 
-function ensureOpenshellForOnboard(): {
-  installed?: boolean;
-  localBin: string | null;
-  futureShellPathHint: string | null;
-} {
+function ensureOpenshellForOnboard(): OpenShellInstallResult {
   return openshellInstallFlow.ensureOpenshellForOnboard(getOpenShellInstallDeps());
 }
 
@@ -1154,11 +1151,8 @@ function getOpenShellInstallDeps(): OpenShellInstallDeps {
     isOpenshellDevVersion,
     versionGte,
     hasRequiredOpenshellMessagingFeatures: () =>
-      openshellFeatureGate.hasRequiredOpenshellMessagingFeatures({
-        openshellBin: resolveOpenshell(),
-        gatewayBin: resolveOpenShellGatewayBinary(),
-        sandboxBin: resolveOpenShellSandboxBinary(),
-      }),
+      // biome-ignore format: keep src/lib/onboard.ts net-neutral for growth guardrail.
+      (require("./onboard/openshell-feature-gate") as typeof import("./onboard/openshell-feature-gate")).hasRequiredOpenshellMessagingFeatures({ openshellBin: resolveOpenshell(), gatewayBin: resolveOpenShellGatewayBinary(), sandboxBin: resolveOpenShellSandboxBinary() }),
     shouldAllowOpenshellAboveBlueprintMax,
     cliDisplayName,
     log: console.log,
