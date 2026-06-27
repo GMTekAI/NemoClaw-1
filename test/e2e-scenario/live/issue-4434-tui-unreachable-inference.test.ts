@@ -70,6 +70,14 @@ function shellSingleQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
+function chatCompletionPayload(model: string, content: string): string {
+  return JSON.stringify({
+    model,
+    messages: [{ role: "user", content }],
+    max_tokens: 8,
+  });
+}
+
 function readBundledOpenClawVersion(): string {
   const dockerfile = fs.readFileSync(DOCKERFILE_BASE, "utf8");
   const match = dockerfile.match(/^ARG OPENCLAW_VERSION=(\S+)\s*$/m);
@@ -261,15 +269,11 @@ runIssue4434LiveTest(
     const originalRouteTimeout = routePlain.match(/Timeout:\s*(\d+)s/i)?.[1] ?? "0";
     expect(originalRouteTimeout, `could not parse inference timeout\n${routePlain}`).not.toBe("0");
 
-    const completionPayload = JSON.stringify({
-      model: hosted.model,
-      messages: [{ role: "user", content: "Reply with OK." }],
-      max_tokens: 8,
-    });
+    const preBlockPayload = chatCompletionPayload(hosted.model, "Reply before the fault.");
     const preBlockProbe = await sandbox.execShell(
       instance.sandboxName,
       trustedSandboxShellScript(
-        `command -v curl >/dev/null && curl -fsS --max-time 60 https://inference.local/v1/chat/completions -H 'Content-Type: application/json' -d ${shellSingleQuote(completionPayload)} >/dev/null`,
+        `command -v curl >/dev/null && curl -fsS --max-time 60 https://inference.local/v1/chat/completions -H 'Content-Type: application/json' -d ${shellSingleQuote(preBlockPayload)} >/dev/null`,
       ),
       {
         artifactName: "issue4434-inference-local-before-block",
@@ -336,6 +340,10 @@ runIssue4434LiveTest(
     await artifacts.writeJson("issue4434-fake-openai-endpoint.json", { baseUrl: fake.baseUrl });
 
     const fakeProviderName = `issue-4434-fake-${new URL(fake.baseUrl).port}`;
+    const failedRoutePayload = chatCompletionPayload(
+      hosted.model,
+      `This must fail after ${fakeProviderName} stops.`,
+    );
     const createProvider = await host.command(
       "openshell",
       [
@@ -429,38 +437,58 @@ runIssue4434LiveTest(
     );
     expect(updateRoute.exitCode, resultText(updateRoute)).toBe(0);
 
-    const fakeRouteProbe = await sandbox.execShell(
-      instance.sandboxName,
-      trustedSandboxShellScript(
-        `command -v curl >/dev/null && curl -fsS --max-time 30 https://inference.local/v1/chat/completions -H 'Content-Type: application/json' -d ${shellSingleQuote(completionPayload)} >/dev/null`,
-      ),
-      {
-        artifactName: "issue4434-inference-local-through-fake-endpoint",
-        env: buildAvailabilityProbeEnv(),
-        timeoutMs: 45_000,
-      },
-    );
+    let fakeRouteProbeAttempt = 0;
+    let fakeRouteProbeExitCode: number | null | undefined;
+    let fakeRouteProbeText = "";
+    await expect
+      .poll(
+        async () => {
+          fakeRouteProbeAttempt += 1;
+          const fakeRoutePayload = chatCompletionPayload(
+            hosted.model,
+            `Reply through ${fakeProviderName}, attempt ${fakeRouteProbeAttempt}.`,
+          );
+          const probe = await sandbox.execShell(
+            instance.sandboxName,
+            trustedSandboxShellScript(
+              `command -v curl >/dev/null && curl -fsS --max-time 30 https://inference.local/v1/chat/completions -H 'Content-Type: application/json' -d ${shellSingleQuote(fakeRoutePayload)} >/dev/null`,
+            ),
+            {
+              artifactName: `issue4434-inference-local-through-fake-endpoint-${fakeRouteProbeAttempt}`,
+              env: buildAvailabilityProbeEnv(),
+              timeoutMs: 45_000,
+            },
+          );
+          fakeRouteProbeExitCode = probe.exitCode;
+          fakeRouteProbeText = resultText(probe);
+          return fake
+            .requests()
+            .some(
+              (request) =>
+                request.method === "POST" &&
+                ["/chat/completions", "/v1/chat/completions"].includes(request.path),
+            );
+        },
+        {
+          interval: 1_000,
+          message: "managed inference route did not refresh to the fake provider",
+          timeout: 45_000,
+        },
+      )
+      .toBe(true);
     expect(
-      fakeRouteProbe.exitCode,
-      `inference.local did not reach the fake provider before it stopped\n${resultText(fakeRouteProbe)}`,
+      fakeRouteProbeExitCode,
+      `inference.local reached the fake provider with a failed response\n${fakeRouteProbeText}`,
     ).toBe(0);
     const fakeRequests = fake.requests();
     await artifacts.writeJson("issue4434-fake-openai-requests.json", fakeRequests);
-    expect(
-      fakeRequests.some(
-        (request) =>
-          request.method === "POST" &&
-          ["/chat/completions", "/v1/chat/completions"].includes(request.path),
-      ),
-      `managed inference did not send a chat completion to the fake endpoint: ${JSON.stringify(fakeRequests)}`,
-    ).toBe(true);
 
     await closeFake();
 
     const failedManagedRouteProbe = await sandbox.execShell(
       instance.sandboxName,
       trustedSandboxShellScript(
-        `command -v curl >/dev/null && curl -fsS --connect-timeout 5 --max-time 30 https://inference.local/v1/chat/completions -H 'Content-Type: application/json' -d ${shellSingleQuote(completionPayload)} >/dev/null`,
+        `command -v curl >/dev/null && curl -fsS --connect-timeout 5 --max-time 30 https://inference.local/v1/chat/completions -H 'Content-Type: application/json' -d ${shellSingleQuote(failedRoutePayload)} >/dev/null`,
       ),
       {
         artifactName: "issue4434-inference-local-after-fake-endpoint-stopped",
