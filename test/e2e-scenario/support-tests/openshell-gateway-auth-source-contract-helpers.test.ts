@@ -1,17 +1,29 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  assertOpenShellGatewayAuthArtifactsSafe,
   buildSandboxTokenContainerProbeDockerArgs,
   skipUnavailableProbeImage,
 } from "../live/openshell-gateway-auth-source-contract-helpers.ts";
 
 function valuesAfterFlag(args: string[], flag: string): string[] {
   return args.flatMap((arg, index) => (arg === flag ? [args[index + 1] ?? ""] : []));
+}
+
+function withArtifactDir(fn: (dir: string) => void): void {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-auth-artifact-scan-"));
+  try {
+    fn(dir);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 describe("OpenShell gateway auth source contract helpers", () => {
@@ -84,7 +96,7 @@ describe("OpenShell gateway auth source contract helpers", () => {
         skip,
         true,
       ),
-    ).toThrow(/Docker probe image was unavailable.*toomanyrequests/);
+    ).toThrow(/became unavailable.*after the workflow pre-pull step.*toomanyrequests/);
     expect(skip).not.toHaveBeenCalled();
   });
 
@@ -94,5 +106,64 @@ describe("OpenShell gateway auth source contract helpers", () => {
     skipUnavailableProbeImage({ status: 125, stdout: "", stderr: "manifest unknown" }, skip, false);
 
     expect(skip).toHaveBeenCalledWith("Docker probe image was unavailable: manifest unknown");
+  });
+
+  it("accepts ordinary auth-contract artifacts without secret-bearing material", () => {
+    withArtifactDir((dir) => {
+      fs.writeFileSync(
+        path.join(dir, "scenario.json"),
+        `${JSON.stringify({ contract: "sandbox JWT enabled", status: "passed" })}\n`,
+      );
+      fs.writeFileSync(
+        path.join(dir, "openshell-gateway.log"),
+        "INFO sandbox JWT enabled for gateway authentication\n",
+      );
+
+      expect(() => assertOpenShellGatewayAuthArtifactsSafe(dir)).not.toThrow();
+    });
+  });
+
+  it.each([
+    ["authorization header", '{"authorization":"redacted"}\n'],
+    [
+      "Bearer JWT",
+      ["Bearer ", "eyJhbGciOiJFZERTQSJ9", ".", "eyJzdWIiOiJzYW5kYm94In0", ".", "signature\n"].join(
+        "",
+      ),
+    ],
+    ["JWT signing-key path", "/tmp/state/jwt/signing.pem\n"],
+    ["JWT key-id path", "/tmp/state/jwt/kid\n"],
+    ["gateway auth config path", "/tmp/state/openshell-gateway.toml\n"],
+    ["gateway JWT configuration", "[openshell.gateway.gateway_jwt]\n"],
+    [
+      "private key",
+      ["-----BEGIN ", "PRIVATE KEY-----\n", "redacted\n", "-----END ", "PRIVATE KEY-----\n"].join(
+        "",
+      ),
+    ],
+  ])("rejects %s content without echoing it", (label, content) => {
+    withArtifactDir((dir) => {
+      fs.writeFileSync(path.join(dir, "probe.json"), content);
+
+      expect(() => assertOpenShellGatewayAuthArtifactsSafe(dir)).toThrow(
+        new RegExp(`probe\\.json.*${label}`),
+      );
+    });
+  });
+
+  it.each([
+    "jwt/signing.pem",
+    "jwt/kid",
+    "openshell-gateway.toml",
+  ])("rejects sensitive artifact path %s", (relativePath) => {
+    withArtifactDir((dir) => {
+      const target = path.join(dir, relativePath);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, "redacted\n");
+
+      expect(() => assertOpenShellGatewayAuthArtifactsSafe(dir)).toThrow(
+        /sensitive auth file name/,
+      );
+    });
   });
 });

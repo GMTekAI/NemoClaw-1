@@ -73,7 +73,7 @@ describe("enforceHermesSecretBoundaryOnRunningGateway", () => {
 
     const result = enforceHermesSecretBoundaryOnRunningGateway(SANDBOX, HERMES_AGENT, exec);
 
-    expect(result).toEqual({ refused: true, reason: "inconclusive", stderr: "" });
+    expect(result).toEqual({ refused: true, reason: "exec-failed", stderr: "" });
     expect(exec).toHaveBeenCalledWith(
       SANDBOX,
       expect.stringContaining("validate-hermes-env-secret-boundary.py"),

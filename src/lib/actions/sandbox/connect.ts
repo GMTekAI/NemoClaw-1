@@ -51,11 +51,11 @@ import {
 } from "./connect-autopair-budget";
 import { preflightVllmModelEnvOrExit } from "./connect-vllm-preflight";
 import { isDockerRuntimeDown, printDockerRuntimeDownGuidance } from "./gateway-failure-classifier";
-import { runTerminalAgentConnectProbe } from "./terminal-connect-probe";
 import { ensureLiveSandboxOrExit, printGatewayLifecycleHint } from "./gateway-state";
 import { getSandboxTargetGatewayName } from "./gateway-target";
 import { printGatewayWedgeDiagnostics } from "./gateway-wedge-diagnostics";
 import { checkAndRecoverSandboxProcesses, executeSandboxExecCommand } from "./process-recovery";
+import { runTerminalAgentConnectProbe } from "./terminal-connect-probe";
 import { applyOpenShellVmDnsMonkeypatch, shouldApplyVmDnsMonkeypatch } from "./vm-dns-monkeypatch";
 
 export type SandboxConnectOptions = {
@@ -193,7 +193,11 @@ function exitOnSecretBoundaryRefusal(
   console.error("");
   const reason =
     "secretBoundaryReason" in processCheck
-      ? (processCheck.secretBoundaryReason as "raw-secret" | "inconclusive" | undefined)
+      ? (processCheck.secretBoundaryReason as
+          | "raw-secret"
+          | "exec-failed"
+          | "inconclusive"
+          | undefined)
       : undefined;
   if (reason === "raw-secret") {
     console.error(
@@ -201,6 +205,13 @@ function exitOnSecretBoundaryRefusal(
     );
     console.error(
       "  Replace raw secret values with openshell:resolve:env:<name> placeholders and re-run.",
+    );
+  } else if (reason === "exec-failed") {
+    console.error(
+      `  ${contextLabel} failed: could not execute the secret-boundary check for ${agentName} gateway in '${sandboxName}'.`,
+    );
+    console.error(
+      "  Check sandbox connectivity, then re-run `nemoclaw <sandbox> recover` before connecting.",
     );
   } else {
     console.error(

@@ -363,9 +363,10 @@ jobs:
 
   openshell-gateway-auth-contract-vitest:
     needs: generate-matrix
-    # This resource-heavy live probe remains selective. Regular PR CI enforces
-    # the generated auth/JWT config and package-service fail-closed boundary in
-    # focused unit tests; the E2E advisor requires this job for affected PRs.
+    # Accepted release-gate tradeoff: this resource-heavy live probe remains
+    # selective because regular PR CI enforces the generated auth/JWT config and
+    # package-service fail-closed boundary in focused unit tests. Affected PRs
+    # must explicitly dispatch this job and record its result before merge.
     if: ${{ contains(format(',{0},', inputs.jobs), ',openshell-gateway-auth-contract-vitest,') || contains(format(',{0},', inputs.scenarios), ',openshell-gateway-auth-contract,') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -5695,6 +5696,9 @@ jobs:
   # consistent comment formatting across both suites.
   report-to-pr:
     runs-on: ubuntu-latest
+    # This entire workflow is dispatch-only. Keeping selective jobs in `needs`
+    # makes the report wait for and record any requested job without adding
+    # skipped checks to the normal pull_request workflow.
     needs:
       [
         generate-matrix,

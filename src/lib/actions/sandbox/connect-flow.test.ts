@@ -33,7 +33,7 @@ type ConnectHarnessOptions = {
     recovered?: boolean;
     forwardRecovered?: boolean;
     secretBoundaryRefused?: boolean;
-    secretBoundaryReason?: "raw-secret" | "inconclusive";
+    secretBoundaryReason?: "raw-secret" | "exec-failed" | "inconclusive";
   };
   spawnSignal?: NodeJS.Signals | null;
   spawnStatus?: number | null;
@@ -528,6 +528,37 @@ describe("connectSandbox flow", () => {
     );
     const logOutput = harness.logSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
     expect(logOutput).not.toContain("Probe complete");
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it("reports an exec-channel failure separately from validator refusal", async () => {
+    const harness = createConnectHarness({
+      processCheck: {
+        checked: true,
+        wasRunning: true,
+        recovered: false,
+        forwardRecovered: false,
+        secretBoundaryRefused: true,
+        secretBoundaryReason: "exec-failed",
+      },
+    });
+    const agentRuntime = requireDist("../../../../dist/lib/agent/runtime.js");
+    vi.spyOn(agentRuntime, "getSessionAgent").mockReturnValue({ name: "hermes" });
+    vi.spyOn(agentRuntime, "getAgentDisplayName").mockReturnValue("Hermes");
+    const errorSpy = vi.spyOn(console, "error");
+
+    await expect(harness.connectSandbox("alpha", { probeOnly: true })).rejects.toThrow(
+      "process.exit(1)",
+    );
+
+    const errorOutput = errorSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
+    expect(errorOutput).toContain(
+      "Probe failed: could not execute the secret-boundary check for Hermes gateway in 'alpha'.",
+    );
+    expect(errorOutput).toContain(
+      "Check sandbox connectivity, then re-run `nemoclaw <sandbox> recover` before connecting.",
+    );
+    expect(errorOutput).not.toContain("raw secret-shaped values");
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 });

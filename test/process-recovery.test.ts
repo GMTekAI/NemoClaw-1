@@ -1376,7 +1376,7 @@ hermes-box  127.0.0.1  8642  12346  running`;
       recovered: false,
       forwardRecovered: false,
       secretBoundaryRefused: true,
-      secretBoundaryReason: "inconclusive",
+      secretBoundaryReason: "exec-failed",
     });
     expect(secretBoundaryCalls).toBe(1);
     expect(forwardListCalls).toBe(0);

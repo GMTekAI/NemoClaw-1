@@ -23,6 +23,22 @@ const SANDBOX_JWT_SUBJECT_PREFIX = "spiffe://openshell/sandbox/";
 const DOCKER_GRPC_PROBE_IMAGE =
   "node:22-trixie-slim@sha256:2d9f5c76c8f4dd36e8f253bee5d828a83a6c09f36188f0b0414325232e0b175d";
 
+const FORBIDDEN_AUTH_ARTIFACT_CONTENT: Array<{ label: string; pattern: RegExp }> = [
+  { label: "authorization header", pattern: /["']?authorization["']?\s*[:=]/i },
+  {
+    label: "Bearer JWT",
+    pattern: /\bBearer\s+[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/,
+  },
+  { label: "JWT signing-key path", pattern: /(?:^|[/\\])jwt[/\\]signing\.pem\b/i },
+  { label: "JWT key-id path", pattern: /(?:^|[/\\])jwt[/\\]kid\b/i },
+  { label: "gateway auth config path", pattern: /\bopenshell-gateway\.toml\b/i },
+  {
+    label: "gateway JWT configuration",
+    pattern: /\[openshell\.gateway\.gateway_jwt\]/i,
+  },
+  { label: "private key", pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----/ },
+];
+
 type SkipFn = (message?: string) => void;
 
 type ScenarioFixtures = {
@@ -76,6 +92,42 @@ function run(command: string, args: string[], env: NodeJS.ProcessEnv = process.e
 
 function commandOutput(result: SpawnResult): string {
   return [result.stdout, result.stderr].filter(Boolean).join("\n");
+}
+
+export function assertOpenShellGatewayAuthArtifactsSafe(rootDir: string): void {
+  const root = path.resolve(rootDir);
+  const visit = (dir: string): void => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const absolutePath = path.join(dir, entry.name);
+      const relativePath = path.relative(root, absolutePath).split(path.sep).join("/");
+      if (entry.isDirectory()) {
+        visit(absolutePath);
+        continue;
+      }
+      if (!entry.isFile()) {
+        throw new Error(
+          `Unsafe OpenShell auth-contract artifact '${relativePath}': non-regular file`,
+        );
+      }
+      if (
+        /^(?:.*\/)?jwt\/(?:signing\.pem|kid)$|(?:^|\/)openshell-gateway\.toml$/i.test(relativePath)
+      ) {
+        throw new Error(
+          `Unsafe OpenShell auth-contract artifact '${relativePath}': sensitive auth file name`,
+        );
+      }
+      const content = fs.readFileSync(absolutePath, "utf-8");
+      const forbidden = FORBIDDEN_AUTH_ARTIFACT_CONTENT.find(({ pattern }) =>
+        pattern.test(content),
+      );
+      if (forbidden) {
+        throw new Error(
+          `Unsafe OpenShell auth-contract artifact '${relativePath}': ${forbidden.label}`,
+        );
+      }
+    }
+  };
+  visit(root);
 }
 
 function resolveGatewayBin(): string | null {
@@ -542,7 +594,11 @@ export function skipUnavailableProbeImage(
     )
   ) {
     const message = `Docker probe image was unavailable: ${commandOutput(result).slice(0, 500)}`;
-    if (githubActions) throw new Error(message);
+    if (githubActions) {
+      throw new Error(
+        `Docker probe image became unavailable during the live auth-contract runtime probe after the workflow pre-pull step: ${commandOutput(result).slice(0, 500)}`,
+      );
+    }
     skip(message);
   }
 }
@@ -737,4 +793,5 @@ export async function runOpenShellGatewayAuthSourceContractScenario({
   ).toBe(true);
 
   await artifacts.writeText("openshell-gateway.log", gatewayLog);
+  assertOpenShellGatewayAuthArtifactsSafe(artifacts.rootDir);
 }

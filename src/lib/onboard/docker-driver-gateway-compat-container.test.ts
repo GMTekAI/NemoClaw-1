@@ -2,12 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import fs from "node:fs";
+import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { prepareContainerizedDockerDriverGatewayLaunch } from "../../../dist/lib/onboard/docker-driver-gateway-compat";
+import {
+  assertCompatibleDockerDaemonReachable,
+  prepareContainerizedDockerDriverGatewayLaunch,
+} from "../../../dist/lib/onboard/docker-driver-gateway-compat";
 
 import {
   buildDockerDriverGatewayLaunch,
@@ -252,14 +256,46 @@ describe("docker-driver-gateway compatibility container", () => {
       containerName: "nemoclaw-openshell-gateway",
     };
 
-    expect(() => prepareContainerizedDockerDriverGatewayLaunch(launch, removeContainer)).toThrow(
-      /Failed to remove prior OpenShell compatibility gateway container.*ETIMEDOUT/,
-    );
+    const verifyDockerDaemon = vi.fn();
+    expect(() =>
+      prepareContainerizedDockerDriverGatewayLaunch(launch, removeContainer, verifyDockerDaemon),
+    ).toThrow(/Failed to remove prior OpenShell compatibility gateway container.*ETIMEDOUT/);
+    expect(verifyDockerDaemon).toHaveBeenCalledWith(launch.env);
     expect(removeContainer).toHaveBeenCalledWith("nemoclaw-openshell-gateway", {
       ignoreError: true,
       suppressOutput: true,
       timeout: 30_000,
     });
+  });
+
+  it("fails closed when the configured Unix socket does not answer as a Docker daemon", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-docker-daemon-probe-"));
+    const socketPath = path.join(dir, "docker.sock");
+    const server = createServer();
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(socketPath, resolve);
+    });
+    const probeError = Object.assign(new Error("spawnSync docker ETIMEDOUT"), {
+      code: "ETIMEDOUT",
+    });
+    const probe = vi.fn(() => {
+      throw probeError;
+    }) as unknown as NonNullable<Parameters<typeof assertCompatibleDockerDaemonReachable>[1]>;
+
+    try {
+      expect(() =>
+        assertCompatibleDockerDaemonReachable({ DOCKER_HOST: `unix://${socketPath}` }, probe),
+      ).toThrow(/could not reach the Docker daemon.*within 5000ms.*ETIMEDOUT/);
+      expect(probe).toHaveBeenCalledWith(
+        "docker",
+        ["--host", `unix://${socketPath}`, "version", "--format", "{{.Server.Version}}"],
+        expect.objectContaining({ timeout: 5_000 }),
+      );
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("rejects wildcard binds for the compatibility gateway", () => {

@@ -14,6 +14,7 @@ const DEFAULT_COMPAT_CONTAINER_NAME = "nemoclaw-openshell-gateway";
 const GATEWAY_MOUNT_PATH = "/opt/nemoclaw/openshell-gateway";
 const LOOPBACK_BIND_ADDRESS = "127.0.0.1";
 const DEFAULT_COMPAT_BIND_ADDRESS = LOOPBACK_BIND_ADDRESS;
+const DOCKER_DAEMON_PROBE_TIMEOUT_MS = 5_000;
 
 type ContainerizedGatewayLaunchOptions = {
   gatewayBin: string;
@@ -83,6 +84,39 @@ export function getDockerSocketPath(env: NodeJS.ProcessEnv = process.env): strin
   const dockerHost = String(env.DOCKER_HOST || "").trim();
   if (dockerHost.startsWith("unix://")) return dockerHost.slice("unix://".length);
   return "/var/run/docker.sock";
+}
+
+export function assertCompatibleDockerDaemonReachable(
+  env: NodeJS.ProcessEnv = process.env,
+  probe: typeof execFileSync = execFileSync,
+): void {
+  const socketPath = getDockerSocketPath(env);
+  try {
+    if (!fs.statSync(socketPath).isSocket()) {
+      throw new Error("path is not a Unix socket");
+    }
+  } catch (error) {
+    throw new Error(
+      `OpenShell gateway compatibility mode requires a reachable Docker daemon at unix://${socketPath}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  try {
+    const version = probe(
+      "docker",
+      ["--host", `unix://${socketPath}`, "version", "--format", "{{.Server.Version}}"],
+      {
+        encoding: "utf-8",
+        timeout: DOCKER_DAEMON_PROBE_TIMEOUT_MS,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    if (!String(version).trim()) throw new Error("Docker returned an empty server version");
+  } catch (error) {
+    throw new Error(
+      `OpenShell gateway compatibility mode could not reach the Docker daemon at unix://${socketPath} within ${DOCKER_DAEMON_PROBE_TIMEOUT_MS}ms: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
 }
 
 export function shouldUseContainerizedGateway(options: {
@@ -259,8 +293,10 @@ export function buildContainerizedDockerDriverGatewayLaunch(
 export function prepareContainerizedDockerDriverGatewayLaunch(
   launch: DockerDriverGatewayLaunch,
   removeContainer: typeof dockerForceRm = dockerForceRm,
+  verifyDockerDaemon: (env?: NodeJS.ProcessEnv) => void = assertCompatibleDockerDaemonReachable,
 ): void {
   if (launch.mode !== "container" || !launch.containerName) return;
+  verifyDockerDaemon(launch.env);
   const result = removeContainer(launch.containerName, {
     ignoreError: true,
     suppressOutput: true,

@@ -14,7 +14,7 @@ import {
   jwtBundlePaths,
   writeGatewayConfig,
 } from "../../../test/support/openshell-gateway-config-helpers";
-import { ensureDockerDriverGatewayJwtBundle } from "./docker-driver-gateway-config";
+import { ensureDockerDriverGatewayJwtBundle } from "./docker-driver-gateway-jwt-bundle";
 
 const CONCURRENT_CALLER_COUNT = 12;
 
@@ -29,7 +29,7 @@ function spawnConcurrentJwtBundleCaller(
 const crypto = (await import("node:crypto")).default;
 const fs = (await import("node:fs")).default;
 
-const loaded = await import("./src/lib/onboard/docker-driver-gateway-config.ts");
+const loaded = await import("./src/lib/onboard/docker-driver-gateway-jwt-bundle.ts");
 const ensureDockerDriverGatewayJwtBundle =
   (loaded.default ?? loaded).ensureDockerDriverGatewayJwtBundle;
 process.stdout.write("READY\n");

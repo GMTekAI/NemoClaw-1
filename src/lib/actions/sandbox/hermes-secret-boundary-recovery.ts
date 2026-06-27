@@ -12,7 +12,7 @@ import { R } from "../../cli/terminal-style";
 import * as registry from "../../state/registry";
 import type { SandboxCommandResult } from "./process-recovery";
 
-type SecretBoundaryRefusalReason = "raw-secret" | "inconclusive";
+type SecretBoundaryRefusalReason = "raw-secret" | "exec-failed" | "inconclusive";
 
 export type HermesSecretBoundaryEnforcement =
   | { refused: false }
@@ -62,7 +62,7 @@ export function enforceHermesSecretBoundaryOnRunningGateway(
       `  ${R}Secret-boundary check could not run against the Hermes gateway in '${sandboxName}'.${R}`,
     );
     console.error("  Refusing recovery to keep the validator-enforced boundary intact.");
-    return { refused: true, reason: "inconclusive", stderr: "" };
+    return { refused: true, reason: "exec-failed", stderr: "" };
   }
   const stdoutMarker = result.stdout
     .split(/\r?\n/)
