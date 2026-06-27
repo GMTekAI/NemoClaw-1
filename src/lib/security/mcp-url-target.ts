@@ -47,7 +47,10 @@ for (const [address, prefix] of [
 }
 
 export function normalizeMcpHostname(hostname: string): string {
-  return hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+  return hostname
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "")
+    .replace(/\.$/, "");
 }
 
 export function isOpenShellMcpHostAlias(hostname: string): boolean {

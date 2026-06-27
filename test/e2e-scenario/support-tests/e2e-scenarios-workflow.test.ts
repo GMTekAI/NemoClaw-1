@@ -981,6 +981,8 @@ jobs:
           "upload-artifact action must be pinned to a full commit SHA",
           "openshell-version-pin-vitest job must use the shared jobs selector condition",
           "network-policy-vitest job env must not include NVIDIA_INFERENCE_API_KEY",
+          "network-policy-vitest job must pass openshell_channel to install-openshell.sh",
+          "network-policy-vitest job must pass openshell_artifact_run_id to install-openshell.sh",
           "network-policy-vitest step 'Install OpenShell' env must not include GITHUB_TOKEN",
           "double-onboard-vitest job env must not include DOCKERHUB_TOKEN",
           "step 'Run double-onboard live Vitest test' run script must not interpolate dispatch inputs directly",

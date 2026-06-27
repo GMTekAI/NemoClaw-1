@@ -938,6 +938,19 @@ function validateNetworkPolicyVitestJob(
       "network-policy-vitest job must force OPENSHELL_GATEWAY=nemoclaw",
     );
   }
+  if (jobEnv.NEMOCLAW_OPENSHELL_CHANNEL !== "${{ inputs.openshell_channel }}") {
+    errors.push(
+      "network-policy-vitest job must pass openshell_channel to install-openshell.sh",
+    );
+  }
+  if (
+    jobEnv.NEMOCLAW_OPENSHELL_ARTIFACT_RUN_ID !==
+    "${{ inputs.openshell_artifact_run_id }}"
+  ) {
+    errors.push(
+      "network-policy-vitest job must pass openshell_artifact_run_id to install-openshell.sh",
+    );
+  }
   for (const secret of [
     "NVIDIA_INFERENCE_API_KEY",
     "DOCKERHUB_USERNAME",
