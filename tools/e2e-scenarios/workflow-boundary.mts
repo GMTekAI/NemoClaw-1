@@ -987,6 +987,14 @@ function validateNetworkPolicyVitestJob(
       "network-policy-vitest job must pass openshell_artifact_run_id to install-openshell.sh",
     );
   }
+  if (
+    jobEnv.NEMOCLAW_OPENSHELL_ARTIFACT_HEAD_SHA !==
+    "${{ inputs.openshell_artifact_head_sha }}"
+  ) {
+    errors.push(
+      "network-policy-vitest job must pass openshell_artifact_head_sha to install-openshell.sh",
+    );
+  }
   for (const secret of [
     "NVIDIA_INFERENCE_API_KEY",
     "DOCKERHUB_USERNAME",

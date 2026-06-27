@@ -131,13 +131,14 @@ function listOpenshellReleaseTagsViaCurl(): string[] | null {
 export function resolveOpenshellInstallPin(
   deps: OpenshellInstallPinDeps,
 ): OpenshellInstallPinResult {
+  const minVersion = deps.getBlueprintMinOpenshellVersion?.() ?? null;
   const maxVersion = deps.getBlueprintMaxOpenshellVersion();
   if (!maxVersion) return { kind: "no-max" };
   const releases = (deps.listReleases ?? listOpenshellReleaseTags)();
   if (releases === null || releases.length === 0) return { kind: "no-max" };
   const resolution: OpenshellInstallVersionResolution = resolveOpenshellInstallVersion(
     releases,
-    { max: maxVersion },
+    { min: minVersion, max: maxVersion },
     { versionGte: deps.versionGte },
   );
   if (resolution.kind === "pin") {
@@ -168,7 +169,14 @@ export function computeOpenshellInstallEnv(
   baseEnv: NodeJS.ProcessEnv,
   deps: OpenshellInstallPinDeps,
 ): OpenshellInstallEnvDirective {
-  const pin = resolveOpenshellInstallPin(deps);
+  const channel = (baseEnv.NEMOCLAW_OPENSHELL_CHANNEL ?? "auto").trim();
+  // Dev and artifact installs already identify a non-stable build source.
+  // Stable release discovery must not block those current-main proof paths
+  // merely because the next semver release has not been published yet.
+  const pin: OpenshellInstallPinResult =
+    channel === "dev" || channel === "artifact"
+      ? { kind: "no-max" }
+      : resolveOpenshellInstallPin(deps);
   if (pin.kind === "incompatible") {
     const error = deps.error ?? ((m: string) => console.error(m));
     error("");

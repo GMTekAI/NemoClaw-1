@@ -5,20 +5,34 @@ without copying external service credentials into the sandbox.
 
 The integration has three parts:
 
-- an OpenShell provider that stores host-side credentials;
+- an OpenShell provider that stores credentials outside the sandbox;
 - a generated OpenShell network policy for the MCP endpoint using `protocol: mcp`
   with explicit JSON-RPC MCP method rules;
 - an agent adapter that writes the MCP endpoint into OpenClaw, Hermes, or
   LangChain Deep Agents Code config.
 
 This depends on the OpenShell MCP/JSON-RPC L7 policy support from
-NVIDIA/OpenShell#1865. NemoClaw requires an OpenShell release that exposes the
+NVIDIA/OpenShell#1865. NemoClaw requires an OpenShell build that exposes the
 `protocol: mcp` policy capability before managed MCP servers are enabled.
 
 This v1 intentionally accepts Streamable HTTP MCP endpoints only. NemoClaw does
-not launch host stdio MCP servers or a host-side MCP credential proxy; host-only
-credentials follow the same OpenShell provider model used for other provider
-secrets.
+not launch an MCP server, stdio adapter, bridge, credential proxy, or relay on
+the host. The sandbox agent connects directly to the configured endpoint, and
+OpenShell enforces policy and replaces credentials in its existing sandbox
+egress path.
+
+This implementation replaces the earlier issue #566 stdio-proxy sketch with
+the following scope:
+
+- connect directly to an already-running Streamable HTTP MCP endpoint, with no
+  stdio translation or host-side MCP process;
+- keep raw external credentials in OpenShell provider state, not in the sandbox
+  registry;
+- require credentials to be exported on the host and accept only `--env KEY`,
+  so raw values do not enter NemoClaw process arguments or shell history;
+- on `mcp restart`, recover from the existing OpenShell provider when present,
+  or ask the operator to re-export the same env name before recreating a missing
+  provider.
 
 ## Add An MCP Server
 
@@ -48,11 +62,50 @@ OpenShell's provider store. NemoClaw persists only the variable name, writes
 `openshell:resolve:env:KEY` into the sandbox-side MCP config, and relies on
 OpenShell to resolve the placeholder at egress.
 
-For one-time bootstrap you can pass `--env KEY=VALUE`. NemoClaw stages
-`VALUE` only in the environment of the `openshell provider create/update`
-subprocess and still persists only `KEY`.
+V1 requires exactly one `--env` bearer credential per server. Remote endpoints
+must use HTTPS; plain HTTP is accepted only for OpenShell host aliases. URLs
+with query strings are rejected because the URL is persisted and displayed.
+Use a distinct environment variable name for each managed MCP server in the same sandbox;
+OpenShell static credential keys are sandbox-wide and cannot be attached twice.
+Endpoint paths must be literal and canonical: percent escapes, backslashes,
+semicolons, OpenShell glob metacharacters, and explicit port zero are rejected.
 
-Unauthenticated MCP servers can omit `--env`.
+## Authenticated MCP Security Boundary
+
+Authenticated MCP is the intended configuration. The agent stores only the
+`openshell:resolve:env:KEY` placeholder. OpenShell keeps the raw credential in
+its provider store and combines credential replacement with the generated MCP
+policy at egress.
+
+For each request, OpenShell first evaluates the effective network policy for
+the host, port, runtime identity, literal endpoint path, and MCP method. The
+generated MCP policy grants only the configured target and explicit MCP
+profile. Only a request that passes policy reaches OpenShell's credential
+replacement stage, where OpenShell replaces the authorization placeholder
+immediately before writing the request upstream. An endpoint, path, binary, or
+method not granted by an attached policy is denied without being rewritten or
+sent to the server.
+
+OpenShell's current static placeholder lookup is sandbox-wide; the credential
+key itself is not endpoint-bound. The generated MCP policy narrows this managed
+route, but current OpenShell policy cannot declare which attached placeholder
+key may be resolved at that endpoint. Code running as an allowed adapter binary
+can therefore present another sandbox-attached static placeholder to the
+configured MCP endpoint, and any other effective policy that permits that
+binary can likewise send the MCP placeholder elsewhere. Treat the configured
+MCP service as trusted with every static credential attached to that sandbox,
+or isolate it in a dedicated sandbox. Use dedicated, least-privilege tokens and
+unique environment keys, avoid broad egress grants for adapter binaries, and
+audit the sandbox's complete effective policy. NemoClaw rejects credential-key
+reuse between its managed MCP servers to reduce accidental overlap, but that
+does not add endpoint-level credential scoping to OpenShell.
+
+Use an MCP service you trust with the credential it receives. MCP response
+bodies and SSE streams return through OpenShell's existing sandbox egress path;
+as with any authenticated API, a server that possesses a credential can
+deliberately return that value in its response. This does not expose the raw
+credential to the sandbox before the request is authorized and sent to that
+server.
 
 ## Agent Adapters
 
@@ -68,7 +121,17 @@ mcp_servers:
       Authorization: Bearer openshell:resolve:env:GITHUB_TOKEN
 ```
 
-LangChain Deep Agents Code writes an HTTP entry under `/sandbox/.mcp.json`:
+Hermes config changes and gateway reloads stay inside the sandbox. Rootless
+OpenShell drivers update and signal the sandbox-owned Hermes process directly.
+The root-started Docker fallback uses a root-owned Unix socket inside that same
+sandbox to validate and serialize config/hash updates before signaling Hermes.
+This lifecycle socket carries no MCP traffic and no service credential, and
+there is no host-side MCP process.
+
+LangChain Deep Agents Code writes an HTTP entry under its user-level discovery
+path, `/sandbox/.deepagents/.mcp.json`. Deep Agents Code 0.1.12 treats the
+sandbox-root `.mcp.json` as project configuration and gates it on project trust,
+so NemoClaw does not use that path for managed bridges:
 
 ```json
 {
@@ -97,11 +160,19 @@ nemoclaw my-sandbox mcp remove github
 ```
 
 `status --json` never includes environment values. It reports provider
-presence, provider attachment, generated policy presence, environment readiness,
-and adapter registration state.
+presence, provider attachment, whether the live generated policy content still
+matches the registered policy, environment readiness, and adapter registration
+state.
 
-`remove --force` performs best-effort cleanup for stale provider, generated
-policy, adapter config, and registry entries.
+`remove --force` performs best-effort cleanup only where ownership can still be
+proved. It never deletes an unowned or drifted same-key live policy. If any
+cleanup step leaves a residual, the command exits nonzero and preserves the
+managed MCP registry entry so cleanup can be retried. It never detaches the
+provider from other sandboxes; a residual provider may require manual cleanup.
+
+Removing a server blocks new requests and reconnects, but it does not terminate
+an MCP response or SSE stream that was already open. For immediate revocation,
+revoke the upstream credential and stop or rebuild the sandbox.
 
 ## Troubleshooting
 
@@ -109,12 +180,20 @@ If `restart` reports a missing provider and the original credential is not
 registered in OpenShell, export the same variable name used during `add` and
 retry.
 
-If the sandbox cannot reach an MCP server hosted on the workstation, use the
-OpenShell host alias path that works for your runtime, such as
-`host.openshell.internal`, and let the generated `protocol: mcp` policy enforce
-that endpoint. Do not run a separate NemoClaw host proxy for MCP credentials.
+Stdio-only MCP servers are not supported. NemoClaw does not start, wrap, or
+translate them; configure a native Streamable HTTP MCP endpoint.
 
-The generated policy permits normal MCP client methods such as
-`initialize`, `tools/list`, `tools/call`, `resources/*`, `prompts/*`, `ping`,
-`completion/complete`, and `logging/setLevel`, bounded to the configured MCP
-endpoint path and the selected agent adapter binaries.
+The generated policy permits this explicit MCP client-to-server profile: `initialize`,
+`notifications/initialized`, `ping`, `tools/list`, `tools/call`,
+`resources/list`, `resources/read`, `resources/templates/list`,
+`resources/subscribe`, `resources/unsubscribe`, `prompts/list`, `prompts/get`,
+`tasks/list`, `tasks/get`, `tasks/update`, `tasks/result`, `tasks/cancel`,
+`completion/complete`, `logging/setLevel`, `server/discover`, `messages/listen`,
+`notifications/cancelled`, `notifications/progress`,
+`notifications/roots/list_changed`, and `notifications/elicitation/complete`. Those methods
+remain bounded to the configured endpoint path and selected agent adapter
+binaries. `tools/call` currently permits every tool exposed by that server;
+`strict_tool_names` validates tool name syntax and is not a tool authorization
+allowlist. OpenShell also handles the protocol-required empty receive-stream
+`GET` and client response frames for server-originated MCP requests; those are
+transport behavior rather than additional client-initiated method grants.

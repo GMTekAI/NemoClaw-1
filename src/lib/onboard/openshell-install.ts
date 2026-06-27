@@ -18,6 +18,7 @@ export type OpenshellInstallVersionResolution =
   | {
       kind: "incompatible";
       latest: string | null;
+      min: string | null;
       max: string;
       message: string;
     };
@@ -45,9 +46,9 @@ export function parseOpenshellReleaseTag(tag: unknown): string | null {
  *
  * - If `options.max` is null, returns `kind: "no-max"` so callers leave the
  *   install path alone (legacy behaviour — script picks its own pin / latest).
- * - Otherwise, picks the highest entry of `available` that is `<= max`.
- *   Returns `kind: "incompatible"` with a message naming both latest and max
- *   when no such release exists.
+ * - Otherwise, picks the highest entry of `available` inside the inclusive
+ *   `[min, max]` range. A missing or malformed min leaves the lower bound open.
+ *   Returns `kind: "incompatible"` when no release is in range.
  *
  * Malformed entries in `available` (empty string, leading `-`, non-semver) are
  * silently dropped. The shipped blueprint guarantees `max` is valid before it
@@ -55,7 +56,7 @@ export function parseOpenshellReleaseTag(tag: unknown): string | null {
  */
 export function resolveOpenshellInstallVersion(
   available: readonly string[],
-  options: { max: string | null },
+  options: { min?: string | null; max: string | null },
   helpers: { versionGte: (a: string, b: string) => boolean },
 ): OpenshellInstallVersionResolution {
   const sanitized = (available ?? [])
@@ -69,22 +70,28 @@ export function resolveOpenshellInstallVersion(
     return { kind: "no-max", latest };
   }
 
-  if (latest && helpers.versionGte(max, latest)) {
-    return { kind: "pin", version: latest, latest, reason: "latest" };
-  }
-
-  const capped = sanitized.find((entry) => helpers.versionGte(max, entry));
-  if (capped) {
-    return { kind: "pin", version: capped, latest, reason: "max-cap" };
+  const min = parseOpenshellReleaseTag(options.min ?? null);
+  const selected = sanitized.find(
+    (entry) => helpers.versionGte(max, entry) && (min === null || helpers.versionGte(entry, min)),
+  );
+  if (selected) {
+    return {
+      kind: "pin",
+      version: selected,
+      latest,
+      reason: selected === latest ? "latest" : "max-cap",
+    };
   }
 
   return {
     kind: "incompatible",
     latest,
+    min,
     max,
     message:
-      `No OpenShell release ≤ ${max} is available (latest published: ${latest ?? "unknown"}). ` +
-      "Upgrade NemoClaw or raise max_openshell_version in nemoclaw-blueprint/blueprint.yaml.",
+      `No OpenShell release in the supported range ${min ?? "0.0.0"} through ${max} is available ` +
+      `(latest published: ${latest ?? "unknown"}). Use an OpenShell build in that range or update ` +
+      "min_openshell_version and max_openshell_version in nemoclaw-blueprint/blueprint.yaml.",
   };
 }
 

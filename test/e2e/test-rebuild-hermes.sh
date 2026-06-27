@@ -161,7 +161,7 @@ docker build \
   --build-arg "HERMES_SEMVER=${OLD_HERMES_SEMVER}" \
   --build-arg "HERMES_TARBALL_SHA256=${OLD_HERMES_TARBALL_SHA256}" \
   --build-arg "HERMES_NPM_INTEGRITY=${OLD_HERMES_NPM_INTEGRITY}" \
-  --build-arg "HERMES_UV_EXTRAS=messaging" \
+  --build-arg "HERMES_UV_EXTRAS=messaging mcp" \
   -f "${REPO_ROOT}/agents/hermes/Dockerfile.base" \
   -t "${OLD_BASE_TAG}" \
   "${REPO_ROOT}" \

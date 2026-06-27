@@ -283,10 +283,29 @@ describe("LangChain Deep Agents Code image contracts", () => {
     expect(wrapper).toContain('reject_managed_override "MCP posture"');
     expect(wrapper).toContain('reject_managed_override "shell allow-list posture"');
     expect(wrapper).toContain("extra_args=(--sandbox none)");
-    expect(wrapper).toContain("extra_args+=(--mcp-config /sandbox/.mcp.json)");
+    expect(wrapper).toContain("extra_args+=(--mcp-config /sandbox/.deepagents/.mcp.json)");
+    expect(wrapper).not.toContain("--mcp-config /sandbox/.mcp.json");
     expect(wrapper).toContain("extra_args+=(--no-mcp)");
     expect(policy).not.toContain("/usr/local/bin/dcode.real");
     expect(policy).not.toContain("dcode.upstream");
+  });
+
+  it("uses the Deep Agents 0.1.12 user-level MCP discovery path", () => {
+    const requirements = readAgentFile("requirements.lock");
+    const wrapper = readAgentFile("dcode-wrapper.sh");
+    const patcher = readAgentFile("patch-managed-deepagents-code.py");
+    const manifest = readAgentFile("manifest.yaml");
+    const userLevelPath = "/sandbox/.deepagents/.mcp.json";
+
+    // deepagents-code 0.1.12 discovers ~/.deepagents/.mcp.json as user-level
+    // config. /sandbox/.mcp.json is project-level and headless `dcode -n`
+    // rejects it unless the project trust gate has been satisfied.
+    expect(requirements).toContain("deepagents-code==0.1.12");
+    expect(wrapper).toContain(`--mcp-config ${userLevelPath}`);
+    expect(patcher).toContain(`managed_mcp_config = "${userLevelPath}"`);
+    expect(manifest).toContain("- .deepagents/.mcp.json");
+    expect(wrapper).not.toContain("--mcp-config /sandbox/.mcp.json");
+    expect(patcher).not.toContain('managed_mcp_config = "/sandbox/.mcp.json"');
   });
 
   it("puts the managed Python venv before system Python in every dcode entry path", () => {
@@ -1259,7 +1278,8 @@ describe("LangChain Deep Agents Code image contracts", () => {
 
     const patched = fs.readFileSync(path.join(packageDir, "main.py"), "utf8");
     expect(patched).toContain('args.sandbox = "none"');
-    expect(patched).toContain('managed_mcp_config = "/sandbox/.mcp.json"');
+    expect(patched).toContain('managed_mcp_config = "/sandbox/.deepagents/.mcp.json"');
+    expect(patched).not.toContain('managed_mcp_config = "/sandbox/.mcp.json"');
     expect(patched).toContain("args.no_mcp = not has_managed_mcp");
     expect(patched).toContain("args.mcp_config = managed_mcp_config if has_managed_mcp else None");
     expect(patched).toContain("args.shell_allow_list = None");

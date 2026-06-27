@@ -15,6 +15,7 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const readline = require("readline");
+const { isDeepStrictEqual } = require("node:util");
 const YAML = require("yaml");
 const { ROOT, run, runCapture } = require("../runner");
 const registry = require("../state/registry");
@@ -341,12 +342,13 @@ function resolveOpenshellBinary(): string {
 /**
  * Pre-spawn check used at command entry points before any
  * `run(buildPolicy*Command(...))`. If the binary cannot be resolved, prints
- * every location checked and an install hint, then exits nonzero — instead
- * of letting the spawn surface as the opaque `spawnSync openshell ENOENT`
- * (issue #4224).
+ * every location checked and an install hint. Normal command entry points
+ * exit nonzero; transactional lifecycle callers can request `nonFatal` and
+ * retain control for rollback instead of surfacing the opaque
+ * `spawnSync openshell ENOENT` (issue #4224).
  */
-function assertOpenshellResolvable(): void {
-  if (openshellResolveModule.resolveOpenshell()) return;
+function assertOpenshellResolvable(options: { nonFatal?: boolean } = {}): boolean {
+  if (openshellResolveModule.resolveOpenshell()) return true;
 
   const home = process.env.HOME;
   const override = process.env.NEMOCLAW_OPENSHELL_BIN;
@@ -371,7 +373,29 @@ function assertOpenshellResolvable(): void {
   console.error(
     "  Install OpenShell (https://github.com/NVIDIA/OpenShell) or set NEMOCLAW_OPENSHELL_BIN to an absolute, executable path.",
   );
+  if (options.nonFatal) return false;
   process.exit(1);
+}
+
+/**
+ * Apply a policy file while optionally keeping control in the caller on
+ * failure. Lifecycle code that owns compensating actions must use nonFatal so
+ * a failed OpenShell mutation cannot bypass its rollback through process.exit.
+ */
+function setPolicyFile(
+  policyFile: string,
+  sandboxName: string,
+  options: { nonFatal?: boolean } = {},
+): boolean {
+  const result = run(buildPolicySetCommand(policyFile, sandboxName), {
+    ignoreError: options.nonFatal === true,
+  });
+  if (!options.nonFatal) return true;
+  if (!result.error && result.status === 0) return true;
+
+  const detail = result.error?.message ?? `exit ${result.status ?? "unknown"}`;
+  console.error(`  Failed to update policy for sandbox '${sandboxName}' (${detail}).`);
+  return false;
 }
 
 /**
@@ -586,7 +610,11 @@ function removePresetFromPolicy(
  * Returns `false` if the preset is unknown or has no `network_policies`
  * section.
  */
-function removePreset(sandboxName: string, presetName: string): boolean {
+function removePreset(
+  sandboxName: string,
+  presetName: string,
+  options: { nonFatal?: boolean } = {},
+): boolean {
   // Guard against truncated sandbox names — WSL can truncate hyphenated
   // names during argument parsing, e.g. "my-assistant" → "m"
   const isRfc1123Label = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(sandboxName);
@@ -650,14 +678,14 @@ function removePreset(sandboxName: string, presetName: string): boolean {
 
   // Run before creating temp resources so a missing-binary exit doesn't
   // orphan files in $TMPDIR (the finally cleanup doesn't run on process.exit).
-  assertOpenshellResolvable();
+  if (!assertOpenshellResolvable(options)) return false;
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-policy-"));
   const tmpFile = path.join(tmpDir, "policy.yaml");
   fs.writeFileSync(tmpFile, updated, { encoding: "utf-8", mode: 0o600 });
 
   try {
-    run(buildPolicySetCommand(tmpFile, sandboxName));
+    if (!setPolicyFile(tmpFile, sandboxName, options)) return false;
     console.log(`  Removed preset: ${presetName}`);
   } finally {
     try {
@@ -756,7 +784,12 @@ function applyPresetContent(
   sandboxName: string,
   presetName: string,
   presetContent: string,
-  options: { custom?: { sourcePath?: string } } = {},
+  options: {
+    custom?: { sourcePath?: string };
+    allowedExistingNetworkPolicyKeys?: readonly string[];
+    nonFatal?: boolean;
+    skipRegistryUpdate?: boolean;
+  } = {},
 ): boolean {
   // Guard against truncated sandbox names — WSL can truncate hyphenated
   // names during argument parsing, e.g. "my-assistant" → "m"
@@ -789,6 +822,44 @@ function applyPresetContent(
     );
     return false;
   }
+  if (options.allowedExistingNetworkPolicyKeys) {
+    let currentNetworkPolicies: Record<string, unknown> = {};
+    let incomingNetworkPolicies: Record<string, unknown> = {};
+    try {
+      const currentParsed = currentPolicy ? YAML.parse(currentPolicy) : {};
+      const incomingParsed = YAML.parse(`network_policies:\n${presetEntries}`);
+      if (
+        currentParsed?.network_policies &&
+        typeof currentParsed.network_policies === "object" &&
+        !Array.isArray(currentParsed.network_policies)
+      ) {
+        currentNetworkPolicies = currentParsed.network_policies;
+      }
+      if (
+        incomingParsed?.network_policies &&
+        typeof incomingParsed.network_policies === "object" &&
+        !Array.isArray(incomingParsed.network_policies)
+      ) {
+        incomingNetworkPolicies = incomingParsed.network_policies;
+      }
+    } catch {
+      console.error(
+        `  Could not validate network policy key ownership for '${presetName}'; refusing to apply it.`,
+      );
+      return false;
+    }
+    const allowed = new Set(options.allowedExistingNetworkPolicyKeys);
+    const collision = Object.keys(incomingNetworkPolicies).find(
+      (key) =>
+        Object.prototype.hasOwnProperty.call(currentNetworkPolicies, key) && !allowed.has(key),
+    );
+    if (collision) {
+      console.error(
+        `  Network policy key '${collision}' already exists and is not owned by '${presetName}'; refusing to replace it.`,
+      );
+      return false;
+    }
+  }
   const merged = mergePresetIntoPolicy(currentPolicy, presetEntries);
 
   const endpoints = getPresetEndpoints(presetContent);
@@ -798,14 +869,14 @@ function applyPresetContent(
 
   // Run before creating temp resources so a missing-binary exit doesn't
   // orphan files in $TMPDIR (the finally cleanup doesn't run on process.exit).
-  assertOpenshellResolvable();
+  if (!assertOpenshellResolvable(options)) return false;
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-policy-"));
   const tmpFile = path.join(tmpDir, "policy.yaml");
   fs.writeFileSync(tmpFile, merged, { encoding: "utf-8", mode: 0o600 });
 
   try {
-    run(buildPolicySetCommand(tmpFile, sandboxName));
+    if (!setPolicyFile(tmpFile, sandboxName, options)) return false;
 
     console.log(`  Applied preset: ${presetName}`);
   } finally {
@@ -820,6 +891,12 @@ function applyPresetContent(
       /* ignored */
     }
   }
+
+  // Some multi-resource lifecycle callers reserve ownership in the registry
+  // before mutating the live gateway. That ordering prevents a successful
+  // policy set followed by a registry-write failure from leaving an unowned
+  // live key. They explicitly request no second registry write here.
+  if (options.skipRegistryUpdate) return true;
 
   const sandbox = registry.getSandbox(sandboxName);
   if (sandbox) {
@@ -1189,6 +1266,58 @@ function getGatewayPresets(sandboxName: string): string[] | null {
 }
 
 /**
+ * Compare the full network-policy entries in a preset with the live gateway
+ * policy. Unlike getGatewayPresets(), this detects same-key policy drift.
+ */
+function getPresetContentGatewayState(
+  sandboxName: string,
+  presetContent: string,
+): "match" | "absent" | "drift" | null {
+  let rawPolicy = "";
+  try {
+    rawPolicy = runCapture(buildPolicyGetCommand(sandboxName), { ignoreError: true });
+  } catch {
+    return null;
+  }
+  const currentPolicy = parseCurrentPolicy(rawPolicy);
+  if (!currentPolicy) return null;
+
+  const presetEntries = extractPresetEntries(presetContent);
+  if (!presetEntries) return "drift";
+  try {
+    const current = YAML.parse(currentPolicy)?.network_policies;
+    const expected = YAML.parse(`network_policies:\n${presetEntries}`)?.network_policies;
+    if (
+      !current ||
+      typeof current !== "object" ||
+      Array.isArray(current) ||
+      !expected ||
+      typeof expected !== "object" ||
+      Array.isArray(expected)
+    ) {
+      return "drift";
+    }
+    const expectedKeys = Object.keys(expected);
+    if (expectedKeys.length === 0) return "drift";
+    const presentKeys = expectedKeys.filter((key) =>
+      Object.prototype.hasOwnProperty.call(current, key),
+    );
+    if (presentKeys.length === 0) return "absent";
+    if (presentKeys.length !== expectedKeys.length) return "drift";
+    return expectedKeys.every((key) => isDeepStrictEqual(current[key], expected[key]))
+      ? "match"
+      : "drift";
+  } catch {
+    return "drift";
+  }
+}
+
+function presetContentMatchesGateway(sandboxName: string, presetContent: string): boolean | null {
+  const state = getPresetContentGatewayState(sandboxName, presetContent);
+  return state === null ? null : state === "match";
+}
+
+/**
  * Interactive preset picker for the `policy-add` command. Prints the
  * presets on stderr (● applied, ○ not applied), prompts for a number, and
  * resolves to the chosen preset name or `null` on cancel.
@@ -1309,6 +1438,7 @@ export {
   filterSetupPolicyPresets,
   getAppliedPresets,
   getGatewayPresets,
+  getPresetContentGatewayState,
   getPresetEndpoints,
   getPresetValidationWarning,
   listCustomPresets,
@@ -1322,6 +1452,7 @@ export {
   PRESETS_DIR,
   parseCurrentPolicy,
   parsePresetPolicyKeys,
+  presetContentMatchesGateway,
   removePreset,
   removePresetFromPolicy,
   resolvePermissivePolicyPath,

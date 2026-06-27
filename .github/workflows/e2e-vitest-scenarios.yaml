@@ -22,9 +22,9 @@ on:
         type: string
         default: ""
       openshell_channel:
-        description: "OpenShell installer channel for MCP server proof before the pinned stable release is published."
+        description: "OpenShell integration target. Dev tracks current OpenShell main; artifact requires OPENSHELL_ARTIFACT_READ_TOKEN."
         required: false
-        default: "stable"
+        default: "dev"
         type: choice
         options:
           - stable
@@ -33,6 +33,11 @@ on:
           - auto
       openshell_artifact_run_id:
         description: "Optional NVIDIA/OpenShell Actions run id used when openshell_channel=artifact."
+        required: false
+        default: ""
+        type: string
+      openshell_artifact_head_sha:
+        description: "Expected 40-hex NVIDIA/OpenShell head SHA for openshell_artifact_run_id."
         required: false
         default: ""
         type: string
@@ -383,7 +388,9 @@ jobs:
     permissions:
       actions: read
       contents: read
-    timeout-minutes: 120
+    # Three destructive agent scenarios each have a 45-minute Vitest budget,
+    # plus current-main OpenShell install and cold image setup.
+    timeout-minutes: 180
     env:
       FREE_STANDING_VITEST_JOB: "1"
       FREE_STANDING_SCENARIO_ID: "mcp-bridge"
@@ -393,6 +400,7 @@ jobs:
       NEMOCLAW_RUN_E2E_SCENARIOS: "1"
       NEMOCLAW_OPENSHELL_CHANNEL: ${{ inputs.openshell_channel }}
       NEMOCLAW_OPENSHELL_ARTIFACT_RUN_ID: ${{ inputs.openshell_artifact_run_id }}
+      NEMOCLAW_OPENSHELL_ARTIFACT_HEAD_SHA: ${{ inputs.openshell_artifact_head_sha }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -443,11 +451,14 @@ jobs:
 
       - name: Install OpenShell CLI
         env:
-          NEMOCLAW_INSTALL_OPENSHELL_GH_TOKEN: ${{ inputs.openshell_channel == 'artifact' && github.token || '' }}
+          NEMOCLAW_OPENSHELL_FORCE_INSTALL: "1"
+          # github.token is repository-scoped and cannot read OpenShell
+          # artifacts. This token needs read-only Actions access to OpenShell.
+          NEMOCLAW_INSTALL_OPENSHELL_GH_TOKEN: ${{ inputs.openshell_channel == 'artifact' && secrets.OPENSHELL_ARTIFACT_READ_TOKEN || '' }}
         run: |
           set -euo pipefail
           if [[ "${NEMOCLAW_OPENSHELL_CHANNEL}" == "artifact" ]]; then
-            export GH_TOKEN="${NEMOCLAW_INSTALL_OPENSHELL_GH_TOKEN:?OpenShell artifact channel requires the workflow token}"
+            export GH_TOKEN="${NEMOCLAW_INSTALL_OPENSHELL_GH_TOKEN:?OpenShell artifact channel requires the OPENSHELL_ARTIFACT_READ_TOKEN repository secret}"
           fi
           bash scripts/install-openshell.sh
 
@@ -1990,6 +2001,7 @@ jobs:
       NEMOCLAW_RUN_E2E_SCENARIOS: "1"
       NEMOCLAW_OPENSHELL_CHANNEL: ${{ inputs.openshell_channel }}
       NEMOCLAW_OPENSHELL_ARTIFACT_RUN_ID: ${{ inputs.openshell_artifact_run_id }}
+      NEMOCLAW_OPENSHELL_ARTIFACT_HEAD_SHA: ${{ inputs.openshell_artifact_head_sha }}
       NEMOCLAW_E2E_USE_HOSTED_INFERENCE: "1"
       # Raw OpenShell sandbox commands in the migrated live test must target
       # the gateway registered by NemoClaw onboarding even when OpenShell has

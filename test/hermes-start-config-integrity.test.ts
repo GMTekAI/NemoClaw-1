@@ -36,11 +36,10 @@ function runHermesConfigIntegrityVerifierAsRoot() {
       "#!/usr/bin/env bash",
       "set -euo pipefail",
       'id() { if [ "${1:-}" = "-u" ]; then printf "0\\n"; else command id "$@"; fi; }',
-      'verify_config_integrity() { printf "verify:%s:%s:stepped=%s\\n" "$1" "$2" "${NEMOCLAW_TEST_STEPPED_DOWN:-0}"; }',
+      'verify_config_integrity_if_locked() { printf "verify-locked-aware:%s\\n" "$1"; }',
       extractShellFunctionFromSource(src, "verify_hermes_config_integrity"),
       `HERMES_DIR=${shellQuote(hermesHome)}`,
       `HERMES_HASH_FILE=${shellQuote(hashFile)}`,
-      "STEP_DOWN_PREFIX_SANDBOX=(env NEMOCLAW_TEST_STEPPED_DOWN=1)",
       "verify_hermes_config_integrity",
     ].join("\n"),
     { mode: 0o700 },
@@ -133,11 +132,12 @@ function runHermesDashboardHomePrepAsRoot() {
 }
 
 describe("agents/hermes/start.sh config integrity", () => {
-  it("verifies the strict Hermes hash through the sandbox identity in root mode", () => {
+  it("uses the persisted locked-aware integrity contract in root mode", () => {
     const result = runHermesConfigIntegrityVerifierAsRoot();
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
-    expect(result.stdout.trim()).toMatch(/:stepped=1$/);
+    expect(result.stdout.trim()).toContain("verify-locked-aware:");
+    expect(result.stdout.trim()).toContain("/.hermes");
   });
 
   it("prepares root dashboard home and seeds config through the sandbox identity", {

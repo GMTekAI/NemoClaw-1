@@ -26,6 +26,13 @@ runs:
           [[ -n "$have" ]] && [[ "$(printf '%s\n%s\n' "$min_glibc" "$have" | sort -V | head -n 1)" == "$min_glibc" ]]
         }
 
+        mcp_runtime_ok() {
+          local ref="$1"
+          docker run --rm --entrypoint /opt/hermes/.venv/bin/python "$ref" -c \
+            'import mcp; from tools import mcp_tool; assert getattr(mcp_tool, "_MCP_AVAILABLE", False); assert getattr(mcp_tool, "_MCP_HTTP_AVAILABLE", False)' \
+            >/dev/null 2>&1
+        }
+
         try_image() {
           local ref="$1" version
           if ! docker pull "$ref" >/dev/null 2>&1; then
@@ -34,6 +41,10 @@ runs:
           version="$(glibc_version "$ref" || true)"
           if ! glibc_ok "$version"; then
             echo "::warning::Hermes sandbox base image ${ref} has glibc ${version:-unknown}; need >= ${min_glibc}"
+            return 1
+          fi
+          if ! mcp_runtime_ok "$ref"; then
+            echo "::warning::Hermes sandbox base image ${ref} lacks the required MCP Streamable HTTP runtime"
             return 1
           fi
           echo "HERMES_BASE_IMAGE=${ref}" >> "$GITHUB_ENV"
@@ -57,6 +68,10 @@ runs:
         version="$(glibc_version nemoclaw-hermes-base-local || true)"
         if ! glibc_ok "$version"; then
           echo "::error::Local Hermes sandbox base image has glibc ${version:-unknown}; need >= ${min_glibc}"
+          exit 1
+        fi
+        if ! mcp_runtime_ok nemoclaw-hermes-base-local; then
+          echo "::error::Local Hermes sandbox base image lacks the required MCP Streamable HTTP runtime"
           exit 1
         fi
         echo "HERMES_BASE_IMAGE=nemoclaw-hermes-base-local" >> "$GITHUB_ENV"

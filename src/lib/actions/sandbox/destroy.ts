@@ -19,6 +19,7 @@ import {
   shouldStopHostServicesAfterDestroy,
 } from "../../domain/sandbox/destroy";
 import {
+  type DetachSandboxProvidersResult,
   emitProviderDetachResidualHint,
   runSandboxProviderPreDeleteCleanup,
   SANDBOX_PROVIDER_SUFFIXES,
@@ -26,6 +27,7 @@ import {
 import { parseLiveSandboxNames } from "../../runtime-recovery";
 import { redact } from "../../security/redact";
 import { killTimer as defaultKillShieldsTimer } from "../../shields/timer-control";
+import { withMcpLifecycleLock } from "../../state/mcp-lifecycle-lock";
 import type { Session } from "../../state/onboard-session";
 import * as onboardSession from "../../state/onboard-session";
 import { resolveNemoclawStateDir } from "../../state/paths";
@@ -40,7 +42,14 @@ import {
   selectGatewayForSandboxDestroy,
 } from "./destroy-gateway";
 import { getSandboxTargetGatewayName } from "./gateway-target";
-import { wipeSandboxState, type WipeSandboxStateDeps } from "./wipe-state";
+import {
+  finalizeMcpBridgesAfterSandboxDelete,
+  type McpDestroyPreparation,
+  prepareMcpBridgesForAbsentSandboxDestroy,
+  prepareMcpBridgesForDestroy,
+  restoreMcpBridgesAfterDestroyAbort,
+} from "./mcp-bridge";
+import { type WipeSandboxStateDeps, wipeSandboxState } from "./wipe-state";
 
 type DockerRmi = (tag: string, opts?: { ignoreError?: boolean }) => { status: number | null };
 
@@ -131,6 +140,50 @@ function hasNoLiveSandboxes(): boolean {
     return false;
   }
   return parseLiveSandboxNames(liveList.output).size === 0;
+}
+
+type DestroySandboxPresence = "present" | "absent" | "unknown";
+
+function isStrictSandboxListJsonRow(value: unknown): value is { name: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  const labels = row.labels;
+  return (
+    typeof row.id === "string" &&
+    typeof row.name === "string" &&
+    row.name.length > 0 &&
+    row.name.trim() === row.name &&
+    !!labels &&
+    typeof labels === "object" &&
+    !Array.isArray(labels) &&
+    Object.values(labels as Record<string, unknown>).every((label) => typeof label === "string") &&
+    typeof row.resource_version === "number" &&
+    Number.isFinite(row.resource_version) &&
+    typeof row.created_at === "string" &&
+    typeof row.phase === "string" &&
+    row.phase.length > 0 &&
+    typeof row.current_policy_version === "number" &&
+    Number.isFinite(row.current_policy_version)
+  );
+}
+
+export function classifyDestroySandboxPresence(
+  sandboxName: string,
+  result: { status: number | null; stdout?: string; stderr?: string },
+): DestroySandboxPresence {
+  if (result.status !== 0) return "unknown";
+  const stderr = result.stderr?.trim() ?? "";
+  if (stderr) return "unknown";
+  let rows: unknown;
+  try {
+    rows = JSON.parse(result.stdout ?? "");
+  } catch {
+    return "unknown";
+  }
+  if (!Array.isArray(rows) || !rows.every(isStrictSandboxListJsonRow)) {
+    return "unknown";
+  }
+  return rows.some((row) => row.name === sandboxName) ? "present" : "absent";
 }
 
 export function cleanupSandboxServices(
@@ -292,12 +345,19 @@ export function cleanupShieldsDestroyArtifacts(
   });
 }
 
+export type { WipeSandboxStateDeps };
 // Re-export so existing callers (tests, downstream code) keep working after
 // the wipe was extracted out of the destroy monolith (#5455 PRA-2).
 export { wipeSandboxState };
-export type { WipeSandboxStateDeps };
 
 export async function destroySandbox(
+  sandboxName: string,
+  options: string[] | DestroySandboxOptions = {},
+): Promise<void> {
+  return withMcpLifecycleLock(sandboxName, () => destroySandboxUnlocked(sandboxName, options));
+}
+
+async function destroySandboxUnlocked(
   sandboxName: string,
   options: string[] | DestroySandboxOptions = {},
 ): Promise<void> {
@@ -372,6 +432,42 @@ export async function destroySandbox(
   // recorded for this sandbox, not whichever gateway happens to be active.
   const cleanupGatewayName = getSandboxTargetGatewayName(sandboxName);
   selectGatewayForSandboxDestroy(sandboxName, cleanupGatewayName, runOpenshell);
+  // `gateway select` mutates shared CLI state and can be raced by another
+  // NemoClaw process. Pin every subsequent list/provider/delete/finalize
+  // subprocess in this destroy operation to the registry-captured gateway.
+  process.env.OPENSHELL_GATEWAY = cleanupGatewayName;
+
+  const sandboxPresence = classifyDestroySandboxPresence(
+    sandboxName,
+    runOpenshell(["sandbox", "list", "-o", "json"], {
+      ignoreError: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: OPENSHELL_PROBE_TIMEOUT_MS,
+    }),
+  );
+  const sandboxConfirmedAbsent = sandboxPresence === "absent";
+
+  const emptyMcpPreparation: McpDestroyPreparation = {
+    entries: [],
+    detachedProviderEntries: [],
+    scrubbedAdapterEntries: [],
+    destroyAlreadyPrepared: false,
+    destroyAlreadyPending: false,
+  };
+  const mcpPreparation =
+    Object.keys(sb?.mcp?.bridges ?? {}).length > 0
+      ? sandboxConfirmedAbsent
+        ? await prepareMcpBridgesForAbsentSandboxDestroy(sandboxName, {
+            force: normalized.force === true,
+          })
+        : await prepareMcpBridgesForDestroy(sandboxName)
+      : emptyMcpPreparation;
+
+  if (sandboxConfirmedAbsent && mcpPreparation.entries.length > 0) {
+    console.warn(
+      `  ${YW}⚠${R} Sandbox '${sandboxName}' is already absent, so its retained-volume MCP adapter entry cannot be scrubbed in place. Exact OpenShell providers will be deleted so any stale credential placeholder cannot authenticate; same-name onboarding may need to replace stale MCP adapter config.`,
+    );
+  }
 
   // Wipe persistent state AFTER the gateway is selected so the exec targets
   // the sandbox's recorded gateway (#5455 PRA-5), but BEFORE delete because
@@ -379,12 +475,14 @@ export async function destroySandbox(
   // PRA-2's later ask to defer past delete is physically impossible and
   // contradicts PRA-5; the wipe-state docstring covers the full source-
   // boundary justification.
-  wipeSandboxState(sandboxName);
+  if (!sandboxConfirmedAbsent) wipeSandboxState(sandboxName);
 
-  const detachOutcome = runSandboxProviderPreDeleteCleanup(sandboxName, {
-    runOpenshell,
-    redact,
-  });
+  const detachOutcome: DetachSandboxProvidersResult = sandboxConfirmedAbsent
+    ? { detached: [], failures: [] }
+    : runSandboxProviderPreDeleteCleanup(sandboxName, {
+        runOpenshell,
+        redact,
+      });
   const deleteResult = runOpenshell(["sandbox", "delete", sandboxName], {
     ignoreError: true,
     stdio: ["ignore", "pipe", "pipe"],
@@ -392,14 +490,44 @@ export async function destroySandbox(
   const { output: deleteOutput, alreadyGone } = getSandboxDeleteOutcome(deleteResult);
 
   if (deleteResult.status !== 0 && !alreadyGone) {
+    let mcpRecoveryFailure: string | undefined;
+    if (!sandboxConfirmedAbsent) {
+      try {
+        await restoreMcpBridgesAfterDestroyAbort(sandboxName, mcpPreparation);
+      } catch (error) {
+        mcpRecoveryFailure = error instanceof Error ? error.message : String(error);
+      }
+    }
     if (deleteOutput) {
       console.error(`  ${deleteOutput}`);
+    }
+    if (mcpRecoveryFailure) {
+      console.error(
+        `  Failed to restore MCP runtime state after the sandbox delete failed: ${mcpRecoveryFailure}`,
+      );
+      console.error(
+        `  MCP definitions and OpenShell providers were preserved; fix the reported cause and retry MCP restart or destroy.`,
+      );
     }
     console.error(`  Failed to destroy sandbox '${sandboxName}'.`);
     process.exit(deleteResult.status || 1);
   }
 
   const deleteSucceededOrAlreadyGone = deleteResult.status === 0 || alreadyGone;
+  try {
+    await finalizeMcpBridgesAfterSandboxDelete(sandboxName, mcpPreparation, {
+      force: normalized.force === true,
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error(
+      `  Sandbox '${sandboxName}' is gone, but authenticated MCP provider cleanup is incomplete: ${detail}`,
+    );
+    console.error(
+      `  MCP cleanup state was preserved. Re-run destroy to finish without requiring the host MCP secret environment variable.`,
+    );
+    throw error;
+  }
   const shouldStopHostServices = shouldStopHostServicesAfterDestroy({
     deleteSucceededOrAlreadyGone,
     registeredSandboxCount: registry.listSandboxes().sandboxes.length,

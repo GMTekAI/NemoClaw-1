@@ -515,6 +515,7 @@ function runHermesGatewayRuntimeCleanup(opts: {
   rootOwnedConfigRoot?: boolean;
   preExistingLogFile?: boolean | "hardlink-to-config" | "hardlink-to-env";
   preExistingHistory?: "regular" | "symlink" | "directory" | "hardlink-to-config";
+  preserveForwarders?: boolean;
 }) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-hermes-runtime-cleanup-"));
   const hermesHome = path.join(tmpDir, ".hermes");
@@ -634,7 +635,7 @@ function runHermesGatewayRuntimeCleanup(opts: {
       "INTERNAL_PORT=18642",
       "DASHBOARD_PUBLIC_PORT=18789",
       "DASHBOARD_INTERNAL_PORT=19119",
-      "cleanup_stale_hermes_gateway_runtime",
+      `cleanup_stale_hermes_gateway_runtime${opts.preserveForwarders ? " preserve-forwarders" : ""}`,
     ].join("\n"),
     { mode: 0o700 },
   );
@@ -1291,6 +1292,19 @@ describe("agents/hermes/start.sh gateway runtime cleanup", () => {
     expect(run.result.status).toBe(0);
     expect(run.killLog.trim()).toBe("789");
     expect(run.result.stderr).toContain("Removing orphaned dashboard socat forwarder");
+  });
+
+  it("preserves API and dashboard forwarders during an in-place gateway reload", () => {
+    const run = runHermesGatewayRuntimeCleanup({
+      orphanSocat: true,
+      orphanDashboardSocat: true,
+      preserveForwarders: true,
+      staleLock: false,
+      stalePid: false,
+    });
+
+    expect(run.result.status).toBe(0);
+    expect(run.killLog).toBe("");
   });
 
   it("preserves Hermes runtime state when a gateway process is alive", () => {

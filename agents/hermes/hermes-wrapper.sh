@@ -28,7 +28,7 @@ set -u
 
 _self_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 
-REAL_HERMES="/usr/local/bin/hermes.real"
+REAL_HERMES="/usr/local/lib/nemoclaw/hermes"
 [ -x "$REAL_HERMES" ] || REAL_HERMES="${_self_dir}/hermes.real"
 
 GUARD="/usr/local/lib/nemoclaw/validate-hermes-env-secret-boundary.py"

@@ -47,15 +47,16 @@ state_dirs:
 
 # ── Top-level durable state files ───────────────────────────────
 # config.toml is non-secret NemoClaw-generated provider/model configuration.
-# .env and .mcp.json are intentionally omitted because they may contain
-# user-added service credentials; NemoClaw writes only bridge endpoint config
-# for managed MCP bridges.
+# .env and .deepagents/.mcp.json are intentionally omitted because they may
+# contain user-added service credentials. NemoClaw writes only direct-HTTP
+# bridge endpoint config and OpenShell placeholders to the user-level MCP file,
+# then restores its managed entries from the registry after rebuild.
 state_files:
   - path: config.toml
   - path: hooks.json
 user_managed_files:
-  - .env
-  - .mcp.json
+  - .deepagents/.env
+  - .deepagents/.mcp.json
 
 device_pairing: false
 

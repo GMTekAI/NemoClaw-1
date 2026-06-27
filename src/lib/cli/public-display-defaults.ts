@@ -202,7 +202,7 @@ const PUBLIC_DISPLAY_LAYOUT: Record<string, readonly PublicDisplayLayout[]> = {
       order: 25.2,
       usage: "nemoclaw <name> mcp add",
       description: "Add an OpenShell-enforced MCP HTTP server",
-      flags: "<server> --url <url> [--env KEY|KEY=VALUE ...]",
+      flags: "<server> --url <url> --env KEY",
     },
     {
       group: "MCP Servers",

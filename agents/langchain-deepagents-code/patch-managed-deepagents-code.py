@@ -18,7 +18,9 @@ PATCH = '''    # NemoClaw-managed sandbox image hardening.
         args.sandbox_snapshot_name = None
     if hasattr(args, "sandbox_setup"):
         args.sandbox_setup = None
-    managed_mcp_config = "/sandbox/.mcp.json"
+    # deepagents-code 0.1.12 treats this as its trusted user-level config;
+    # /sandbox/.mcp.json is project-level and gated by project-MCP trust.
+    managed_mcp_config = "/sandbox/.deepagents/.mcp.json"
     has_managed_mcp = os.path.isfile(managed_mcp_config) and os.path.getsize(managed_mcp_config) > 0
     if hasattr(args, "mcp_config"):
         args.mcp_config = managed_mcp_config if has_managed_mcp else None

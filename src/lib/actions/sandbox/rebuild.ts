@@ -58,6 +58,7 @@ import { shellQuote } from "../../runner";
 import * as sandboxVersion from "../../sandbox/version";
 import { redact } from "../../security/redact";
 import * as shields from "../../shields";
+import { withMcpLifecycleLock } from "../../state/mcp-lifecycle-lock";
 import type { Session } from "../../state/onboard-session";
 import * as onboardSession from "../../state/onboard-session";
 import * as registry from "../../state/registry";
@@ -67,6 +68,12 @@ import {
   getActiveSandboxSessions,
 } from "../../state/sandbox-session";
 import { removeSandboxRegistryEntry } from "./destroy";
+import {
+  prepareMcpBridgesForAbsentSandboxRebuild,
+  prepareMcpBridgesForRebuild,
+  reattachMcpProvidersAfterRebuildAbort,
+  restoreMcpBridgesAfterRebuild,
+} from "./mcp-bridge";
 import { ensureMessagingHostForwardAfterRebuild } from "./messaging-host-forward-lifecycle";
 import { executeSandboxCommand } from "./process-recovery";
 import { isolateAmbientRecreateEnv } from "./rebuild-env-isolation";
@@ -570,6 +577,115 @@ async function reapplyMessagingManifestAfterOpenClawDoctor(
   }
 }
 
+type McpRebuildPreparation = Awaited<ReturnType<typeof prepareMcpBridgesForRebuild>>;
+
+async function prepareMcpForRebuild(
+  sandboxName: string,
+  staleRecovery: boolean,
+  relockShieldsIfNeeded: (sandboxStillExists: boolean) => boolean,
+  bail: (message: string, code?: number) => never,
+): Promise<McpRebuildPreparation | null> {
+  try {
+    return await (staleRecovery
+      ? prepareMcpBridgesForAbsentSandboxRebuild(sandboxName)
+      : prepareMcpBridgesForRebuild(sandboxName));
+  } catch (error) {
+    relockShieldsIfNeeded(!staleRecovery);
+    bail(
+      `Failed to preserve MCP bridges before rebuild: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return null;
+  }
+}
+
+async function reattachMcpAfterDeleteFailure(
+  sandboxName: string,
+  entries: McpRebuildPreparation["detachedProviderEntries"],
+  scrubbedAdapterEntries: McpRebuildPreparation["scrubbedAdapterEntries"],
+): Promise<string | undefined> {
+  try {
+    await reattachMcpProvidersAfterRebuildAbort(sandboxName, entries, scrubbedAdapterEntries);
+    return undefined;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
+function restoreMcpRegistryForRebuildRetry(
+  sandboxName: string,
+  staleRecovery: boolean,
+  entries: McpRebuildPreparation["entries"],
+  original: RebuildSandboxEntry,
+  wasDefault: boolean,
+  log: (message: string) => void,
+): void {
+  if (staleRecovery || entries.length === 0) return;
+  try {
+    registry.restoreSandboxEntry(original, {
+      reclaimDefault: wasDefault ? sandboxName : null,
+    });
+    log("Recreate failed: restored MCP-bearing registry entry for stale recovery retry");
+  } catch (error) {
+    log(`Failed to restore MCP-bearing registry entry after recreate failure: ${String(error)}`);
+  }
+}
+
+function printMcpRebuildRetryCommand(
+  sandboxName: string,
+  entries: McpRebuildPreparation["entries"],
+): void {
+  if (entries.length > 0) {
+    console.error(`    2. Run: ${CLI_NAME} ${sandboxName} rebuild --yes`);
+    console.error(
+      `       This will recreate sandbox '${sandboxName}' and restore its MCP bridges.`,
+    );
+    return;
+  }
+  console.error(`    2. Run: ${CLI_NAME} onboard --resume`);
+  console.error(`       This will recreate sandbox '${sandboxName}'.`);
+}
+
+async function restoreMcpAfterRebuild(
+  sandboxName: string,
+  entries: McpRebuildPreparation["entries"],
+): Promise<boolean> {
+  if (entries.length === 0) return true;
+  console.log("  Restoring MCP bridges...");
+  try {
+    await restoreMcpBridgesAfterRebuild(sandboxName, entries);
+    console.log(`  ${G}✓${R} MCP bridges restored`);
+    return true;
+  } catch (error) {
+    console.error(
+      `  ${YW}⚠${R} MCP bridge restore incomplete: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return false;
+  }
+}
+
+function postRestoreCompleted(status: {
+  messagingHostForwardUnverified: boolean;
+  mcpBridgeRestoreUnverified: boolean;
+  mutableConfigHashRefreshUnverified: boolean;
+  mutablePermsRepairUnverified: boolean;
+  restoreSucceeded: boolean;
+}): boolean {
+  return (
+    status.restoreSucceeded &&
+    !status.mutablePermsRepairUnverified &&
+    !status.mutableConfigHashRefreshUnverified &&
+    !status.messagingHostForwardUnverified &&
+    !status.mcpBridgeRestoreUnverified
+  );
+}
+
+function printMcpRestoreRecovery(sandboxName: string, mcpBridgeRestoreUnverified: boolean): void {
+  if (!mcpBridgeRestoreUnverified) return;
+  console.log(
+    `    MCP bridge definitions were preserved but not fully refreshed — fix the reported cause, then run \`${CLI_NAME} ${sandboxName} mcp restart\``,
+  );
+}
+
 /**
  * Rebuild a live sandbox while preserving registered agent state and policies.
  *
@@ -578,6 +694,16 @@ async function reapplyMessagingManifestAfterOpenClawDoctor(
  * recreated sandbox image.
  */
 export async function rebuildSandbox(
+  sandboxName: string,
+  options: string[] | RebuildSandboxOptions = {},
+  opts: { throwOnError?: boolean } = {},
+): Promise<void> {
+  return withMcpLifecycleLock(sandboxName, () =>
+    rebuildSandboxUnlocked(sandboxName, options, opts),
+  );
+}
+
+async function rebuildSandboxUnlocked(
   sandboxName: string,
   options: string[] | RebuildSandboxOptions = {},
   opts: { throwOnError?: boolean } = {},
@@ -698,6 +824,18 @@ export async function rebuildSandbox(
       nim.stopNimContainer(sandboxName, { silent: true });
     }
 
+    const rebuildMcpWasDefault = registry.getDefault() === sandboxName;
+    const mcpPreparation = await prepareMcpForRebuild(
+      sandboxName,
+      staleRecovery,
+      relockShieldsIfNeeded,
+      bail,
+    );
+    if (!mcpPreparation) return;
+    const rebuildMcpEntries = mcpPreparation.entries;
+    const rebuildDetachedMcpProviderEntries = mcpPreparation.detachedProviderEntries;
+    const rebuildScrubbedMcpAdapterEntries = mcpPreparation.scrubbedAdapterEntries;
+
     log(`Running: openshell sandbox delete ${sandboxName}`);
     const deleteResult = runOpenshell(["sandbox", "delete", sandboxName], {
       ignoreError: true,
@@ -707,11 +845,26 @@ export async function rebuildSandbox(
     log(`Delete result: exit=${deleteResult.status}, alreadyGone=${alreadyGone}`);
     if (deleteResult.status !== 0 && !alreadyGone) {
       console.error("  Failed to delete sandbox. Aborting rebuild.");
+      const mcpRecoveryFailure = await reattachMcpAfterDeleteFailure(
+        sandboxName,
+        rebuildDetachedMcpProviderEntries,
+        rebuildScrubbedMcpAdapterEntries,
+      );
+      if (mcpRecoveryFailure) {
+        console.error(
+          `  Failed to reattach MCP providers to the existing sandbox: ${mcpRecoveryFailure}`,
+        );
+      }
       if (backupManifest) {
         console.error("  State backup is preserved at: " + backupManifest.backupPath);
       }
       relockShieldsIfNeeded(true);
-      bail("Failed to delete sandbox.", deleteResult.status || 1);
+      bail(
+        mcpRecoveryFailure
+          ? `Failed to delete sandbox; MCP provider recovery also failed: ${mcpRecoveryFailure}`
+          : "Failed to delete sandbox.",
+        deleteResult.status || 1,
+      );
       return;
     }
     sandboxStillExists = false;
@@ -919,6 +1072,14 @@ export async function rebuildSandbox(
           );
         }
       }
+      restoreMcpRegistryForRebuildRetry(
+        sandboxName,
+        staleRecovery,
+        rebuildMcpEntries,
+        sb,
+        rebuildMcpWasDefault,
+        log,
+      );
 
       console.error("");
       if (staleRecovery) {
@@ -935,8 +1096,7 @@ export async function rebuildSandbox(
       console.error("");
       console.error("  To recover manually:");
       console.error(`    1. Fix the issue above (missing credential, Docker problem, etc.)`);
-      console.error(`    2. Run: ${CLI_NAME} onboard --resume`);
-      console.error(`       This will recreate sandbox '${sandboxName}'.`);
+      printMcpRebuildRetryCommand(sandboxName, rebuildMcpEntries);
       if (backupManifest) {
         console.error(`    3. Then restore your workspace state:`);
         console.error(
@@ -1055,6 +1215,7 @@ export async function rebuildSandbox(
     let mutablePermsRepairUnverified = false;
     let mutableConfigHashRefreshUnverified = false;
     let messagingHostForwardUnverified = false;
+    let mcpBridgeRestoreUnverified = false;
     if (agentDef.name === "openclaw") {
       // openclaw doctor --fix validates and repairs directory structure.
       // Idempotent and safe — catches structural changes between OpenClaw versions
@@ -1140,6 +1301,8 @@ export async function rebuildSandbox(
     // missing directories implicitly. The NemoClaw plugin's skill cache refreshes on
     // on_session_start. Gateway startup is non-fatal if state.db migration fails.
 
+    mcpBridgeRestoreUnverified = !(await restoreMcpAfterRebuild(sandboxName, rebuildMcpEntries));
+
     // Step 7: Update registry with new version
     registry.updateSandbox(sandboxName, {
       agentVersion: agentDef.expectedVersion || null,
@@ -1153,10 +1316,13 @@ export async function rebuildSandbox(
 
     console.log("");
     if (
-      restoreSucceeded &&
-      !mutablePermsRepairUnverified &&
-      !mutableConfigHashRefreshUnverified &&
-      !messagingHostForwardUnverified
+      postRestoreCompleted({
+        messagingHostForwardUnverified,
+        mcpBridgeRestoreUnverified,
+        mutableConfigHashRefreshUnverified,
+        mutablePermsRepairUnverified,
+        restoreSucceeded,
+      })
     ) {
       console.log(`  ${G}\u2713${R} Sandbox '${sandboxName}' rebuilt successfully`);
       if (staleRecovery) {
@@ -1195,6 +1361,7 @@ export async function rebuildSandbox(
           `    Messaging webhook forward was not verified \u2014 run \`${CLI_NAME} ${sandboxName} connect\` after resolving the port conflict`,
         );
       }
+      printMcpRestoreRecovery(sandboxName, mcpBridgeRestoreUnverified);
     }
     // Stale recovery reset the shields state to mutable (the gone sandbox's lock
     // seal could not carry over to the fresh image). If lockdown had been enabled,

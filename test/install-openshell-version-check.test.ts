@@ -1,11 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, it, expect } from "vitest";
+import { spawnSync } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { describe, expect, it } from "vitest";
 
 const SCRIPT = path.join(import.meta.dirname, "..", "scripts", "install-openshell.sh");
 const REQUIRED_OPENSHELL_VERSION = "0.0.72";
@@ -14,10 +15,194 @@ const OPENSHELL_REWRITE_FEATURE_MARKERS =
   "request-body-credential-rewrite websocket-credential-rewrite";
 const OPENSHELL_MCP_FEATURE_MARKER = "allow_all_known_mcp_methods";
 const OPENSHELL_FEATURE_MARKERS = `${OPENSHELL_REWRITE_FEATURE_MARKERS} ${OPENSHELL_MCP_FEATURE_MARKER}`;
+const OPENSHELL_ARTIFACT_RUN_ID = "28267935010";
+const OPENSHELL_ARTIFACT_HEAD_SHA = "f5dbcc50553a05f0b9083dd35789c89d1ce08371";
 type OpenShellFeaturePlacement = "openshell" | "gateway" | "split-mcp-gateway" | "none";
 
 function writeExecutable(target: string, contents: string) {
   fs.writeFileSync(target, contents, { mode: 0o755 });
+}
+
+type ArtifactInstallFixtureOptions = {
+  arch?: string;
+  artifactCount?: number;
+  artifactDigest?: string;
+  extraArchiveEntry?: boolean;
+  expectedHeadSha?: string;
+  runConclusion?: string;
+  runEvent?: string;
+  runHeadRepository?: string;
+  runHeadSha?: string;
+  runRepository?: string;
+  runStatus?: string;
+  runWorkflowId?: string;
+};
+
+function runArtifactInstallFixture(options: ArtifactInstallFixtureOptions = {}) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-openshell-artifacts-"));
+  try {
+    const fakeBin = path.join(tmp, "bin");
+    const installDir = path.join(tmp, "install-bin");
+    const artifactLog = path.join(tmp, "artifacts.log");
+    const artifactRoot = path.join(tmp, "artifact-zips");
+    fs.mkdirSync(fakeBin);
+    fs.mkdirSync(installDir);
+    fs.mkdirSync(artifactRoot);
+
+    writeExecutable(
+      path.join(fakeBin, "uname"),
+      `#!/usr/bin/env bash
+if [ "\${1:-}" = "-m" ]; then echo "${options.arch ?? "x86_64"}"; else echo "Linux"; fi`,
+    );
+    writeExecutable(
+      path.join(installDir, "openshell"),
+      `#!/usr/bin/env bash
+if [ "\${1:-}" = "--version" ]; then echo "openshell 0.0.71"; exit 0; fi
+exit 0`,
+    );
+
+    const artifacts = [
+      {
+        id: "1001",
+        name: "rust-binary-cli-cli-linux-amd64",
+        binary: "openshell",
+        contents: `#!/usr/bin/env bash
+if [ -n "\${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}\${ACTIONS_RUNTIME_TOKEN:-}\${GH_TOKEN:-}\${GITHUB_TOKEN:-}\${GH_ENTERPRISE_TOKEN:-}\${GITHUB_ENTERPRISE_TOKEN:-}\${NEMOCLAW_INSTALL_OPENSHELL_GH_TOKEN:-}" ]; then
+  echo "downloaded OpenShell observed a GitHub token" >&2
+  exit 91
+fi
+if [ "\${1:-}" = "--version" ]; then echo "openshell 0.0.72-dev+artifact"; exit 0; fi
+# ${OPENSHELL_REWRITE_FEATURE_MARKERS}
+exit 0
+`,
+      },
+      {
+        id: "1002",
+        name: "rust-binary-gateway-gateway-linux-amd64",
+        binary: "openshell-gateway",
+        contents: `#!/usr/bin/env bash
+# ${OPENSHELL_MCP_FEATURE_MARKER}
+exit 0
+`,
+      },
+      {
+        id: "1003",
+        name: "rust-binary-supervisor-sandbox-linux-amd64",
+        binary: "openshell-sandbox",
+        contents: `#!/usr/bin/env bash
+# JSON-RPC MCP ${OPENSHELL_MCP_FEATURE_MARKER}
+exit 0
+`,
+      },
+    ].map((artifact, index) => {
+      const dir = path.join(artifactRoot, artifact.id);
+      const zip = path.join(artifactRoot, `${artifact.id}.zip`);
+      fs.mkdirSync(dir);
+      writeExecutable(path.join(dir, artifact.binary), artifact.contents);
+      const zipEntries = [artifact.binary];
+      if (index === 0 && options.extraArchiveEntry) {
+        fs.writeFileSync(path.join(dir, "unexpected"), "unexpected\n");
+        zipEntries.push("unexpected");
+      }
+      const zipped = spawnSync("zip", ["-q", zip, ...zipEntries], {
+        cwd: dir,
+        encoding: "utf8",
+      });
+      if (zipped.status !== 0) {
+        throw new Error(`failed to build artifact fixture: ${zipped.stderr}`);
+      }
+      return {
+        ...artifact,
+        digest: crypto.createHash("sha256").update(fs.readFileSync(zip)).digest("hex"),
+        zip,
+      };
+    });
+
+    const artifactCases = artifacts
+      .map(
+        (artifact) => `
+    ${artifact.name})
+      artifact_id=${artifact.id}
+      artifact_digest=${options.artifactDigest ?? `sha256:${artifact.digest}`}
+      ;;`,
+      )
+      .join("");
+    const downloadCases = artifacts
+      .map(
+        (artifact) => `
+    /repos/NVIDIA/OpenShell/actions/artifacts/${artifact.id}/zip)
+      cat ${JSON.stringify(artifact.zip)}
+      ;;`,
+      )
+      .join("");
+
+    writeExecutable(
+      path.join(fakeBin, "gh"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+endpoint=""
+artifact_name=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    /repos/*) endpoint="$1" ;;
+    -f|--raw-field)
+      shift
+      case "\${1:-}" in name=*) artifact_name="\${1#name=}" ;; esac
+      ;;
+    -F|--field|--method|--jq) shift ;;
+  esac
+  shift || true
+done
+printf '%s %s\n' "$endpoint" "$artifact_name" >> ${JSON.stringify(artifactLog)}
+case "$endpoint" in
+  /repos/NVIDIA/OpenShell/actions/runs/${OPENSHELL_ARTIFACT_RUN_ID})
+    printf '%s\n' '${OPENSHELL_ARTIFACT_RUN_ID}|${options.runWorkflowId ?? "246342097"}|${options.runRepository ?? "NVIDIA/OpenShell"}|${options.runHeadRepository ?? "NVIDIA/OpenShell"}|${options.runStatus ?? "completed"}|${options.runConclusion ?? "success"}|${options.runEvent ?? "push"}|${options.runHeadSha ?? OPENSHELL_ARTIFACT_HEAD_SHA}'
+    ;;
+  /repos/NVIDIA/OpenShell/actions/runs/${OPENSHELL_ARTIFACT_RUN_ID}/artifacts)
+    artifact_id=""
+    artifact_digest=""
+    case "$artifact_name" in${artifactCases}
+      *) exit 7 ;;
+    esac
+    printf '%s|%s|%s|%s|%s|false\n' '${options.artifactCount ?? 1}' '${options.artifactCount ?? 1}' "$artifact_id" "$artifact_name" "$artifact_digest"
+    ;;${downloadCases}
+  *) exit 8 ;;
+esac
+`,
+    );
+
+    const result = spawnSync("bash", [SCRIPT], {
+      env: {
+        ...process.env,
+        ACTIONS_ID_TOKEN_REQUEST_TOKEN: "fixture-actions-id-token",
+        ACTIONS_RUNTIME_TOKEN: "fixture-actions-runtime-token",
+        GH_ENTERPRISE_TOKEN: "fixture-gh-enterprise-token",
+        GH_TOKEN: "fixture-gh-token",
+        GITHUB_ENTERPRISE_TOKEN: "fixture-github-enterprise-token",
+        GITHUB_TOKEN: "fixture-github-token",
+        HOME: tmp,
+        XDG_BIN_HOME: installDir,
+        NEMOCLAW_INSTALL_OPENSHELL_GH_TOKEN: "fixture-handoff-token",
+        NEMOCLAW_NON_INTERACTIVE: "1",
+        NEMOCLAW_OPENSHELL_CHANNEL: "artifact",
+        NEMOCLAW_OPENSHELL_ARTIFACT_RUN_ID: OPENSHELL_ARTIFACT_RUN_ID,
+        NEMOCLAW_OPENSHELL_ARTIFACT_HEAD_SHA:
+          options.expectedHeadSha ?? OPENSHELL_ARTIFACT_HEAD_SHA,
+        PATH: `${fakeBin}:${installDir}:/usr/bin:/bin`,
+      },
+      encoding: "utf8",
+    });
+
+    return {
+      artifactLog: fs.existsSync(artifactLog) ? fs.readFileSync(artifactLog, "utf8") : "",
+      installedCli: fs.readFileSync(path.join(installDir, "openshell"), "utf8"),
+      installedGateway: fs.existsSync(path.join(installDir, "openshell-gateway")),
+      installedSandbox: fs.existsSync(path.join(installDir, "openshell-sandbox")),
+      result,
+    };
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -528,6 +713,16 @@ exit 0`,
     expect(result.stdout).toMatch(/dev channel/);
   });
 
+  it("refreshes an installed dev build when current main is required", () => {
+    const result = runWithInstalledVersion(`${LEGACY_OPENSHELL_VERSION}.dev84+g6b2180425`, {
+      NEMOCLAW_OPENSHELL_CHANNEL: "dev",
+      NEMOCLAW_OPENSHELL_FORCE_INSTALL: "1",
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).toContain("refreshing the moving dev release");
+    expect(result.stdout).toContain("Installing OpenShell from release 'dev'");
+  });
+
   it("upgrades stable OpenShell when the dev channel is requested", () => {
     const result = runWithInstalledVersion("0.0.36", {
       NEMOCLAW_OPENSHELL_CHANNEL: "dev",
@@ -536,184 +731,84 @@ exit 0`,
     expect(result.stdout).toMatch(/required dev-channel messaging-rewrite\/MCP-L7 build/);
   });
 
-  it("installs from OpenShell workflow artifacts when the artifact channel is requested", () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-openshell-artifacts-"));
-    try {
-      const fakeBin = path.join(tmp, "bin");
-      const installDir = path.join(tmp, "install-bin");
-      const artifactLog = path.join(tmp, "artifacts.log");
-      fs.mkdirSync(fakeBin);
-      fs.mkdirSync(installDir);
+  it("installs one-file OpenShell workflow artifacts with verified provenance", () => {
+    const fixture = runArtifactInstallFixture();
 
-      writeExecutable(
-        path.join(fakeBin, "uname"),
-        `#!/usr/bin/env bash
-if [ "\${1:-}" = "-m" ]; then echo "x86_64"; else echo "Linux"; fi`,
+    expect(fixture.result.status, `${fixture.result.stdout}\n${fixture.result.stderr}`).toBe(0);
+    expect(fixture.result.stdout).toContain(
+      `Installing OpenShell from OpenShell workflow artifacts run '${OPENSHELL_ARTIFACT_RUN_ID}'`,
+    );
+    expect(`${fixture.result.stdout}\n${fixture.result.stderr}`).not.toContain(
+      "observed a GitHub token",
+    );
+    expect(fixture.installedCli).toContain("0.0.72-dev+artifact");
+    expect(fixture.installedGateway).toBe(true);
+    expect(fixture.installedSandbox).toBe(true);
+    expect(fixture.artifactLog).toContain(
+      `/repos/NVIDIA/OpenShell/actions/runs/${OPENSHELL_ARTIFACT_RUN_ID} `,
+    );
+    for (const name of [
+      "rust-binary-cli-cli-linux-amd64",
+      "rust-binary-gateway-gateway-linux-amd64",
+      "rust-binary-supervisor-sandbox-linux-amd64",
+    ]) {
+      expect(fixture.artifactLog).toContain(
+        `/repos/NVIDIA/OpenShell/actions/runs/${OPENSHELL_ARTIFACT_RUN_ID}/artifacts ${name}`,
       );
-      writeExecutable(
-        path.join(installDir, "openshell"),
-        `#!/usr/bin/env bash
-if [ "\${1:-}" = "--version" ]; then echo "openshell 0.0.71"; exit 0; fi
-exit 0`,
-      );
-      writeExecutable(
-        path.join(fakeBin, "gh"),
-        `#!/usr/bin/env bash
-set -euo pipefail
-write_checksum() {
-  file="$1"
-  if command -v sha256sum >/dev/null 2>&1; then
-    (cd "$(dirname "$file")" && sha256sum "$(basename "$file")" > "$(basename "$file").sha256")
-  else
-    (cd "$(dirname "$file")" && shasum -a 256 "$(basename "$file")" > "$(basename "$file").sha256")
-  fi
-}
-if [ "\${1:-}" = "run" ] && [ "\${2:-}" = "download" ]; then
-  run_id="\${3:-}"
-  name=""
-  dir=""
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --name) shift; name="\${1:-}" ;;
-      --dir) shift; dir="\${1:-}" ;;
-    esac
-    shift || true
-  done
-  printf '%s %s\\n' "$run_id" "$name" >> ${JSON.stringify(artifactLog)}
-  mkdir -p "$dir"
-  case "$name" in
-    rust-binary-cli-cli-linux-amd64)
-      cat > "$dir/openshell" <<'SH'
-#!/usr/bin/env bash
-if [ "\${1:-}" = "--version" ]; then echo "openshell 0.0.72-dev+artifact"; exit 0; fi
-# request-body-credential-rewrite websocket-credential-rewrite
-exit 0
-SH
-      chmod 755 "$dir/openshell"
-      write_checksum "$dir/openshell"
-      ;;
-    rust-binary-gateway-gateway-linux-amd64)
-      cat > "$dir/openshell-gateway" <<'SH'
-#!/usr/bin/env bash
-# allow_all_known_mcp_methods
-exit 0
-SH
-      chmod 755 "$dir/openshell-gateway"
-      write_checksum "$dir/openshell-gateway"
-      ;;
-    rust-binary-supervisor-sandbox-linux-amd64)
-      cat > "$dir/openshell-sandbox" <<'SH'
-#!/usr/bin/env bash
-# JSON-RPC MCP allow_all_known_mcp_methods
-exit 0
-SH
-      chmod 755 "$dir/openshell-sandbox"
-      write_checksum "$dir/openshell-sandbox"
-      ;;
-    *)
-      exit 7
-      ;;
-  esac
-  exit 0
-fi
-exit 1`,
-      );
-
-      const result = spawnSync("bash", [SCRIPT], {
-        env: {
-          ...process.env,
-          HOME: tmp,
-          XDG_BIN_HOME: installDir,
-          NEMOCLAW_NON_INTERACTIVE: "1",
-          NEMOCLAW_OPENSHELL_CHANNEL: "artifact",
-          NEMOCLAW_OPENSHELL_ARTIFACT_RUN_ID: "28267935010",
-          PATH: `${fakeBin}:${installDir}:/usr/bin:/bin`,
-        },
-        encoding: "utf8",
-      });
-
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-      expect(result.stdout).toContain(
-        "Installing OpenShell from OpenShell workflow artifacts run '28267935010'",
-      );
-      const artifacts = fs.readFileSync(artifactLog, "utf-8");
-      expect(artifacts).toContain("28267935010 rust-binary-cli-cli-linux-amd64");
-      expect(artifacts).toContain("28267935010 rust-binary-gateway-gateway-linux-amd64");
-      expect(artifacts).toContain("28267935010 rust-binary-supervisor-sandbox-linux-amd64");
-      expect(fs.existsSync(path.join(installDir, "openshell"))).toBe(true);
-      expect(fs.existsSync(path.join(installDir, "openshell-gateway"))).toBe(true);
-      expect(fs.existsSync(path.join(installDir, "openshell-sandbox"))).toBe(true);
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 
-  it("rejects OpenShell workflow artifacts without checksum metadata", () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-openshell-artifact-checks-"));
-    try {
-      const fakeBin = path.join(tmp, "bin");
-      const installDir = path.join(tmp, "install-bin");
-      fs.mkdirSync(fakeBin);
-      fs.mkdirSync(installDir);
+  it("requires an expected artifact head SHA", () => {
+    const fixture = runArtifactInstallFixture({ expectedHeadSha: "" });
 
-      writeExecutable(
-        path.join(fakeBin, "uname"),
-        `#!/usr/bin/env bash
-if [ "\${1:-}" = "-m" ]; then echo "x86_64"; else echo "Linux"; fi`,
-      );
-      writeExecutable(
-        path.join(fakeBin, "gh"),
-        `#!/usr/bin/env bash
-set -euo pipefail
-if [ "\${1:-}" = "run" ] && [ "\${2:-}" = "download" ]; then
-  name=""
-  dir=""
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --name) shift; name="\${1:-}" ;;
-      --dir) shift; dir="\${1:-}" ;;
-    esac
-    shift || true
-  done
-  mkdir -p "$dir"
-  case "$name" in
-    rust-binary-cli-cli-linux-amd64)
-      printf '#!/usr/bin/env bash\\nexit 0\\n' > "$dir/openshell"
-      ;;
-    rust-binary-gateway-gateway-linux-amd64)
-      printf '#!/usr/bin/env bash\\nexit 0\\n' > "$dir/openshell-gateway"
-      ;;
-    rust-binary-supervisor-sandbox-linux-amd64)
-      printf '#!/usr/bin/env bash\\nexit 0\\n' > "$dir/openshell-sandbox"
-      ;;
-    *)
-      exit 7
-      ;;
-  esac
-  exit 0
-fi
-exit 1`,
-      );
+    expect(fixture.result.status).toBe(1);
+    expect(fixture.result.stderr).toContain(
+      "NEMOCLAW_OPENSHELL_ARTIFACT_HEAD_SHA must be set to the expected 40-hex",
+    );
+    expect(fixture.artifactLog).toBe("");
+  });
 
-      const result = spawnSync("bash", [SCRIPT], {
-        env: {
-          ...process.env,
-          HOME: tmp,
-          XDG_BIN_HOME: installDir,
-          NEMOCLAW_NON_INTERACTIVE: "1",
-          NEMOCLAW_OPENSHELL_CHANNEL: "artifact",
-          NEMOCLAW_OPENSHELL_ARTIFACT_RUN_ID: "28267935010",
-          PATH: `${fakeBin}:${installDir}:/usr/bin:/bin`,
-        },
-        encoding: "utf8",
-      });
+  it("rejects artifact runs whose head does not match the expected commit", () => {
+    const fixture = runArtifactInstallFixture({
+      runHeadSha: "1111111111111111111111111111111111111111",
+    });
 
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("did not include SHA-256 checksum metadata");
-      expect(fs.existsSync(path.join(installDir, "openshell"))).toBe(false);
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+    expect(fixture.result.status).toBe(1);
+    expect(fixture.result.stderr).toContain("did not match expected");
+    expect(fixture.installedCli).not.toContain("0.0.72-dev+artifact");
+  });
+
+  it("rejects duplicate artifact names instead of choosing one", () => {
+    const fixture = runArtifactInstallFixture({ artifactCount: 2 });
+
+    expect(fixture.result.status).toBe(1);
+    expect(fixture.result.stderr).toContain("Expected exactly one OpenShell artifact");
+    expect(fixture.result.stderr).toContain("found 2");
+  });
+
+  it("rejects malformed GitHub artifact digest metadata", () => {
+    const fixture = runArtifactInstallFixture({ artifactDigest: "sha256:not-a-digest" });
+
+    expect(fixture.result.status).toBe(1);
+    expect(fixture.result.stderr).toContain("missing valid GitHub SHA-256 digest metadata");
+  });
+
+  it("rejects artifact archives with anything except the expected root file", () => {
+    const fixture = runArtifactInstallFixture({ extraArchiveEntry: true });
+
+    expect(fixture.result.status).toBe(1);
+    expect(fixture.result.stderr).toContain("must contain exactly one root file named 'openshell'");
+    expect(fixture.installedCli).not.toContain("0.0.72-dev+artifact");
+  });
+
+  it("rejects artifact-channel installs on Linux arm64", () => {
+    const fixture = runArtifactInstallFixture({ arch: "arm64" });
+
+    expect(fixture.result.status).toBe(1);
+    expect(fixture.result.stderr).toContain(
+      "artifact channel currently supports Linux x86_64 runners only",
+    );
+    expect(fixture.artifactLog).toBe("");
   });
 
   it("proceeds to install when openshell is not present", () => {

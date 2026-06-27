@@ -226,6 +226,11 @@ if [ ! -f "$_HERMES_RUNTIME_CONFIG_GUARD" ]; then
   _HERMES_RUNTIME_CONFIG_GUARD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runtime-config-guard.py"
 fi
 
+_HERMES_MCP_CONTROL="/usr/local/lib/nemoclaw/hermes-mcp-config-transaction.py"
+if [ ! -f "$_HERMES_MCP_CONTROL" ]; then
+  _HERMES_MCP_CONTROL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/mcp-config-transaction.py"
+fi
+
 # The seeder imports PyYAML, which ships ONLY in the Hermes venv — not in the
 # base-image python3 that is first on PATH at container boot. (An interactive
 # login shell activates the venv, masking this: `python3` there resolves to
@@ -293,17 +298,13 @@ hermes_dashboard_tui_enabled() {
 # verify_config_integrity is provided by sandbox-init.sh (parameterized).
 
 verify_hermes_config_integrity() {
-  if [ "$(id -u)" -eq 0 ]; then
-    # Docker may start UID 0 without the supplementary groups declared in
-    # /etc/group, and hardened runtimes can drop CAP_DAC_OVERRIDE before this
-    # entrypoint runs. Verify the root-owned hash through the sandbox identity
-    # that owns the mutable Hermes home.
-    export -f verify_config_integrity
-    "${STEP_DOWN_PREFIX_SANDBOX[@]}" bash -c "verify_config_integrity \"\$1\" \"\$2\"" bash \
-      "${HERMES_DIR}" "${HERMES_HASH_FILE}"
-    return $?
-  fi
-  verify_config_integrity "${HERMES_DIR}" "${HERMES_HASH_FILE}"
+  # `/sandbox` can survive a pod/VM recreation while the image's `/etc`
+  # rootfs does not. A build-time hash in /etc therefore cannot authenticate
+  # legitimate mutable config after recreate. Match OpenClaw's established
+  # mutable-default contract: the sandbox-owned compatibility hash is a
+  # consistency marker, while shields-up makes that persisted hash and config
+  # root-owned/read-only and turns strict verification back on.
+  verify_config_integrity_if_locked "${HERMES_DIR}"
 }
 
 # configure_messaging_channels is provided by sandbox-init.sh (shared).
@@ -722,6 +723,7 @@ repair_hermes_startup_layout() {
 }
 
 cleanup_stale_hermes_gateway_runtime() {
+  local preserve_forwarders="${1:-}"
   local runtime_dir="${HERMES_DIR}/runtime"
 
   if has_live_hermes_gateway; then
@@ -736,7 +738,9 @@ cleanup_stale_hermes_gateway_runtime() {
   remove_stale_gateway_file "${runtime_dir}/gateway.pid" "runtime PID file"
   remove_stale_gateway_file "${HERMES_DIR}/gateway.pid" "legacy PID file"
   remove_stale_gateway_file "${runtime_dir}/gateway.lock" "lock file"
-  cleanup_orphan_socat_forwarders
+  if [ "$preserve_forwarders" != "preserve-forwarders" ]; then
+    cleanup_orphan_socat_forwarders
+  fi
 }
 
 # ── socat forwarders ─────────────────────────────────────────────
@@ -929,6 +933,43 @@ restore_hermes_config_permissions_after_dashboard_start() {
     attempts=$((attempts + 1))
     sleep 1
   done
+}
+
+MCP_CONTROL_PID=""
+start_hermes_mcp_control() {
+  [ "$(id -u)" -eq 0 ] || return 0
+  prepare_restricted_log /tmp/hermes-mcp-control.log root:root 600
+  HERMES_HOME="${HERMES_DIR}" \
+    nohup "$_HERMES_PYTHON" "$_HERMES_MCP_CONTROL" serve \
+      >/tmp/hermes-mcp-control.log 2>&1 &
+  MCP_CONTROL_PID=$!
+  local attempts=0
+  while [ "$attempts" -lt 50 ]; do
+    if [ -S /run/nemoclaw/hermes-mcp-control.sock ]; then
+      echo "[gateway] Hermes MCP lifecycle control ready (pid ${MCP_CONTROL_PID})" >&2
+      return 0
+    fi
+    if ! kill -0 "$MCP_CONTROL_PID" 2>/dev/null; then
+      echo "[gateway] Hermes MCP lifecycle control failed to start" >&2
+      tail -n 20 /tmp/hermes-mcp-control.log >&2 2>/dev/null || true
+      return 1
+    fi
+    attempts=$((attempts + 1))
+    sleep 0.1
+  done
+  echo "[gateway] Hermes MCP lifecycle control socket did not become ready" >&2
+  return 1
+}
+
+record_hermes_service_pids() {
+  SANDBOX_CHILD_PIDS=("$GATEWAY_PID" "$DASHBOARD_PID")
+  [ -n "${GATEWAY_LOG_TAIL_PID:-}" ] && SANDBOX_CHILD_PIDS+=("$GATEWAY_LOG_TAIL_PID")
+  [ -n "${DASHBOARD_LOG_TAIL_PID:-}" ] && SANDBOX_CHILD_PIDS+=("$DASHBOARD_LOG_TAIL_PID")
+  [ -n "${SOCAT_PID:-}" ] && SANDBOX_CHILD_PIDS+=("$SOCAT_PID")
+  [ -n "${DASHBOARD_SOCAT_PID:-}" ] && SANDBOX_CHILD_PIDS+=("$DASHBOARD_SOCAT_PID")
+  [ -n "${MCP_CONTROL_PID:-}" ] && SANDBOX_CHILD_PIDS+=("$MCP_CONTROL_PID")
+  # shellcheck disable=SC2034  # read by cleanup_on_signal from sandbox-init.sh
+  SANDBOX_WAIT_PID="$GATEWAY_PID"
 }
 
 # ── Messaging egress ─────────────────────────────────────────────
@@ -1317,18 +1358,33 @@ if [ "$(id -u)" -ne 0 ]; then
   # NOTE: PIDs are collected after launch; a signal arriving between trap
   # registration and the final append is a small race window (same as before
   # the shared-library refactor). Acceptable for entrypoint-level cleanup.
-  SANDBOX_CHILD_PIDS=("$GATEWAY_PID" "$DASHBOARD_PID")
-  [ -n "${GATEWAY_LOG_TAIL_PID:-}" ] && SANDBOX_CHILD_PIDS+=("$GATEWAY_LOG_TAIL_PID")
-  [ -n "${DASHBOARD_LOG_TAIL_PID:-}" ] && SANDBOX_CHILD_PIDS+=("$DASHBOARD_LOG_TAIL_PID")
-  # shellcheck disable=SC2034  # read by cleanup_on_signal from sandbox-init.sh
-  SANDBOX_WAIT_PID="$GATEWAY_PID"
   trap cleanup_on_signal SIGTERM SIGINT
-  [ -n "${SOCAT_PID:-}" ] && SANDBOX_CHILD_PIDS+=("$SOCAT_PID")
-  [ -n "${DASHBOARD_SOCAT_PID:-}" ] && SANDBOX_CHILD_PIDS+=("$DASHBOARD_SOCAT_PID")
+  record_hermes_service_pids
   print_dashboard_urls
 
-  wait "$GATEWAY_PID"
-  exit $?
+  while true; do
+    if wait "$GATEWAY_PID"; then
+      gateway_status=0
+    else
+      gateway_status=$?
+    fi
+    [ "$gateway_status" -eq 75 ] || exit "$gateway_status"
+
+    echo "[gateway] Hermes requested a graceful service reload; verifying config before relaunch" >&2
+    verify_config_integrity_if_locked "${HERMES_DIR}" || {
+      echo "[SECURITY] Config integrity check failed during Hermes gateway reload" >&2
+      exit 1
+    }
+    validate_hermes_env_secret_boundary
+    validate_hermes_runtime_env_secret_boundary
+    cleanup_stale_hermes_gateway_runtime preserve-forwarders
+    HERMES_HOME="${HERMES_DIR}" \
+      nohup "$HERMES" gateway run >>/tmp/gateway.log 2>&1 &
+    GATEWAY_PID=$!
+    echo "[gateway] hermes gateway reloaded (pid $GATEWAY_PID)" >&2
+    wait_for_hermes_gateway_internal "$GATEWAY_PID"
+    record_hermes_service_pids
+  done
 fi
 
 # ── Root path (full privilege separation via setpriv) ──────────
@@ -1365,21 +1421,36 @@ GATEWAY_PID=$!
 echo "[gateway] hermes gateway launched as 'gateway' user (pid $GATEWAY_PID)" >&2
 start_gateway_log_stream
 wait_for_hermes_gateway_internal "$GATEWAY_PID"
+start_hermes_mcp_control
 start_socat_forwarder "$PUBLIC_PORT" "$INTERNAL_PORT" "API" SOCAT_PID
 start_hermes_dashboard_sandbox_user
 restore_hermes_config_permissions_after_dashboard_start
 # NOTE: PIDs are collected after launch; a signal arriving between trap
 # registration and the final append is a small race window (same as before
 # the shared-library refactor). Acceptable for entrypoint-level cleanup.
-SANDBOX_CHILD_PIDS=("$GATEWAY_PID" "$DASHBOARD_PID")
-[ -n "${GATEWAY_LOG_TAIL_PID:-}" ] && SANDBOX_CHILD_PIDS+=("$GATEWAY_LOG_TAIL_PID")
-[ -n "${DASHBOARD_LOG_TAIL_PID:-}" ] && SANDBOX_CHILD_PIDS+=("$DASHBOARD_LOG_TAIL_PID")
-# shellcheck disable=SC2034  # read by cleanup_on_signal from sandbox-init.sh
-SANDBOX_WAIT_PID="$GATEWAY_PID"
 trap cleanup_on_signal SIGTERM SIGINT
-[ -n "${SOCAT_PID:-}" ] && SANDBOX_CHILD_PIDS+=("$SOCAT_PID")
-[ -n "${DASHBOARD_SOCAT_PID:-}" ] && SANDBOX_CHILD_PIDS+=("$DASHBOARD_SOCAT_PID")
+record_hermes_service_pids
 print_dashboard_urls
 
-# Keep container running by waiting on the gateway process.
-wait "$GATEWAY_PID"
+# Implement Hermes' service-managed exit-75 reload contract in place. The
+# sandbox, dashboard, and forwards remain alive while the gateway is replaced.
+while true; do
+  if wait "$GATEWAY_PID"; then
+    gateway_status=0
+  else
+    gateway_status=$?
+  fi
+  [ "$gateway_status" -eq 75 ] || exit "$gateway_status"
+
+  echo "[gateway] Hermes requested a graceful service reload; verifying config before relaunch" >&2
+  verify_hermes_config_integrity
+  validate_hermes_env_secret_boundary
+  validate_hermes_runtime_env_secret_boundary
+  cleanup_stale_hermes_gateway_runtime preserve-forwarders
+  HERMES_HOME="${HERMES_DIR}" \
+    nohup "${STEP_DOWN_PREFIX_GATEWAY[@]}" sh -c 'umask 0007; exec "$@" >>/tmp/gateway.log 2>&1' sh "$HERMES" gateway run &
+  GATEWAY_PID=$!
+  echo "[gateway] hermes gateway reloaded as 'gateway' user (pid $GATEWAY_PID)" >&2
+  wait_for_hermes_gateway_internal "$GATEWAY_PID"
+  record_hermes_service_pids
+done

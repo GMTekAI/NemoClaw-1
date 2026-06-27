@@ -48,6 +48,18 @@ type RebuildFlowOverrides = {
   buildMessagingRebuildPlan?: () => Promise<unknown> | unknown;
   sandboxEntry?: Record<string, unknown>;
   sessionSandboxName?: string;
+  staleRecovery?: boolean;
+  mcpPreparation?: {
+    entries: Array<Record<string, unknown>>;
+    detachedProviderEntries: Array<Record<string, unknown>>;
+    scrubbedAdapterEntries?: Array<Record<string, unknown>>;
+  };
+  runOpenshell?: (args: string[]) => {
+    status: number;
+    output: string;
+    stdout?: string;
+    stderr?: string;
+  };
 };
 
 type RebuildFlowHarness = {
@@ -66,6 +78,10 @@ type RebuildFlowHarness = {
   restoreSandboxStateSpy: MockInstance;
   runOpenshellSpy: MockInstance;
   messagingRebuildPlanSpy: MockInstance;
+  prepareMcpBridgesForAbsentSandboxRebuildSpy: MockInstance;
+  prepareMcpBridgesForRebuildSpy: MockInstance;
+  reattachMcpProvidersAfterRebuildAbortSpy: MockInstance;
+  restoreMcpBridgesAfterRebuildSpy: MockInstance;
   session: RebuildFlowSession;
 };
 
@@ -170,6 +186,7 @@ function createRebuildFlowHarness(overrides: RebuildFlowOverrides = {}): Rebuild
   const sandboxSession = requireDist("../../../../dist/lib/state/sandbox-session.js");
   const sandboxVersion = requireDist("../../../../dist/lib/sandbox/version.js");
   const destroy = requireDist("../../../../dist/lib/actions/sandbox/destroy.js");
+  const gatewayState = requireDist("../../../../dist/lib/actions/sandbox/gateway-state.js");
   const rebuildShields = requireDist("../../../../dist/lib/actions/sandbox/rebuild-shields.js");
   const nim = requireDist("../../../../dist/lib/inference/nim.js");
   const policies = requireDist("../../../../dist/lib/policy/index.js");
@@ -177,6 +194,7 @@ function createRebuildFlowHarness(overrides: RebuildFlowOverrides = {}): Rebuild
   const messagingHostForwardLifecycle = requireDist(
     "../../../../dist/lib/actions/sandbox/messaging-host-forward-lifecycle.js",
   );
+  const mcpBridge = requireDist("../../../../dist/lib/actions/sandbox/mcp-bridge.js");
   const messaging = requireDist("../../../../dist/lib/messaging/index.js");
   const shields = requireDist("../../../../dist/lib/shields/index.js");
 
@@ -190,7 +208,11 @@ function createRebuildFlowHarness(overrides: RebuildFlowOverrides = {}): Rebuild
   vi.spyOn(gatewayDrift, "detectOpenShellStateRpcPreflightIssue").mockReturnValue(null);
   vi.spyOn(gatewayDrift, "detectOpenShellStateRpcResultIssue").mockReturnValue(null);
   vi.spyOn(sandboxList, "captureSandboxListWithGatewayRecovery").mockResolvedValue({
-    result: { status: 0, output: "alpha Ready" },
+    result: { status: 0, output: overrides.staleRecovery ? "" : "alpha Ready" },
+  });
+  vi.spyOn(gatewayState, "getReconciledSandboxGatewayState").mockResolvedValue({
+    state: overrides.staleRecovery ? "missing" : "present",
+    output: "",
   });
   vi.spyOn(resolve, "resolveOpenshell").mockReturnValue(null);
   vi.spyOn(agentDefs, "loadAgent").mockReturnValue(agentDef);
@@ -209,7 +231,7 @@ function createRebuildFlowHarness(overrides: RebuildFlowOverrides = {}): Rebuild
     .mockImplementation(() => undefined);
   const markStepFailedSpy = installTerminalStepFailureMock(onboardSession, session);
   session.sandboxName = overrides.sessionSandboxName ?? session.sandboxName;
-  vi.spyOn(registry, "getSandbox").mockReturnValue({
+  const sandboxEntry = {
     name: "alpha",
     provider: "ollama-local",
     model: "nvidia/nemotron",
@@ -217,6 +239,12 @@ function createRebuildFlowHarness(overrides: RebuildFlowOverrides = {}): Rebuild
     agent: null,
     nimContainer: null,
     ...(overrides.sandboxEntry ?? {}),
+  };
+  vi.spyOn(registry, "getSandbox").mockReturnValue(sandboxEntry);
+  vi.spyOn(registry, "getDefault").mockReturnValue(null);
+  vi.spyOn(registry, "load").mockReturnValue({
+    sandboxes: { alpha: sandboxEntry },
+    defaultSandbox: null,
   });
   vi.spyOn(registry, "listSandboxes").mockReturnValue({ sandboxes: [] });
   const registryUpdateSpy = vi.spyOn(registry, "updateSandbox").mockImplementation(() => undefined);
@@ -260,7 +288,10 @@ function createRebuildFlowHarness(overrides: RebuildFlowOverrides = {}): Rebuild
   );
   const runOpenshellSpy = vi
     .spyOn(openshellRuntime, "runOpenshell")
-    .mockReturnValue({ status: 0, output: "" });
+    .mockImplementation((args: unknown) => {
+      const argv = Array.isArray(args) ? args.map(String) : [];
+      return overrides.runOpenshell ? overrides.runOpenshell(argv) : { status: 0, output: "" };
+    });
   vi.spyOn(destroy, "removeSandboxRegistryEntry").mockImplementation(() => undefined);
   vi.spyOn(nim, "stopNimContainer").mockImplementation(() => undefined);
   vi.spyOn(nim, "stopNimContainerByName").mockImplementation(() => undefined);
@@ -283,12 +314,37 @@ function createRebuildFlowHarness(overrides: RebuildFlowOverrides = {}): Rebuild
   vi.spyOn(shields, "repairMutableConfigPerms").mockImplementation(
     overrides.repairMutableConfigPerms ?? (() => ({ applied: true, verified: true, errors: [] })),
   );
+  vi.spyOn(shields, "isShieldsDown").mockReturnValue(true);
+  vi.spyOn(shields, "clearShieldsState").mockImplementation(() => undefined);
   const messagingRebuildPlanSpy = vi
     .spyOn(messaging.MessagingWorkflowPlanner.prototype, "buildRebuildPlanFromSandboxEntry")
     .mockImplementation(overrides.buildMessagingRebuildPlan ?? (() => null));
   const ensureMessagingHostForwardAfterRebuildSpy = vi
     .spyOn(messagingHostForwardLifecycle, "ensureMessagingHostForwardAfterRebuild")
     .mockReturnValue(true);
+  const prepareMcpBridgesForRebuildSpy = vi
+    .spyOn(mcpBridge, "prepareMcpBridgesForRebuild")
+    .mockResolvedValue(
+      overrides.mcpPreparation ?? {
+        entries: [],
+        detachedProviderEntries: [],
+      },
+    );
+  const prepareMcpBridgesForAbsentSandboxRebuildSpy = vi
+    .spyOn(mcpBridge, "prepareMcpBridgesForAbsentSandboxRebuild")
+    .mockResolvedValue(
+      overrides.mcpPreparation ?? {
+        entries: [],
+        detachedProviderEntries: [],
+        scrubbedAdapterEntries: [],
+      },
+    );
+  const reattachMcpProvidersAfterRebuildAbortSpy = vi
+    .spyOn(mcpBridge, "reattachMcpProvidersAfterRebuildAbort")
+    .mockResolvedValue(undefined);
+  const restoreMcpBridgesAfterRebuildSpy = vi
+    .spyOn(mcpBridge, "restoreMcpBridgesAfterRebuild")
+    .mockResolvedValue(undefined);
 
   errorSpy.mockClear();
   logSpy.mockClear();
@@ -310,6 +366,10 @@ function createRebuildFlowHarness(overrides: RebuildFlowOverrides = {}): Rebuild
     restoreSandboxStateSpy,
     runOpenshellSpy,
     messagingRebuildPlanSpy,
+    prepareMcpBridgesForAbsentSandboxRebuildSpy,
+    prepareMcpBridgesForRebuildSpy,
+    reattachMcpProvidersAfterRebuildAbortSpy,
+    restoreMcpBridgesAfterRebuildSpy,
     session,
   };
 }
@@ -400,8 +460,22 @@ describe("rebuildSandbox flow", () => {
   });
 
   it("backs up, recreates, restores, reapplies policy, and relocks on a successful OpenClaw rebuild", async () => {
+    const mcpEntry = {
+      server: "github",
+      url: "https://mcp.example.test/mcp",
+      env: ["GITHUB_TOKEN"],
+      providerName: "nemoclaw-mcp-alpha-github",
+      policyName: "mcp-bridge-github",
+      adapter: "mcporter",
+      createdAt: "2026-06-01T00:00:00.000Z",
+      updatedAt: "2026-06-01T00:00:00.000Z",
+    };
     const harness = createRebuildFlowHarness({
       applyPreset: () => true,
+      mcpPreparation: {
+        entries: [mcpEntry],
+        detachedProviderEntries: [mcpEntry],
+      },
     });
 
     await expect(
@@ -409,6 +483,7 @@ describe("rebuildSandbox flow", () => {
     ).resolves.toBeUndefined();
 
     expect(harness.backupSandboxStateSpy).toHaveBeenCalledWith("alpha");
+    expect(harness.prepareMcpBridgesForRebuildSpy).toHaveBeenCalledWith("alpha");
     expect(harness.runOpenshellSpy).toHaveBeenCalledWith(
       ["sandbox", "delete", "alpha"],
       expect.objectContaining({ ignoreError: true }),
@@ -425,6 +500,7 @@ describe("rebuildSandbox flow", () => {
       "alpha",
       "/tmp/nemoclaw-rebuild-backup",
     );
+    expect(harness.restoreMcpBridgesAfterRebuildSpy).toHaveBeenCalledWith("alpha", [mcpEntry]);
     expect(harness.applyPresetSpy).toHaveBeenCalledWith("alpha", "npm");
     expect(harness.applyPresetSpy).toHaveBeenCalledWith("alpha", "bad");
     expect(harness.applyPresetSpy).toHaveBeenCalledWith("alpha", "throw");
@@ -435,6 +511,38 @@ describe("rebuildSandbox flow", () => {
     expect(harness.logSpy.mock.calls.map((call) => String(call[0])).join("\n")).toContain(
       "rebuilt successfully",
     );
+  });
+
+  it("uses the no-exec MCP preparation path when recovering an absent sandbox", async () => {
+    const mcpEntry = {
+      server: "github",
+      agent: "openclaw",
+      adapter: "mcporter",
+      url: "https://mcp.example.test/mcp",
+      env: ["GITHUB_TOKEN"],
+      providerName: "alpha-mcp-github",
+      policyName: "mcp-bridge-github",
+      addedAt: "2026-06-01T00:00:00.000Z",
+    };
+    const harness = createRebuildFlowHarness({
+      staleRecovery: true,
+      sandboxEntry: { mcp: { bridges: { github: mcpEntry } } },
+      mcpPreparation: {
+        entries: [mcpEntry],
+        detachedProviderEntries: [],
+        scrubbedAdapterEntries: [],
+      },
+    });
+
+    await expect(
+      harness.rebuildSandbox("alpha", ["--yes"], { throwOnError: true }),
+    ).resolves.toBeUndefined();
+
+    expect(harness.backupSandboxStateSpy).not.toHaveBeenCalled();
+    expect(harness.prepareMcpBridgesForAbsentSandboxRebuildSpy).toHaveBeenCalledWith("alpha");
+    expect(harness.prepareMcpBridgesForRebuildSpy).not.toHaveBeenCalled();
+    expect(harness.reattachMcpProvidersAfterRebuildAbortSpy).not.toHaveBeenCalled();
+    expect(harness.restoreMcpBridgesAfterRebuildSpy).toHaveBeenCalledWith("alpha", [mcpEntry]);
   });
 
   it("aborts before backup/delete when messaging manifest staging fails", async () => {
@@ -455,6 +563,38 @@ describe("rebuildSandbox flow", () => {
     expect(harness.runOpenshellSpy).not.toHaveBeenCalledWith(
       ["sandbox", "delete", "alpha"],
       expect.anything(),
+    );
+    expect(harness.onboardSpy).not.toHaveBeenCalled();
+  });
+
+  it("reattaches exactly the MCP providers detached when sandbox deletion fails", async () => {
+    const attached = {
+      server: "attached",
+      providerName: "nemoclaw-mcp-alpha-attached",
+    };
+    const alreadyDetached = {
+      server: "already-detached",
+      providerName: "nemoclaw-mcp-alpha-already-detached",
+    };
+    const harness = createRebuildFlowHarness({
+      mcpPreparation: {
+        entries: [attached, alreadyDetached],
+        detachedProviderEntries: [attached],
+      },
+      runOpenshell: (args) =>
+        args.join(" ") === "sandbox delete alpha"
+          ? { status: 7, output: "delete failed", stderr: "delete failed" }
+          : { status: 0, output: "" },
+    });
+
+    await expect(
+      harness.rebuildSandbox("alpha", ["--yes"], { throwOnError: true }),
+    ).rejects.toThrow("Failed to delete sandbox");
+
+    expect(harness.reattachMcpProvidersAfterRebuildAbortSpy).toHaveBeenCalledWith(
+      "alpha",
+      [attached],
+      undefined,
     );
     expect(harness.onboardSpy).not.toHaveBeenCalled();
   });

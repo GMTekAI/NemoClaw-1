@@ -14,9 +14,15 @@ const destroyModulePath = "../../../../dist/lib/actions/sandbox/destroy.js";
 type DestroyHarness = {
   cleanupGatewaySpy: MockInstance;
   destroySandbox: DestroySandbox;
+  finalizeMcpBridgesAfterSandboxDeleteSpy: MockInstance;
+  gatewayPinsAtMcpPrepare: Array<string | undefined>;
+  gatewayPinsAtSandboxList: Array<string | undefined>;
   killStaleProxySpy: MockInstance;
   logSpy: MockInstance;
+  prepareMcpBridgesForAbsentSandboxDestroySpy: MockInstance;
+  prepareMcpBridgesForDestroySpy: MockInstance;
   removeSandboxSpy: MockInstance;
+  restoreMcpBridgesAfterDestroyAbortSpy: MockInstance;
   runOpenshellSpy: MockInstance;
   selectGatewaySpy: MockInstance;
   stopNimByNameSpy: MockInstance;
@@ -26,6 +32,9 @@ type DestroyHarness = {
 type DestroyHarnessOptions = {
   deleteStatus?: number;
   deleteOutput?: string;
+  finalizeMcpError?: string;
+  mcpServers?: string[];
+  sandboxPresent?: boolean;
 };
 
 const sandboxEntry = {
@@ -37,6 +46,20 @@ const sandboxEntry = {
   gatewayName: "nemoclaw-19080",
   gatewayPort: 19080,
 };
+
+function sandboxListJson(names: string[]): string {
+  return JSON.stringify(
+    names.map((name) => ({
+      id: `sandbox-${name}`,
+      name,
+      labels: {},
+      resource_version: 1,
+      created_at: "2026-06-27 00:00:00",
+      phase: "Ready",
+      current_policy_version: 1,
+    })),
+  );
+}
 
 function createDestroyHarness(options: DestroyHarnessOptions = {}): DestroyHarness {
   delete require.cache[requireDist.resolve(destroyModulePath)];
@@ -58,13 +81,23 @@ function createDestroyHarness(options: DestroyHarnessOptions = {}): DestroyHarne
   const registry = requireDist("../../../../dist/lib/state/registry.js");
   const sandboxSession = requireDist("../../../../dist/lib/state/sandbox-session.js");
   const timerControl = requireDist("../../../../dist/lib/shields/timer-control.js");
+  const mcpBridge = requireDist("../../../../dist/lib/actions/sandbox/mcp-bridge.js");
 
   vi.spyOn(resolve, "resolveOpenshell").mockReturnValue("/usr/bin/openshell");
   vi.spyOn(sandboxSession, "getActiveSandboxSessions").mockReturnValue({
     detected: true,
     sessions: [{ pid: 1 }],
   });
-  vi.spyOn(registry, "getSandbox").mockReturnValue(sandboxEntry);
+  vi.spyOn(registry, "getSandbox").mockReturnValue({
+    ...sandboxEntry,
+    ...(options.mcpServers?.length
+      ? {
+          mcp: {
+            bridges: Object.fromEntries(options.mcpServers.map((server) => [server, { server }])),
+          },
+        }
+      : {}),
+  });
   vi.spyOn(registry, "listSandboxes").mockReturnValue({ sandboxes: [] });
   const removeSandboxSpy = vi.spyOn(registry, "removeSandbox").mockReturnValue(true);
   vi.spyOn(onboardSession, "loadSession").mockReturnValue({ sandboxName: "alpha" });
@@ -73,8 +106,17 @@ function createDestroyHarness(options: DestroyHarnessOptions = {}): DestroyHarne
     if (typeof mutator === "function") (mutator as (value: typeof session) => void)(session);
     return session;
   });
+  const gatewayPinsAtSandboxList: Array<string | undefined> = [];
   const runOpenshellSpy = vi.spyOn(runtime, "runOpenshell").mockImplementation((args: unknown) => {
     const argv = Array.isArray(args) ? args : [];
+    if (argv[0] === "sandbox" && argv[1] === "list") {
+      gatewayPinsAtSandboxList.push(process.env.OPENSHELL_GATEWAY);
+      return {
+        status: 0,
+        stdout: sandboxListJson(options.sandboxPresent === false ? [] : ["alpha"]),
+        stderr: "",
+      };
+    }
     if (argv[0] === "sandbox" && argv[1] === "delete") {
       return { status: options.deleteStatus ?? 0, stdout: options.deleteOutput ?? "", stderr: "" };
     }
@@ -105,15 +147,55 @@ function createDestroyHarness(options: DestroyHarnessOptions = {}): DestroyHarne
     .mockImplementation(() => undefined);
   vi.spyOn(tunnelServices, "stopAll").mockImplementation(() => undefined);
   vi.spyOn(timerControl, "killTimer").mockReturnValue({ warnings: [] });
+  const mcpPreparation = {
+    entries: (options.mcpServers ?? []).map((server) => ({ server })),
+    detachedProviderEntries: (options.mcpServers ?? []).map((server) => ({
+      server,
+    })),
+    scrubbedAdapterEntries: (options.mcpServers ?? []).map((server) => ({
+      server,
+    })),
+    destroyAlreadyPrepared: false,
+    destroyAlreadyPending: false,
+  };
+  const gatewayPinsAtMcpPrepare: Array<string | undefined> = [];
+  const prepareMcpBridgesForDestroySpy = vi
+    .spyOn(mcpBridge, "prepareMcpBridgesForDestroy")
+    .mockImplementation(async () => {
+      gatewayPinsAtMcpPrepare.push(process.env.OPENSHELL_GATEWAY);
+      return mcpPreparation;
+    });
+  const prepareMcpBridgesForAbsentSandboxDestroySpy = vi
+    .spyOn(mcpBridge, "prepareMcpBridgesForAbsentSandboxDestroy")
+    .mockImplementation(async () => {
+      gatewayPinsAtMcpPrepare.push(process.env.OPENSHELL_GATEWAY);
+      return mcpPreparation;
+    });
+  const restoreMcpBridgesAfterDestroyAbortSpy = vi
+    .spyOn(mcpBridge, "restoreMcpBridgesAfterDestroyAbort")
+    .mockResolvedValue(undefined);
+  const finalizeMcpBridgesAfterSandboxDeleteSpy = vi
+    .spyOn(mcpBridge, "finalizeMcpBridgesAfterSandboxDelete")
+    .mockImplementation(async () => {
+      if (options.finalizeMcpError) {
+        throw new Error(options.finalizeMcpError);
+      }
+    });
 
   logSpy.mockClear();
 
   return {
     cleanupGatewaySpy,
     destroySandbox: requireDist(destroyModulePath).destroySandbox,
+    finalizeMcpBridgesAfterSandboxDeleteSpy,
+    gatewayPinsAtMcpPrepare,
+    gatewayPinsAtSandboxList,
     killStaleProxySpy,
     logSpy,
+    prepareMcpBridgesForAbsentSandboxDestroySpy,
+    prepareMcpBridgesForDestroySpy,
     removeSandboxSpy,
+    restoreMcpBridgesAfterDestroyAbortSpy,
     runOpenshellSpy,
     selectGatewaySpy,
     stopNimByNameSpy,
@@ -123,16 +205,66 @@ function createDestroyHarness(options: DestroyHarnessOptions = {}): DestroyHarne
 
 describe("destroySandbox flow", () => {
   let exitSpy: MockInstance;
+  let originalGatewayEnv: string | undefined;
 
   beforeEach(() => {
+    originalGatewayEnv = process.env.OPENSHELL_GATEWAY;
     exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number | string | null) => {
       throw new Error(`process.exit(${code ?? 0})`);
     }) as never);
   });
 
   afterEach(() => {
+    if (originalGatewayEnv === undefined) delete process.env.OPENSHELL_GATEWAY;
+    else process.env.OPENSHELL_GATEWAY = originalGatewayEnv;
     vi.restoreAllMocks();
     delete require.cache[requireDist.resolve(destroyModulePath)];
+  });
+
+  it("trusts absence only from a successful, error-free sandbox list", () => {
+    const { classifyDestroySandboxPresence } = requireDist(destroyModulePath) as {
+      classifyDestroySandboxPresence: (
+        sandboxName: string,
+        result: { status: number | null; stdout?: string; stderr?: string },
+      ) => string;
+    };
+
+    expect(
+      classifyDestroySandboxPresence("alpha", {
+        status: 0,
+        stdout: sandboxListJson(["alpha"]),
+      }),
+    ).toBe("present");
+    expect(
+      classifyDestroySandboxPresence("alpha", {
+        status: 0,
+        stdout: sandboxListJson(["beta"]),
+      }),
+    ).toBe("absent");
+    expect(
+      classifyDestroySandboxPresence("alpha", {
+        status: 1,
+        stderr: "gateway unavailable",
+      }),
+    ).toBe("unknown");
+    expect(
+      classifyDestroySandboxPresence("alpha", {
+        status: 0,
+        stdout: "arbitrary warning text",
+      }),
+    ).toBe("unknown");
+    expect(
+      classifyDestroySandboxPresence("alpha", {
+        status: 0,
+        stdout: JSON.stringify([{ name: "beta" }]),
+      }),
+    ).toBe("unknown");
+    expect(
+      classifyDestroySandboxPresence("alpha", {
+        status: 0,
+        stdout: "",
+      }),
+    ).toBe("unknown");
   });
 
   it("selects the sandbox gateway, deletes live resources, cleans host state, and removes registry state", async () => {
@@ -146,6 +278,11 @@ describe("destroySandbox flow", () => {
       "alpha",
       "nemoclaw-19080",
       harness.runOpenshellSpy,
+    );
+    expect(harness.gatewayPinsAtSandboxList).toEqual(["nemoclaw-19080"]);
+    expect(harness.runOpenshellSpy).toHaveBeenCalledWith(
+      ["sandbox", "list", "-o", "json"],
+      expect.objectContaining({ ignoreError: true }),
     );
     expect(harness.stopNimByNameSpy).toHaveBeenCalledWith("alpha-nim");
     expect(harness.killStaleProxySpy).toHaveBeenCalledTimes(1);
@@ -177,5 +314,92 @@ describe("destroySandbox flow", () => {
     expect(harness.removeSandboxSpy).not.toHaveBeenCalled();
     expect(harness.cleanupGatewaySpy).not.toHaveBeenCalled();
     expect(exitSpy).toHaveBeenCalledWith(7);
+  });
+
+  it("detaches MCP providers before delete and finalizes them only after delete succeeds", async () => {
+    const harness = createDestroyHarness({ mcpServers: ["github", "slack"] });
+
+    await harness.destroySandbox("alpha", { yes: true });
+
+    expect(harness.prepareMcpBridgesForDestroySpy).toHaveBeenCalledWith("alpha");
+    expect(harness.gatewayPinsAtMcpPrepare).toEqual(["nemoclaw-19080"]);
+    const deleteCall = harness.runOpenshellSpy.mock.calls.findIndex(
+      (call) => Array.isArray(call[0]) && call[0].join(" ") === "sandbox delete alpha",
+    );
+    expect(deleteCall).toBeGreaterThanOrEqual(0);
+    expect(harness.prepareMcpBridgesForDestroySpy.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      harness.runOpenshellSpy.mock.invocationCallOrder[deleteCall],
+    );
+    expect(
+      harness.finalizeMcpBridgesAfterSandboxDeleteSpy.mock.invocationCallOrder.at(-1),
+    ).toBeGreaterThan(harness.runOpenshellSpy.mock.invocationCallOrder[deleteCall]);
+    expect(harness.finalizeMcpBridgesAfterSandboxDeleteSpy).toHaveBeenCalledWith(
+      "alpha",
+      expect.objectContaining({
+        entries: [{ server: "github" }, { server: "slack" }],
+      }),
+      { force: false },
+    );
+    expect(harness.restoreMcpBridgesAfterDestroyAbortSpy).not.toHaveBeenCalled();
+  });
+
+  it("restores MCP runtime state when sandbox delete fails", async () => {
+    const harness = createDestroyHarness({
+      deleteStatus: 7,
+      deleteOutput: "delete failed",
+      mcpServers: ["github"],
+    });
+
+    await expect(harness.destroySandbox("alpha", { yes: true })).rejects.toThrow("process.exit(7)");
+
+    expect(harness.restoreMcpBridgesAfterDestroyAbortSpy).toHaveBeenCalledWith(
+      "alpha",
+      expect.objectContaining({ entries: [{ server: "github" }] }),
+    );
+    expect(harness.finalizeMcpBridgesAfterSandboxDeleteSpy).not.toHaveBeenCalled();
+    expect(harness.removeSandboxSpy).not.toHaveBeenCalled();
+  });
+
+  it("preserves the registry when post-delete MCP cleanup fails, even with force", async () => {
+    const harness = createDestroyHarness({
+      finalizeMcpError: "provider delete failed",
+      mcpServers: ["github"],
+    });
+
+    await expect(harness.destroySandbox("alpha", { yes: true, force: true })).rejects.toThrow(
+      "provider delete failed",
+    );
+
+    expect(harness.finalizeMcpBridgesAfterSandboxDeleteSpy).toHaveBeenCalledWith(
+      "alpha",
+      expect.any(Object),
+      { force: true },
+    );
+    expect(harness.removeSandboxSpy).not.toHaveBeenCalled();
+    expect(harness.cleanupGatewaySpy).not.toHaveBeenCalled();
+  });
+
+  it("finalizes exact MCP providers when the sandbox was already externally removed", async () => {
+    const harness = createDestroyHarness({
+      deleteStatus: 1,
+      deleteOutput: "Error: sandbox alpha not found",
+      mcpServers: ["github"],
+      sandboxPresent: false,
+    });
+
+    await expect(harness.destroySandbox("alpha", { yes: true })).resolves.toBeUndefined();
+
+    expect(harness.prepareMcpBridgesForDestroySpy).not.toHaveBeenCalled();
+    expect(harness.prepareMcpBridgesForAbsentSandboxDestroySpy).toHaveBeenCalledWith("alpha", {
+      force: false,
+    });
+    expect(harness.gatewayPinsAtMcpPrepare).toEqual(["nemoclaw-19080"]);
+    expect(harness.restoreMcpBridgesAfterDestroyAbortSpy).not.toHaveBeenCalled();
+    expect(harness.finalizeMcpBridgesAfterSandboxDeleteSpy).toHaveBeenCalledWith(
+      "alpha",
+      expect.objectContaining({ entries: [{ server: "github" }] }),
+      { force: false },
+    );
+    expect(harness.removeSandboxSpy).toHaveBeenCalledWith("alpha");
   });
 });

@@ -22,6 +22,7 @@ const CURRENT_INSTALLED_BASE = [
 const CURRENT_INSTALLED_DOCKERFILE = [
   "COPY agents/hermes/validate-env-secret-boundary.py /usr/local/lib/nemoclaw/validate-hermes-env-secret-boundary.py",
   "COPY agents/hermes/seed-dashboard-config.py /usr/local/lib/nemoclaw/seed-hermes-dashboard-config.py",
+  "COPY agents/hermes/mcp-config-transaction.py /usr/local/lib/nemoclaw/hermes-mcp-config-transaction.py",
   "RUN HERMES_HOME=/sandbox/.hermes /usr/local/bin/hermes doctor --fix \\",
   "    && node --experimental-strip-types /opt/nemoclaw-hermes-config/generate-config.ts",
   "RUN mkdir -p /sandbox/.hermes/dashboard-home",
@@ -160,6 +161,50 @@ describe("scripts/update-hermes-agent.sh", () => {
       expect(
         fs.readFileSync(path.join(path.dirname(installedDockerfile), "Dockerfile"), "utf-8"),
       ).toBe(legacyDockerfile);
+    } finally {
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses installed copies that predate the transactional MCP helper", () => {
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-hermes-update-pre-mcp-"));
+    const installedDockerfile = path.join(
+      tmpHome,
+      ".nemoclaw",
+      "source",
+      "agents",
+      "hermes",
+      "Dockerfile.base",
+    );
+    const installedAgentDockerfile = path.join(path.dirname(installedDockerfile), "Dockerfile");
+    const preMcpDockerfile = CURRENT_INSTALLED_DOCKERFILE.replace(
+      /^COPY agents\/hermes\/mcp-config-transaction\.py .*\n/m,
+      "",
+    );
+    fs.mkdirSync(path.dirname(installedDockerfile), { recursive: true });
+    fs.writeFileSync(installedDockerfile, CURRENT_INSTALLED_BASE);
+    fs.writeFileSync(installedAgentDockerfile, preMcpDockerfile);
+
+    const run = spawnSync(
+      "bash",
+      [SCRIPT, "--tag", TARGET_TAG, "--check", "--update-installed-copies"],
+      {
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          HOME: tmpHome,
+          NEMOCLAW_SOURCE_ROOT: undefined,
+        },
+        timeout: 5000,
+      },
+    );
+
+    try {
+      expect(run.status).toBe(1);
+      expect(run.stdout).toContain("INVALID: installed copy");
+      expect(run.stdout).toContain("marker hermes-mcp-config-transaction.py");
+      expect(fs.readFileSync(installedDockerfile, "utf-8")).toBe(CURRENT_INSTALLED_BASE);
+      expect(fs.readFileSync(installedAgentDockerfile, "utf-8")).toBe(preMcpDockerfile);
     } finally {
       fs.rmSync(tmpHome, { recursive: true, force: true });
     }

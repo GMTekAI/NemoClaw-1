@@ -4,9 +4,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isErrnoException } from "../core/errno";
-import { inferenceSelectionRegistryFields } from "../inference/selection";
 import type { InferenceSelection } from "../inference/selection";
-import { isBlockedMcpUrlTargetHost } from "../security/mcp-url-target";
+import { inferenceSelectionRegistryFields } from "../inference/selection";
+import { isBlockedMcpUrlTargetHost, MCP_SERVER_URL_MAX_LENGTH } from "../security/mcp-url-target";
 import { ensureConfigDir, readConfigFile, writeConfigFile } from "./config-io";
 import type { SandboxMessagingState } from "./registry-messaging";
 
@@ -55,10 +55,26 @@ export interface McpBridgeEntry {
   policyName: string;
   addedAt: string;
   updatedAt?: string;
+  /**
+   * Durable add-transaction marker. `prepared` owns no OpenShell/adapter
+   * resources yet; `preflighted` proves the derived names were absent before
+   * side effects began and makes exact retry/cleanup safe after process death.
+   * Omitted entries are fully committed bridges (including legacy records).
+   */
+  addState?: "prepared" | "preflighted";
 }
 
 export interface SandboxMcpState {
   bridges: Record<string, McpBridgeEntry>;
+  /** Set after in-sandbox adapter scrub/provider detach and before delete. */
+  destroyPreparedAt?: string;
+  /**
+   * Set only after OpenShell has confirmed the sandbox was deleted (or was
+   * already absent) and global MCP provider cleanup is still in progress.
+   * The bridge entries remain the durable cleanup manifest until every exact
+   * matching provider has been deleted.
+   */
+  destroyPendingAt?: string;
 }
 
 const MCP_SERVER_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
@@ -442,10 +458,24 @@ function normalizeSandboxMcpState(value: unknown): SandboxMcpState | undefined {
     const entry = normalizeMcpBridgeEntry(name, rawEntry);
     if (entry) bridges[entry.server] = entry;
   }
-  return Object.keys(bridges).length > 0 ? { bridges } : undefined;
+  if (Object.keys(bridges).length === 0) return undefined;
+  const destroyPendingAt =
+    typeof value.destroyPendingAt === "string" && value.destroyPendingAt
+      ? value.destroyPendingAt
+      : undefined;
+  const destroyPreparedAt =
+    typeof value.destroyPreparedAt === "string" && value.destroyPreparedAt
+      ? value.destroyPreparedAt
+      : undefined;
+  return {
+    bridges,
+    ...(destroyPreparedAt ? { destroyPreparedAt } : {}),
+    ...(destroyPendingAt ? { destroyPendingAt } : {}),
+  };
 }
 
 function normalizeMcpUrl(value: string): string | null {
+  if (value.length > MCP_SERVER_URL_MAX_LENGTH) return null;
   let parsed: URL;
   try {
     parsed = new URL(value);
@@ -457,7 +487,8 @@ function normalizeMcpUrl(value: string): string | null {
   if (isBlockedMcpUrlTargetHost(parsed.hostname)) return null;
   if (parsed.hash) parsed.hash = "";
   if (!parsed.pathname) parsed.pathname = "/";
-  return parsed.toString();
+  const normalized = parsed.toString();
+  return normalized.length <= MCP_SERVER_URL_MAX_LENGTH ? normalized : null;
 }
 
 function normalizeMcpBridgeEntry(server: string, value: unknown): McpBridgeEntry | null {
@@ -479,6 +510,13 @@ function normalizeMcpBridgeEntry(server: string, value: unknown): McpBridgeEntry
   const providerName =
     typeof value.providerName === "string" && value.providerName ? value.providerName : undefined;
   if (providerName && !MCP_SAFE_NAME_RE.test(providerName)) return null;
+  const rawAddState = value.addState;
+  const addState =
+    rawAddState === undefined
+      ? undefined
+      : rawAddState === "prepared" || rawAddState === "preflighted"
+        ? rawAddState
+        : "preflighted";
   return {
     server: serverName,
     agent: typeof value.agent === "string" && value.agent ? value.agent : "openclaw",
@@ -492,6 +530,7 @@ function normalizeMcpBridgeEntry(server: string, value: unknown): McpBridgeEntry
         ? value.addedAt
         : new Date(0).toISOString(),
     ...(typeof value.updatedAt === "string" ? { updatedAt: value.updatedAt } : {}),
+    ...(addState ? { addState } : {}),
   };
 }
 

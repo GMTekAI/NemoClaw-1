@@ -982,12 +982,10 @@ describe("E2E reusable workflow contract", () => {
     const networkPolicyEnv = JSON.parse(
       nightlyWorkflow.jobs["network-policy-e2e"].with?.env_json ?? "{}",
     ) as Record<string, unknown>;
-    expect(networkPolicyEnv.NEMOCLAW_OPENSHELL_CHANNEL).toBe(
-      "${{ github.event_name == 'workflow_dispatch' && inputs.openshell_channel || 'stable' }}",
-    );
-    expect(networkPolicyEnv.NEMOCLAW_OPENSHELL_ARTIFACT_RUN_ID).toBe(
-      "${{ github.event_name == 'workflow_dispatch' && inputs.openshell_artifact_run_id || '' }}",
-    );
+    // The current-main OpenShell channel is an MCP integration input. Keep
+    // the independent network-policy lane on its normal installer contract.
+    expect(networkPolicyEnv.NEMOCLAW_OPENSHELL_CHANNEL).toBeUndefined();
+    expect(networkPolicyEnv.NEMOCLAW_OPENSHELL_ARTIFACT_RUN_ID).toBeUndefined();
     const networkPolicyArtifactPath = nightlyWorkflow.jobs["network-policy-e2e"].with
       ?.artifact_path as string | undefined;
     expect(networkPolicyArtifactPath).toContain("test-network-policy-*.log");

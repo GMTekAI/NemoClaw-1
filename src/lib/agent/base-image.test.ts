@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentDefinition } from "./defs";
 
 type AgentOnboardModule = typeof import("../../../dist/lib/agent/onboard");
+type DockerRunModule = typeof import("../../../dist/lib/adapters/docker/run");
 type DockerImageModule = typeof import("../../../dist/lib/adapters/docker/image");
 type DockerInspectModule = typeof import("../../../dist/lib/adapters/docker/inspect");
 type SandboxBaseImageModule = typeof import("../../../dist/lib/sandbox-base-image");
@@ -64,11 +65,14 @@ function withMockedDocker<T>(
   run: (deps: {
     ensureAgentBaseImage: AgentOnboardModule["ensureAgentBaseImage"];
     dockerBuildMock: ReturnType<typeof vi.fn>;
+    dockerCaptureMock: ReturnType<typeof vi.fn>;
     dockerImageInspectMock: ReturnType<typeof vi.fn>;
     resolveSandboxBaseImageMock: ReturnType<typeof vi.fn>;
     root: string;
   }) => T,
 ): T {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const dockerRunModule = require("../../../dist/lib/adapters/docker/run") as DockerRunModule;
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const dockerImageModule = require("../../../dist/lib/adapters/docker/image") as DockerImageModule;
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -79,12 +83,14 @@ function withMockedDocker<T>(
     require("../../../dist/lib/sandbox-base-image") as SandboxBaseImageModule;
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const runnerModule = require("../../../dist/lib/runner") as { ROOT: string };
+  const originalDockerCapture = dockerRunModule.dockerCapture;
   const originalDockerBuild = dockerImageModule.dockerBuild;
   const originalDockerImageInspect = dockerInspectModule.dockerImageInspect;
   const originalResolveSandboxBaseImage = sandboxBaseImageModule.resolveSandboxBaseImage;
   const agentOnboardModulePath = require.resolve("../../../dist/lib/agent/onboard");
   delete require.cache[agentOnboardModulePath];
 
+  const dockerCaptureMock = vi.fn().mockReturnValue("nemoclaw-hermes-mcp-runtime-ok");
   const dockerBuildMock = vi.fn().mockReturnValue({ status: 0 });
   const dockerImageInspectMock = vi.fn();
   const resolveSandboxBaseImageMock = vi.fn().mockReturnValue({
@@ -93,6 +99,7 @@ function withMockedDocker<T>(
     source: "source-sha",
     glibcVersion: process.platform === "linux" ? "2.41" : null,
   });
+  dockerRunModule.dockerCapture = dockerCaptureMock as DockerRunModule["dockerCapture"];
   dockerImageModule.dockerBuild = dockerBuildMock as DockerImageModule["dockerBuild"];
   dockerInspectModule.dockerImageInspect =
     dockerImageInspectMock as DockerInspectModule["dockerImageInspect"];
@@ -105,11 +112,13 @@ function withMockedDocker<T>(
     return run({
       ensureAgentBaseImage: agentOnboardModule.ensureAgentBaseImage,
       dockerBuildMock,
+      dockerCaptureMock,
       dockerImageInspectMock,
       resolveSandboxBaseImageMock,
       root: runnerModule.ROOT,
     });
   } finally {
+    dockerRunModule.dockerCapture = originalDockerCapture;
     dockerImageModule.dockerBuild = originalDockerBuild;
     dockerInspectModule.dockerImageInspect = originalDockerImageInspect;
     sandboxBaseImageModule.resolveSandboxBaseImage = originalResolveSandboxBaseImage;
@@ -145,12 +154,40 @@ describe("agent base image provisioning", () => {
             label: "Hermes Agent sandbox base image",
             requireOpenshellSandboxAbi: process.platform === "linux",
             rootDir: root,
+            validateImage: expect.any(Function),
+            validationDescription: "the required MCP Streamable HTTP runtime",
           }),
         );
         expect(dockerImageInspectMock).not.toHaveBeenCalled();
         expect(dockerBuildMock).not.toHaveBeenCalled();
       },
     );
+  });
+
+  it("probes resolved Hermes bases for the native MCP Streamable HTTP runtime", () => {
+    withMockedDocker(({ ensureAgentBaseImage, dockerCaptureMock, resolveSandboxBaseImageMock }) => {
+      ensureAgentBaseImage(makeAgent());
+      const options = resolveSandboxBaseImageMock.mock.calls[0]?.[0] as {
+        validateImage?: (imageRef: string) => boolean;
+      };
+
+      expect(options.validateImage?.("hermes-base:test")).toBe(true);
+      expect(dockerCaptureMock).toHaveBeenCalledWith(
+        [
+          "run",
+          "--rm",
+          "--entrypoint",
+          "/opt/hermes/.venv/bin/python",
+          "hermes-base:test",
+          "-c",
+          expect.stringContaining("_MCP_HTTP_AVAILABLE"),
+        ],
+        { ignoreError: true, timeout: 20_000 },
+      );
+
+      dockerCaptureMock.mockReturnValue("");
+      expect(options.validateImage?.("hermes-base:stale")).toBe(false);
+    });
   });
 
   it("rebuilds an agent base image when rebuild flow forces local Dockerfile.base refresh", () => {

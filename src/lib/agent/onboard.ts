@@ -9,7 +9,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 
-import { dockerBuild, dockerImageInspect } from "../adapters/docker";
+import { dockerBuild, dockerCapture, dockerImageInspect } from "../adapters/docker";
 import { buildValidatedCurlCommandArgs } from "../adapters/http/curl-args";
 import { getAgentBranding } from "../cli/branding";
 import type { JsonObject as LooseObject } from "../core/json-types";
@@ -39,6 +39,29 @@ export interface OnboardContext {
   recordStepComplete: (stepName: string, updates: LooseObject) => Promise<unknown>;
   recordStepFailed: (stepName: string, message: string | null) => Promise<unknown>;
   skippedStepMessage: (stepName: string, sandboxName: string) => void;
+}
+
+const HERMES_MCP_RUNTIME_PROBE_OK = "nemoclaw-hermes-mcp-runtime-ok";
+
+/**
+ * Verify that a Hermes base contains both the MCP SDK and Hermes' native
+ * Streamable HTTP integration. Version output alone is insufficient because
+ * these dependencies are installed through an optional upstream extra.
+ */
+export function hermesBaseImageSupportsMcp(imageRef: string): boolean {
+  const output = dockerCapture(
+    [
+      "run",
+      "--rm",
+      "--entrypoint",
+      "/opt/hermes/.venv/bin/python",
+      imageRef,
+      "-c",
+      `import mcp; from tools import mcp_tool; assert getattr(mcp_tool, "_MCP_AVAILABLE", False); assert getattr(mcp_tool, "_MCP_HTTP_AVAILABLE", False); print("${HERMES_MCP_RUNTIME_PROBE_OK}")`,
+    ],
+    { ignoreError: true, timeout: 20_000 },
+  );
+  return output.trim() === HERMES_MCP_RUNTIME_PROBE_OK;
 }
 
 /**
@@ -101,6 +124,9 @@ export function ensureAgentBaseImage(
     label: `${agent.displayName} sandbox base image`,
     requireOpenshellSandboxAbi: process.platform === "linux",
     rootDir: ROOT,
+    validateImage: agent.name === "hermes" ? hermesBaseImageSupportsMcp : undefined,
+    validationDescription:
+      agent.name === "hermes" ? "the required MCP Streamable HTTP runtime" : undefined,
   });
   if (resolved && !forceBaseImageRebuild) {
     console.log(`  Using ${agent.displayName} base image: ${resolved.ref}`);

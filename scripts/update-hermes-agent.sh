@@ -208,6 +208,7 @@ installed_copy_schema_error() {
     for item in \
       "validate-hermes-env-secret-boundary.py" \
       "seed-hermes-dashboard-config.py" \
+      "hermes-mcp-config-transaction.py" \
       "HERMES_HOME=/sandbox/.hermes /usr/local/bin/hermes doctor --fix" \
       "node --experimental-strip-types /opt/nemoclaw-hermes-config/generate-config.ts" \
       "/sandbox/.hermes/dashboard-home"; do

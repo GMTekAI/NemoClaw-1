@@ -384,6 +384,16 @@ describe("registry", () => {
             policyName: "mcp-bridge-unknown",
             addedAt: new Date(0).toISOString(),
           },
+          oversizedUrl: {
+            server: "oversizedUrl",
+            agent: "openclaw",
+            adapter: "mcporter",
+            url: `https://api.githubcopilot.com/${"a".repeat(2_048)}`,
+            env: ["TOKEN"],
+            providerName: "mcp-safe-mcp-oversized",
+            policyName: "mcp-bridge-oversized",
+            addedAt: new Date(0).toISOString(),
+          },
         },
       },
     });

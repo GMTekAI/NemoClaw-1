@@ -476,7 +476,7 @@ test.skipIf(!shouldRunLiveE2EScenarios())(
         "--build-arg",
         `HERMES_NPM_INTEGRITY=${OLD_HERMES_NPM_INTEGRITY}`,
         "--build-arg",
-        "HERMES_UV_EXTRAS=messaging",
+        "HERMES_UV_EXTRAS=messaging mcp",
         "-f",
         path.join(REPO_ROOT, "agents", "hermes", "Dockerfile.base"),
         "-t",

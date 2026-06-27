@@ -127,7 +127,7 @@ describe("agent definitions", () => {
       { path: "hooks.json", strategy: "copy" },
     ]);
     expect(deepAgentsCode.stateFiles.map((entry) => entry.path)).not.toContain(".env");
-    expect(deepAgentsCode.userManagedFiles).toEqual([".env", ".mcp.json"]);
+    expect(deepAgentsCode.userManagedFiles).toEqual([".deepagents/.env", ".deepagents/.mcp.json"]);
   });
 
   it("orders OpenClaw first in interactive choices", () => {

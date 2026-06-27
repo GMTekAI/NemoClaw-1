@@ -10,7 +10,19 @@ export interface StartedHttpServer {
 }
 
 export interface FakeMcpHttpServer extends StartedHttpServer {
-  requests: Array<{ auth: string; body: string }>;
+  requests: Array<{
+    method: string;
+    path: string;
+    auth: string;
+    body: string;
+    rpcMethod?: string;
+  }>;
+}
+
+interface McpRequestPayload {
+  id?: unknown;
+  method?: unknown;
+  params?: { name?: unknown; arguments?: { challenge?: unknown } };
 }
 
 function jsonResponse(res: http.ServerResponse, status: number, payload: unknown): void {
@@ -60,6 +72,9 @@ async function listenOnRandomPort(server: http.Server): Promise<void> {
 export async function startCompatibleMock(options: {
   apiKey: string;
   model: string;
+  toolChallenge?: string;
+  toolResultToken?: string;
+  toolNames?: string[];
 }): Promise<StartedHttpServer> {
   const server = http.createServer(async (req, res) => {
     const requestPath = new URL(req.url ?? "/", "http://compatible.mock").pathname;
@@ -81,14 +96,93 @@ export async function startCompatibleMock(options: {
       req.method === "POST" &&
       ["/chat/completions", "/v1/chat/completions"].includes(requestPath)
     ) {
-      await readRequestBody(req);
-      jsonResponse(res, 200, {
-        id: "chatcmpl-mcp-bridge",
-        object: "chat.completion",
-        choices: [
-          { index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" },
-        ],
-      });
+      const body = JSON.parse(await readRequestBody(req)) as {
+        stream?: boolean;
+        messages?: Array<{ role?: string; content?: unknown }>;
+        tools?: Array<{ function?: { name?: string } }>;
+      };
+      const toolName = body.tools
+        ?.map((tool) => tool.function?.name)
+        .find(
+          (name): name is string =>
+            typeof name === "string" && (options.toolNames ?? []).includes(name),
+        );
+      const sawAuthenticatedToolResult = (body.messages ?? []).some(
+        (message) =>
+          message.role === "tool" &&
+          JSON.stringify(message.content).includes(options.toolResultToken ?? "__never__"),
+      );
+      const responseMessage = sawAuthenticatedToolResult
+        ? {
+            role: "assistant",
+            content: options.toolResultToken,
+          }
+        : toolName && options.toolChallenge
+          ? {
+              role: "assistant",
+              content: null,
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_mcp_bridge_proof",
+                  type: "function",
+                  function: {
+                    name: toolName,
+                    arguments: JSON.stringify({
+                      challenge: options.toolChallenge,
+                    }),
+                  },
+                },
+              ],
+            }
+          : { role: "assistant", content: "ok" };
+      const finishReason = "tool_calls" in responseMessage ? "tool_calls" : "stop";
+      if (body.stream) {
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        res.write(
+          `data: ${JSON.stringify({
+            id: "chatcmpl-mcp-bridge",
+            object: "chat.completion.chunk",
+            created: 0,
+            model: options.model,
+            choices: [
+              {
+                index: 0,
+                delta: responseMessage,
+                finish_reason: null,
+              },
+            ],
+          })}\n\n`,
+        );
+        res.write(
+          `data: ${JSON.stringify({
+            id: "chatcmpl-mcp-bridge",
+            object: "chat.completion.chunk",
+            created: 0,
+            model: options.model,
+            choices: [{ index: 0, delta: {}, finish_reason: finishReason }],
+          })}\n\n`,
+        );
+        res.end("data: [DONE]\n\n");
+      } else {
+        jsonResponse(res, 200, {
+          id: "chatcmpl-mcp-bridge",
+          object: "chat.completion",
+          created: 0,
+          model: options.model,
+          choices: [
+            {
+              index: 0,
+              message: responseMessage,
+              finish_reason: finishReason,
+            },
+          ],
+        });
+      }
       return;
     }
 
@@ -120,52 +214,123 @@ export async function startCompatibleMock(options: {
 
 export async function startFakeMcpHttpServer(options: {
   secret: string;
+  challenge?: string;
+  resultToken?: string;
 }): Promise<FakeMcpHttpServer> {
-  const requests: Array<{ auth: string; body: string }> = [];
+  const requests: Array<{
+    method: string;
+    path: string;
+    auth: string;
+    body: string;
+  }> = [];
   const server = http.createServer(async (req, res) => {
     const requestPath = new URL(req.url ?? "/", "http://fake-mcp.local").pathname;
-    if (req.method !== "POST" || requestPath !== "/mcp") {
-      jsonResponse(res, 404, { error: { message: "not found" } });
-      return;
-    }
-
     const body = await readRequestBody(req);
     const auth = Array.isArray(req.headers.authorization)
       ? req.headers.authorization.join(",")
       : (req.headers.authorization ?? "");
-    requests.push({ auth, body });
+    let parsedPayload: McpRequestPayload | null = null;
+    try {
+      parsedPayload = JSON.parse(body) as McpRequestPayload;
+    } catch {
+      // The protocol error below handles malformed JSON after recording it.
+    }
+    requests.push({
+      method: req.method ?? "",
+      path: requestPath,
+      auth,
+      body,
+      ...(typeof parsedPayload?.method === "string" ? { rpcMethod: parsedPayload.method } : {}),
+    });
+    if (requestPath !== "/mcp") {
+      jsonResponse(res, 404, { error: { message: "not found" } });
+      return;
+    }
+    if (req.method === "HEAD" || req.method === "GET") {
+      res.writeHead(405, { Allow: "POST" });
+      res.end();
+      return;
+    }
+    if (req.method !== "POST") {
+      jsonResponse(res, 405, { error: { message: "method not allowed" } });
+      return;
+    }
     if (auth !== `Bearer ${options.secret}`) {
       jsonResponse(res, 401, { error: { message: "missing rewritten bearer credential" } });
       return;
     }
 
-    let payload: { id?: unknown; method?: unknown };
-    try {
-      payload = JSON.parse(body) as { id?: unknown; method?: unknown };
-    } catch {
+    if (!parsedPayload) {
       jsonResponse(res, 400, { error: { message: "invalid json" } });
       return;
     }
-
-    const result =
-      payload.method === "initialize"
-        ? {
-            protocolVersion: "2025-03-26",
-            capabilities: { tools: {} },
-            serverInfo: { name: "fake", version: "1.0.0" },
-          }
-        : payload.method === "tools/list"
-          ? {
-              tools: [
-                {
-                  name: "fake_echo",
-                  description: "fake echo",
-                  inputSchema: { type: "object", properties: {} },
-                },
-              ],
-            }
-          : { ok: true };
-    jsonResponse(res, 200, { jsonrpc: "2.0", id: payload.id ?? 1, result });
+    if (parsedPayload.method === "notifications/initialized") {
+      res.writeHead(202);
+      res.end();
+      return;
+    }
+    let result: unknown;
+    if (parsedPayload.method === "initialize") {
+      const request = JSON.parse(body) as {
+        params?: { protocolVersion?: string };
+      };
+      result = {
+        protocolVersion: request.params?.protocolVersion ?? "2025-03-26",
+        capabilities: { tools: {} },
+        serverInfo: { name: "fake", version: "1.0.0" },
+      };
+    } else if (parsedPayload.method === "tools/list") {
+      result = {
+        tools: [
+          {
+            name: "fake_echo",
+            description: "Returns an authenticated MCP proof token",
+            inputSchema: {
+              type: "object",
+              properties: { challenge: { type: "string" } },
+              required: ["challenge"],
+              additionalProperties: false,
+            },
+          },
+        ],
+      };
+    } else if (parsedPayload.method === "tools/call") {
+      const challenge = parsedPayload.params?.arguments?.challenge;
+      if (
+        parsedPayload.params?.name !== "fake_echo" ||
+        (options.challenge !== undefined && challenge !== options.challenge)
+      ) {
+        jsonResponse(res, 200, {
+          jsonrpc: "2.0",
+          id: parsedPayload.id ?? 1,
+          error: { code: -32602, message: "invalid fake_echo challenge" },
+        });
+        return;
+      }
+      result = {
+        content: [
+          {
+            type: "text",
+            text: options.resultToken ?? `MCP_AUTH_REWRITE_OK::${String(challenge ?? "")}`,
+          },
+        ],
+        isError: false,
+      };
+    } else if (parsedPayload.method === "ping") {
+      result = {};
+    } else {
+      jsonResponse(res, 200, {
+        jsonrpc: "2.0",
+        id: parsedPayload.id ?? 1,
+        error: { code: -32601, message: "method not found" },
+      });
+      return;
+    }
+    jsonResponse(res, 200, {
+      jsonrpc: "2.0",
+      id: parsedPayload.id ?? 1,
+      result,
+    });
   });
 
   await listenOnRandomPort(server);

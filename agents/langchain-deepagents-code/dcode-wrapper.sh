@@ -383,8 +383,11 @@ while [ "$arg_index" -lt "${#dcode_args[@]}" ]; do
 done
 
 extra_args=(--sandbox none)
-if [ -s /sandbox/.mcp.json ]; then
-  extra_args+=(--mcp-config /sandbox/.mcp.json)
+# deepagents-code 0.1.12 classifies ~/.deepagents/.mcp.json as user-level
+# configuration. Keep NemoClaw's managed direct-HTTP definitions there so
+# non-interactive runs never depend on project-MCP trust state.
+if [ -s /sandbox/.deepagents/.mcp.json ]; then
+  extra_args+=(--mcp-config /sandbox/.deepagents/.mcp.json)
 else
   extra_args+=(--no-mcp)
 fi
