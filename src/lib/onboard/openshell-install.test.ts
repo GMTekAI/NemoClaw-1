@@ -27,20 +27,11 @@ function makeDeps(overrides: Partial<OpenShellInstallDeps> = {}) {
     runCaptureOpenshell: () => "openshell 0.0.72",
     shouldUseOpenshellDevChannel: () => false,
     isOpenshellDevVersion: () => false,
-    versionGte: (a, b) => {
-      const left = a.split(".").map((part) => Number.parseInt(part, 10) || 0);
-      const right = b.split(".").map((part) => Number.parseInt(part, 10) || 0);
-      for (
-        let index = 0;
-        index < Math.max(left.length, right.length);
-        index += 1
-      ) {
-        const lhs = left[index] ?? 0;
-        const rhs = right[index] ?? 0;
-        if (lhs !== rhs) return lhs > rhs;
-      }
-      return true;
-    },
+    versionGte: (a, b) =>
+      a.localeCompare(b, undefined, {
+        numeric: true,
+        sensitivity: "base",
+      }) >= 0,
     hasRequiredOpenshellMessagingFeatures: () => true,
     shouldAllowOpenshellAboveBlueprintMax: () => false,
     cliDisplayName: () => "nemoclaw",
