@@ -1793,19 +1793,7 @@ describe("generate-openclaw-config.mts: config generation", () => {
 
   it("omits stale disabled entries for optional bundled plugins", () => {
     const config = runConfigScript({ NEMOCLAW_PROVIDER_KEY: "inference" });
-    expect(config.plugins.entries.acpx).toBeUndefined();
-    expect(config.plugins.entries.qqbot).toBeUndefined();
-    expect(config.plugins.entries["amazon-bedrock"]).toBeUndefined();
-    expect(config.plugins.entries["amazon-bedrock-mantle"]).toBeUndefined();
-    expect(config.plugins.entries.anthropic).toBeUndefined();
-    expect(config.plugins.entries["anthropic-vertex"]).toBeUndefined();
-    expect(config.plugins.entries.fireworks).toBeUndefined();
-    expect(config.plugins.entries.google).toBeUndefined();
-    expect(config.plugins.entries.kimi).toBeUndefined();
-    expect(config.plugins.entries.lmstudio).toBeUndefined();
-    expect(config.plugins.entries.ollama).toBeUndefined();
-    expect(config.plugins.entries.openai).toBeUndefined();
-    expect(config.plugins.entries.xai).toBeUndefined();
+    expect(Object.keys(config.plugins.entries)).toEqual(["bonjour"]);
   });
 
   it("keeps the selected bundled provider plugin available", () => {
