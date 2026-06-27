@@ -82,10 +82,7 @@ function runPatchAudit(dist: string) {
 }
 
 function loadFormatter(source: string, env?: Record<string, string>): Formatter {
-  const context: Record<string, unknown> = {};
-  if (env) {
-    context.process = { env };
-  }
+  const context: Record<string, unknown> = env ? { process: { env } } : {};
   return vm.runInNewContext(`${source}\nformatRawAssistantErrorForUi;`, context) as Formatter;
 }
 
