@@ -126,7 +126,9 @@ describe("OpenClaw 2026.6.9 dependency review contract", () => {
     expect(review).toContain("Microsoft Teams Live E2E Disposition");
     expect(review).toContain("MSTEAMS_E2E=1");
     expect(review).toContain("MSTEAMS_PUBLIC_WEBHOOK_URL");
-    expect(review).toContain("MSTEAMS_E2E_MESSAGE_COMMAND");
+    expect(review).toContain("MSTEAMS_E2E_ACTIVITY_JSON");
+    expect(review).toContain("teams-message-round-trip-driver.mjs");
+    expect(review).toContain("allowlisted environment");
     expect(review).toContain("test/e2e-scenario/live/teams-message-round-trip.test.ts");
 
     expect(review).toContain("Advisor Disposition");
@@ -137,6 +139,7 @@ describe("OpenClaw 2026.6.9 dependency review contract", () => {
     );
     expect(review).toContain("stale nonterminal rebuild-resume repair");
     expect(review).toContain("tracked against #4533");
+    expect(review).toContain("src/lib/actions/sandbox/rebuild-resume-session.test.ts");
     expect(review).toContain("scripts/check-production-build-args.sh");
     expect(review).toContain('OPENCLAW_VERSION="${OPENCLAW_VERSION}"');
     expect(review).toContain("test/messaging-build-applier-integrity.test.ts");
@@ -224,7 +227,11 @@ grep -Fq -- '--phase post-agent-install' Dockerfile
     expect(teamsLiveTest).toContain("MSTEAMS_TENANT_ID");
     expect(teamsLiveTest).toContain("MSTEAMS_ALLOWED_USERS");
     expect(teamsLiveTest).toContain("MSTEAMS_PUBLIC_WEBHOOK_URL");
-    expect(teamsLiveTest).toContain("MSTEAMS_E2E_MESSAGE_COMMAND");
+    expect(teamsLiveTest).toContain("MSTEAMS_E2E_ACTIVITY_JSON");
+    expect(teamsLiveTest).toContain("teams-message-round-trip-driver.mjs");
+    expect(teamsLiveTest).toContain("buildTeamsDriverEnv");
+    expect(teamsLiveTest).not.toContain('host.command("bash", ["-lc"');
+    expect(teamsLiveTest).not.toContain("env: process.env");
     expect(teamsLiveTest).toContain("real Microsoft tenant, Bot Framework credentials");
     expect(teamsLiveTest).toContain("toMatch(");
   });

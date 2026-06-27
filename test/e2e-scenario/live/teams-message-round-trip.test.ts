@@ -3,6 +3,8 @@
 
 /** Credential-gated skeleton for Microsoft Teams tenant round-trip proof. */
 
+import { fileURLToPath } from "node:url";
+
 import { expect, test } from "../fixtures/e2e-test.ts";
 import { shouldRunLiveE2EScenarios } from "../fixtures/live-project-gate.ts";
 
@@ -13,11 +15,21 @@ const REQUIRED_ENV_KEYS = [
   "MSTEAMS_TENANT_ID",
   "MSTEAMS_ALLOWED_USERS",
   "MSTEAMS_PUBLIC_WEBHOOK_URL",
-  "MSTEAMS_E2E_MESSAGE_COMMAND",
+  "MSTEAMS_E2E_ACTIVITY_JSON",
 ] as const;
+
+const TEAMS_ROUND_TRIP_DRIVER = fileURLToPath(
+  new URL("./teams-message-round-trip-driver.mjs", import.meta.url),
+);
 
 function missingTeamsEnv(): string[] {
   return REQUIRED_ENV_KEYS.filter((key) => !process.env[key]?.trim());
+}
+
+function buildTeamsDriverEnv(): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    REQUIRED_ENV_KEYS.map((key) => [key, process.env[key] as string]),
+  ) as NodeJS.ProcessEnv;
 }
 
 const missingTeamsEnvKeys = missingTeamsEnv();
@@ -34,19 +46,20 @@ runTeamsE2E(
       /^https:\/\//i,
     );
 
-    const redactions = REQUIRED_ENV_KEYS.map((key) => process.env[key] ?? "").filter(Boolean);
-    const command = process.env.MSTEAMS_E2E_MESSAGE_COMMAND as string;
+    const driverEnv = buildTeamsDriverEnv();
+    const redactions = REQUIRED_ENV_KEYS.map((key) => driverEnv[key] ?? "").filter(Boolean);
     await artifacts.writeJson("scenario.json", {
       id: "teams-message-round-trip",
       boundary:
-        "real Microsoft tenant, Bot Framework credentials, public HTTPS webhook, Teams message send, sandbox /api/messages receive path",
+        "real Microsoft tenant, Bot Framework credentials, tenant-captured Bot Framework activity, public HTTPS webhook, sandbox /api/messages receive path",
       requiredEnv: REQUIRED_ENV_KEYS,
       webhookHost: new URL(webhookUrl).host,
+      driver: "teams-message-round-trip-driver.mjs",
     });
 
-    const result = await host.command("bash", ["-lc", command], {
+    const result = await host.command(process.execPath, [TEAMS_ROUND_TRIP_DRIVER], {
       artifactName: "teams-message-round-trip-driver",
-      env: process.env,
+      env: driverEnv,
       redactionValues: redactions,
       timeoutMs: 20 * 60_000,
     });
