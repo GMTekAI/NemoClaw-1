@@ -3049,10 +3049,10 @@ async function createSandbox(
       dockerGpuCreatePatch.maybeApplyDuringCreate();
       return false;
     },
+    readyCheckOutputPatterns: agentDefs.isTerminalAgent(agent) ? [] : undefined,
     failureCheck: dockerGpuCreatePatch.createFailureMessage,
     traceEvent: onboardTracing.addTraceEvent,
   });
-
   if (initialSandboxPolicy.cleanup && initialSandboxPolicy.cleanup()) {
     process.removeListener("exit", initialSandboxPolicy.cleanup);
   }
@@ -3192,10 +3192,10 @@ async function createSandbox(
   const resolvedImageTag = resolveSandboxImageTagFromCreateOutput(createResult.output, buildId);
 
   const sandboxRuntimeFields = getSandboxRuntimeRegistryFields(effectiveSandboxGpuConfig);
+  const inferenceSelection = sandboxRegistration.selection;
   sandboxRegistration.registerCreatedSandbox({
     sandboxName,
-    model,
-    provider,
+    inferenceSelection: inferenceSelection(sandboxName, provider, model, preferredInferenceApi),
     runtimeFields: sandboxRuntimeFields,
     agent,
     agentVersionKnown: !fromDockerfile,
@@ -3925,6 +3925,7 @@ async function setupNim(
   gpu: ReturnType<typeof nim.detectGpu>,
   sandboxName: string | null = null,
   agent: AgentDefinition | null = null,
+  recoverProvider = true,
 ): Promise<{
   model: string | null;
   provider: string;
@@ -3978,7 +3979,6 @@ async function setupNim(
     : null;
   const agentProviderOptions = getAgentInferenceProviderOptions(agent);
 
-  // Model Router: complexity-based routing via blueprint config.
   const blueprintRouterCfg = loadBlueprintProfile("routed");
   const { options, hermesProviderAvailable } = buildInferenceProviderMenu({
     remoteProviderConfig: REMOTE_PROVIDER_CONFIG,
@@ -4033,9 +4033,9 @@ async function setupNim(
           isWindowsHostOllama,
           windowsHostOllamaSupported: windowsHostOllamaDockerRequirement.supported,
           hermesProviderAvailable,
-          readRecordedProvider,
-          readRecordedNimContainer,
-          readRecordedModel,
+          readRecordedProvider: recoverProvider ? readRecordedProvider : () => null,
+          readRecordedNimContainer: recoverProvider ? readRecordedNimContainer : () => null,
+          readRecordedModel: recoverProvider ? readRecordedModel : () => null,
         });
         if (providerSelection.kind === "failure") {
           reportProviderSelectionFailure({
