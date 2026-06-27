@@ -401,6 +401,8 @@ describe("fetch-guard patch regression guard", () => {
       "# Install NemoClaw plugin into OpenClaw",
       "# Apply messaging render and post-agent-install build-file hooks after agent/plugin installation.",
     );
+    expect(command).toContain("openclaw plugins inspect nemoclaw --json > /dev/null");
+    expect(command).not.toContain("openclaw plugins enable nemoclaw");
     const script = [
       "openclaw() {",
       '  if [ "${1:-} ${2:-} ${3:-}" = "plugins install /opt/nemoclaw" ]; then return 42; fi',

@@ -755,7 +755,6 @@ ENV NPM_CONFIG_OFFLINE=true \
 # OCI image imported by k3s.
 # hadolint ignore=DL3059,DL4006
 RUN openclaw plugins install /opt/nemoclaw \
-    && openclaw plugins enable nemoclaw \
     && openclaw plugins inspect nemoclaw --json > /dev/null \
     && if [ -d /sandbox/.openclaw/plugin-runtime-deps ]; then \
         find /sandbox/.openclaw/plugin-runtime-deps -type f \( \
