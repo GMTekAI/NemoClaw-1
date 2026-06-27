@@ -15,8 +15,9 @@ import { ubuntuRepoDocker } from "../scenarios/matrix.ts";
 // This remains a privileged opt-in live repro: it onboards a real cloud
 // OpenClaw sandbox, installs temporary DOCKER-USER DROP rules for the NVIDIA
 // endpoint IPs, drives `openclaw tui` through `openshell sandbox exec --tty`,
-// and requires a visible inference error plus an error status instead of the
-// broken spinner+connected signature from #4434. The legacy bash lane remains
+// and requires a visible inference error, full #4434 diagnostic fields, and an
+// error status instead of the broken spinner+connected signature from #4434.
+// The legacy bash lane remains
 // wired until Phase 11 shell retirement and still owns the route provider/model
 // assertion plus the direct `inference.local` pre-block completion probe; this
 // file adds complementary Vitest coverage without introducing shared framework
@@ -334,8 +335,8 @@ runIssue4434LiveTest(
 
     expect(
       hasFullIssue4434Diagnostics(analysis.diagnosticFields),
-      "OpenClaw output now includes HTTP/cause, gateway/upstream layer, and recovery hint; tighten both live guards and remove the partial-acceptance wording from docs/security/openclaw-2026.6.9-dependency-review.md",
-    ).toBe(false);
+      "OpenClaw TUI output must include full #4434 diagnostic fields: HTTP/cause, gateway/upstream layer, and recovery hint",
+    ).toBe(true);
     expect(analysis.visibleError, failureContext).toBe(true);
     expect(tui.exitCode, failureContext).toBe(0);
     expect(analysis.issue4434Signature, failureContext).toBe(false);

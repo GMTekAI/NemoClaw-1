@@ -12,6 +12,11 @@ import { describe, expect, it } from "vitest";
 const REPO_ROOT = path.join(import.meta.dirname, "..");
 const DOCKERFILE = path.join(REPO_ROOT, "Dockerfile");
 const PATCH_OPENCLAW_CHAT_SEND = path.join(REPO_ROOT, "scripts", "patch-openclaw-chat-send.js");
+const PATCH_OPENCLAW_ISSUE_4434_DIAGNOSTICS = path.join(
+  REPO_ROOT,
+  "scripts",
+  "patch-openclaw-issue-4434-diagnostics.js",
+);
 
 function readRequiredDockerArg(name: string): string {
   const match = fs
@@ -192,6 +197,36 @@ describe.skipIf(process.env.NEMOCLAW_REAL_OPENCLAW_DIST_HARNESS !== "1")(
         expect(audit.stdout).toContain("chat.send runtime:");
         expect(audit.stdout).toContain("get-reply runtime:");
         expect(audit.stdout).toContain("followup runner runtime:");
+
+        const issue4434Patch = spawnSync(
+          process.execPath,
+          [PATCH_OPENCLAW_ISSUE_4434_DIAGNOSTICS, dist],
+          {
+            encoding: "utf-8",
+            timeout: 20000,
+          },
+        );
+        expect(issue4434Patch.status, issue4434Patch.stderr || issue4434Patch.stdout).toBe(0);
+        expect(issue4434Patch.stdout).toContain("patched OpenClaw #4434 diagnostics");
+
+        const issue4434Audit = spawnSync(
+          process.execPath,
+          [PATCH_OPENCLAW_ISSUE_4434_DIAGNOSTICS, "--audit", dist],
+          {
+            encoding: "utf-8",
+            timeout: 20000,
+          },
+        );
+        expect(issue4434Audit.status, issue4434Audit.stderr || issue4434Audit.stdout).toBe(0);
+        expect(issue4434Audit.stdout).toContain("assistant error formatter:");
+        expect(issue4434Audit.stdout).toContain("already-applied");
+
+        const issue4434Marker = grepRealDist(
+          dist,
+          "nemoclaw: #4434 structured unreachable-inference diagnostic",
+        );
+        expect(issue4434Marker.status, issue4434Marker.stderr).toBe(0);
+        expect(issue4434Marker.stdout.trim()).not.toBe("");
       } finally {
         fs.rmSync(tmp, { recursive: true, force: true });
       }

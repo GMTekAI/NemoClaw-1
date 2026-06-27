@@ -297,7 +297,10 @@ describe("OpenClaw npm integrity pins", () => {
     expect(reviewNote).toContain("claiming `openclaw-pipeline-runtime` inbound proof");
     expect(reviewNote).toContain("imports `dist/extensions/telegram/test-api.js`");
     expect(reviewNote).toContain("gateway/upstream reporting layer");
-    expect(reviewNote).toContain("one-line recovery hint");
+    expect(reviewNote).toContain("scripts/patch-openclaw-issue-4434-diagnostics.js");
+    expect(reviewNote).toContain(
+      "Recovery hint: check sandbox egress and provider reachability, then retry.",
+    );
     expect(reviewNote).toContain("default 180-second timeout");
   });
 

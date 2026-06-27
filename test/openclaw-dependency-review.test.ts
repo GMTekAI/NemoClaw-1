@@ -27,6 +27,11 @@ const MESSAGING_BUILD_APPLIER = path.join(
   "build",
   "messaging-build-applier.mts",
 );
+const ISSUE_4434_PATCH = path.join(
+  REPO_ROOT,
+  "scripts",
+  "patch-openclaw-issue-4434-diagnostics.js",
+);
 const TEAMS_LIVE_TEST = path.join(
   REPO_ROOT,
   "test",
@@ -103,6 +108,14 @@ describe("OpenClaw 2026.6.9 dependency review contract", () => {
         "Patch 6:",
         ["cron model-provider preflight", "trusted_env_proxy", "cron-model-provider-preflight"],
       ],
+      [
+        "Patch 7:",
+        [
+          "#4434 TUI fetch-failed diagnostic enrichment",
+          "OPENSHELL_SANDBOX=1",
+          "formatRawAssistantErrorForUi",
+        ],
+      ],
     ] as const) {
       const row = review.split("\n").find((line) => line.includes(`| ${patch}`));
       expect(row, patch).toBeDefined();
@@ -136,9 +149,11 @@ describe("OpenClaw 2026.6.9 dependency review contract", () => {
     expect(review).toContain("test/openclaw-real-patched-dist-harness.test.ts");
     expect(review).toContain("NEMOCLAW_REAL_OPENCLAW_DIST_HARNESS=1");
     expect(review).toContain("applies the Dockerfile patch block");
+    expect(review).toContain("test/openclaw-issue-4434-diagnostics-patch.test.ts");
+    expect(review).toContain("scripts/patch-openclaw-issue-4434-diagnostics.js");
     expect(review).toContain("Merge disposition for this OpenClaw 2026.6.9 bump");
-    expect(review).toContain("Issue #4434 partial acceptance");
-    expect(review).toContain("This PR must not claim full #4434 closure");
+    expect(review).toContain("Issue #4434 full live acceptance");
+    expect(review).toContain("code-backed for the reviewed `openclaw@2026.6.9` artifact");
     expect(review).toContain("src/lib/messaging/channels/manifests.test.ts");
     expect(review).toContain("npm audit result in this note is a manual snapshot");
     expect(review).toContain(
@@ -203,11 +218,17 @@ check_contains "$optional_plugin_block" 'npm view "$plugin_spec" dist.tarball' "
 check_contains "$optional_plugin_block" 'npm pack "$expected_tarball" --pack-destination "$NEMOCLAW_OPENCLAW_PLUGIN_PACK_DIR" --json' "optional plugin pack"
 check_contains "$optional_plugin_block" 'openclaw plugins install "$plugin_archive" --pin' "optional plugin archive install"
 
-grep -Fq 'spawnSync("npm", ["pack", packageSpec, "--pack-destination", rootDir, "--json"]' "$messaging_build_applier"
-grep -Fq '["openclaw", "plugins", "install", packed.archivePath, ...(install.pin ? ["--pin"] : [])]' "$messaging_build_applier"
-grep -Fq 'downloaded tarball integrity mismatch' "$messaging_build_applier"
+	grep -Fq 'spawnSync("npm", ["pack", packageSpec, "--pack-destination", rootDir, "--json"]' "$messaging_build_applier"
+	grep -Fq '["openclaw", "plugins", "install", packed.archivePath, ...(install.pin ? ["--pin"] : [])]' "$messaging_build_applier"
+	grep -Fq 'downloaded tarball integrity mismatch' "$messaging_build_applier"
+	issue_4434_patch=${JSON.stringify(ISSUE_4434_PATCH)}
+	grep -Fq 'formatRawAssistantErrorForUi' "$issue_4434_patch"
+	grep -Fq 'OPENSHELL_SANDBOX !== "1"' "$issue_4434_patch"
+	grep -Fq 'nemoclaw: #4434 structured unreachable-inference diagnostic' "$issue_4434_patch"
+	grep -Fq 'COPY scripts/patch-openclaw-issue-4434-diagnostics.js /usr/local/lib/nemoclaw/patch-openclaw-issue-4434-diagnostics.js' Dockerfile
+	grep -Fq 'patch-openclaw-issue-4434-diagnostics.js \\' Dockerfile
 
-phase_count="$(grep -Ec '^RUN OPENCLAW_VERSION="[$][{]OPENCLAW_VERSION[}]" node --experimental-strip-types /src/lib/messaging/applier/build/messaging-build-applier\\.mts --agent openclaw --phase (runtime-setup|agent-install|post-agent-install)$' Dockerfile)"
+	phase_count="$(grep -Ec '^RUN OPENCLAW_VERSION="[$][{]OPENCLAW_VERSION[}]" node --experimental-strip-types /src/lib/messaging/applier/build/messaging-build-applier\\.mts --agent openclaw --phase (runtime-setup|agent-install|post-agent-install)$' Dockerfile)"
 test "$phase_count" -eq 3
 grep -Fq -- '--phase runtime-setup' Dockerfile
 grep -Fq -- '--phase agent-install' Dockerfile

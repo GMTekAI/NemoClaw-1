@@ -115,8 +115,10 @@ ENV NPM_CONFIG_AUDIT=false \
 RUN npm ci --omit=dev
 COPY scripts/patch-openclaw-tool-catalog.js /usr/local/lib/nemoclaw/patch-openclaw-tool-catalog.js
 COPY scripts/patch-openclaw-chat-send.js /usr/local/lib/nemoclaw/patch-openclaw-chat-send.js
+COPY scripts/patch-openclaw-issue-4434-diagnostics.js /usr/local/lib/nemoclaw/patch-openclaw-issue-4434-diagnostics.js
 RUN chmod 755 /usr/local/lib/nemoclaw/patch-openclaw-tool-catalog.js \
-        /usr/local/lib/nemoclaw/patch-openclaw-chat-send.js
+        /usr/local/lib/nemoclaw/patch-openclaw-chat-send.js \
+        /usr/local/lib/nemoclaw/patch-openclaw-issue-4434-diagnostics.js
 
 # Pre-install the codex-acp package so the embedded ACPx runtime can
 # call the local binary instead of `npx @zed-industries/codex-acp`.
@@ -598,6 +600,20 @@ RUN set -eu; \
 # and openclaw/openclaw#50298, or when NemoClaw no longer ships an affected OpenClaw.
 # hadolint ignore=DL3059
 RUN node /usr/local/lib/nemoclaw/patch-openclaw-chat-send.js \
+    /usr/local/lib/node_modules/openclaw/dist
+
+# Patch OpenClaw TUI unreachable-inference diagnostics for #4434.
+#
+# OpenClaw 2026.6.9 formats sandbox inference egress failures as a generic
+# `TypeError: fetch failed`, which leaves the TUI without the required
+# HTTP/cause, gateway/upstream reporting layer, and recovery hint fields. This
+# version-scoped shim enriches only that fetch-failed formatter path, and only
+# inside OpenShell sandboxes where OPENSHELL_SANDBOX=1 is supplied at runtime.
+#
+# Removal criteria: drop when upstream OpenClaw emits these structured fields
+# from its assistant error formatter for unreachable inference failures.
+# hadolint ignore=DL3059
+RUN node /usr/local/lib/nemoclaw/patch-openclaw-issue-4434-diagnostics.js \
     /usr/local/lib/node_modules/openclaw/dist
 
 # Run the compact tool catalog shim for OpenClaw selection runtimes that still

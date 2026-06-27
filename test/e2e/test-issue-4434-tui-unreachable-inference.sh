@@ -3,8 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Opt-in live repro for #4434:
-#   openclaw tui must show a visible error, and stop the active spinner, when
-#   the NVIDIA endpoint is unreachable from the sandbox.
+#   openclaw tui must show a visible error with full diagnostic fields, and
+#   stop the active spinner, when the NVIDIA endpoint is unreachable from the
+#   sandbox.
 #
 # This mutates host firewall state. Run only on a Linux Docker host you control:
 #
@@ -86,8 +87,8 @@ classify_issue_4434_diagnostic_fields() {
   fi
 
   info "diagnostic fields: http_status_or_cause=${has_http_status_or_cause} reporting_layer=${has_reporting_layer} recovery_hint=${has_recovery_hint}"
-  if [ "$has_http_status_or_cause" = "1" ] && [ "$has_reporting_layer" = "1" ] && [ "$has_recovery_hint" = "1" ]; then
-    fail "OpenClaw output now includes the full #4434 diagnostic fields; tighten both live guards and remove the partial-acceptance wording from docs/security/openclaw-2026.6.9-dependency-review.md"
+  if [ "$has_http_status_or_cause" != "1" ] || [ "$has_reporting_layer" != "1" ] || [ "$has_recovery_hint" != "1" ]; then
+    fail "TUI output did not include full #4434 diagnostic fields (http_status_or_cause=${has_http_status_or_cause} reporting_layer=${has_reporting_layer} recovery_hint=${has_recovery_hint})"
   fi
 }
 
