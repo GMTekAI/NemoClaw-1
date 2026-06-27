@@ -270,8 +270,9 @@ describe("OpenClaw npm integrity pins", () => {
     expect(reviewNote).toContain(
       "The long-term source of truth for these behaviors remains upstream OpenClaw",
     );
-    expect(reviewNote).toContain("built-image runtime smoke on the exact head");
-    expect(reviewNote).toContain("does not add a separate checked-in real-package runtime harness");
+    expect(reviewNote).toContain("test/openclaw-real-patched-dist-harness.test.ts");
+    expect(reviewNote).toContain("NEMOCLAW_REAL_OPENCLAW_DIST_HARNESS=1");
+    expect(reviewNote).toContain("not a substitute for focused nightly E2E proof");
     expect(reviewNote).toContain("OpenClaw Diagnostics OTEL Host Gateway Boundary");
     expect(reviewNote).toContain("openclaw-diagnostics-otel-local");
     expect(reviewNote).toContain("imports `OTLPTraceExporter`");

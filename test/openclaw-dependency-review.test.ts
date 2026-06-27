@@ -133,7 +133,10 @@ describe("OpenClaw 2026.6.9 dependency review contract", () => {
 
     expect(review).toContain("Advisor Disposition");
     expect(review).toContain("Release Checklist for Accepted Residual Risk");
-    expect(review).toContain("OpenClaw patched-dist runtime harness gap");
+    expect(review).toContain("test/openclaw-real-patched-dist-harness.test.ts");
+    expect(review).toContain("NEMOCLAW_REAL_OPENCLAW_DIST_HARNESS=1");
+    expect(review).toContain("applies the Dockerfile patch block");
+    expect(review).toContain("Merge disposition for this OpenClaw 2026.6.9 bump");
     expect(review).toContain("Issue #4434 partial acceptance");
     expect(review).toContain("This PR must not claim full #4434 closure");
     expect(review).toContain("src/lib/messaging/channels/manifests.test.ts");
