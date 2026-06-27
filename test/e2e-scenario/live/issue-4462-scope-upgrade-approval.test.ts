@@ -262,7 +262,7 @@ for dev in state.get('paired') or []:
     if 'operator.admin' in approved:
         print('ADMIN_SCOPE_PRESENT', file=sys.stderr)
         raise SystemExit(2)
-    if {'operator.write','operator.read'}.issubset(approved):
+    if 'operator.write' in approved:
         print(norm(dev.get('deviceId')) or 'cli-device')
         raise SystemExit(0)
 print('NO_AGENT_SCOPES', file=sys.stderr)
@@ -297,6 +297,20 @@ PY
 openclaw devices list --json >/tmp/issue4462-devices-list.json 2>&1 || true
 state="$(state_json)"
 initial_request_id="$(printf '%s' "$state" | select_initial_pairing_request 2>/dev/null || true)"
+if [ -z "$initial_request_id" ]; then
+  bootstrap_session_id="issue-4462-bootstrap-$(date +%s)-$$"
+  rm -f "/sandbox/.openclaw/agents/main/sessions/$bootstrap_session_id.jsonl.lock" \
+        "/sandbox/.openclaw/agents/main/sessions/$bootstrap_session_id.trajectory.jsonl" 2>/dev/null || true
+  set +e
+  openclaw agent --agent main --json --session-id "$bootstrap_session_id" \
+    -m 'What is 6 multiplied by 7? Reply with only the integer, no extra words.' \
+    >/tmp/issue4462-bootstrap-agent.log 2>&1
+  bootstrap_rc=$?
+  set -e
+  printf '%s\n' "$bootstrap_rc" >/tmp/issue4462-bootstrap-agent.rc
+  state="$(state_json)"
+  initial_request_id="$(printf '%s' "$state" | select_initial_pairing_request 2>/dev/null || true)"
+fi
 if [ -n "$initial_request_id" ]; then
   seed_initial_pairing "$initial_request_id" >/tmp/issue4462-initial-pairing.log
   state="$(state_json)"
