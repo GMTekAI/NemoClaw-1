@@ -11,6 +11,7 @@ import * as policies from "../../policy";
 import { redact } from "../../security/redact";
 import * as registry from "../../state/registry";
 import type { McpBridgeEntry, SandboxEntry } from "../../state/registry";
+import { isPrivateHostname } from "../../private-networks";
 import { shellQuote } from "../../runner";
 import {
   deleteProviderWithRecovery,
@@ -28,7 +29,13 @@ const VALID_ENV_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 const VALID_SANDBOX_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
 const DEFAULT_AUTH_HEADER = "Authorization";
 const DEFAULT_AUTH_SCHEME = "Bearer";
-const MCP_PROVIDER_HASH_BYTES = 5;
+const MCP_PROVIDER_HASH_BYTES = 8;
+const OPENSHELL_HOST_ALIASES = new Set([
+  "host.openshell.internal",
+  "host.docker.internal",
+  "host.containers.internal",
+]);
+const BLOCKED_MCP_HOSTNAMES = new Set(["metadata"]);
 
 export class McpBridgeError extends Error {
   constructor(
@@ -150,9 +157,31 @@ export function normalizeMcpServerUrl(rawUrl: string): string {
       2,
     );
   }
+  validateMcpServerUrlTarget(parsed);
   if (parsed.hash) parsed.hash = "";
   if (!parsed.pathname) parsed.pathname = "/";
   return parsed.toString();
+}
+
+function normalizeHostnameForValidation(hostname: string): string {
+  return hostname.toLowerCase().replace(/^\[|\]$/g, "");
+}
+
+function validateMcpServerUrlTarget(parsed: URL): void {
+  const hostname = normalizeHostnameForValidation(parsed.hostname);
+  if (OPENSHELL_HOST_ALIASES.has(hostname)) return;
+  if (BLOCKED_MCP_HOSTNAMES.has(hostname)) {
+    throw new McpBridgeError(
+      `MCP server URL host '${parsed.hostname}' is metadata-scoped. Use host.openshell.internal only for documented host MCP endpoints.`,
+      2,
+    );
+  }
+  if (isPrivateHostname(hostname)) {
+    throw new McpBridgeError(
+      `MCP server URL host '${parsed.hostname}' is a private, local, or special-use IP address. Use host.openshell.internal for host MCP endpoints.`,
+      2,
+    );
+  }
 }
 
 function parseMcpUrl(rawUrl: string): URL {
@@ -359,11 +388,7 @@ function binariesForAdapter(adapter: AgentMcpAdapter): Array<{ path: string }> {
 
 function allowedIpsForEndpoint(hostname: string): string[] | undefined {
   const normalized = hostname.toLowerCase();
-  if (
-    normalized === "host.openshell.internal" ||
-    normalized === "host.docker.internal" ||
-    normalized === "host.containers.internal"
-  ) {
+  if (OPENSHELL_HOST_ALIASES.has(normalized)) {
     return ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"];
   }
   return undefined;
@@ -395,20 +420,8 @@ export function buildMcpBridgePolicyYaml(
             ...(allowedIps ? { allowed_ips: allowedIps } : {}),
             mcp: {
               max_body_bytes: MCP_BRIDGE_POLICY_MAX_BODY_BYTES,
+              allow_all_known_mcp_methods: true,
             },
-            rules: [
-              { allow: { method: "initialize" } },
-              { allow: { method: "notifications/initialized" } },
-              { allow: { method: "ping" } },
-              { allow: { method: "tools/list" } },
-              { allow: { method: "tools/call" } },
-              { allow: { method: "resources/list" } },
-              { allow: { method: "resources/read" } },
-              { allow: { method: "resources/templates/list" } },
-              { allow: { method: "prompts/list" } },
-              { allow: { method: "prompts/get" } },
-              { allow: { method: "completion/complete" } },
-            ],
           },
         ],
         binaries: binariesForAdapter(adapter),

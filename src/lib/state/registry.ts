@@ -6,6 +6,7 @@ import path from "node:path";
 import { isErrnoException } from "../core/errno";
 import { inferenceSelectionRegistryFields } from "../inference/selection";
 import type { InferenceSelection } from "../inference/selection";
+import { isPrivateHostname } from "../private-networks";
 import { ensureConfigDir, readConfigFile, writeConfigFile } from "./config-io";
 import type { SandboxMessagingState } from "./registry-messaging";
 
@@ -59,6 +60,16 @@ export interface McpBridgeEntry {
 export interface SandboxMcpState {
   bridges: Record<string, McpBridgeEntry>;
 }
+
+const MCP_SERVER_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+const MCP_ENV_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
+const MCP_SAFE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+const MCP_ADAPTERS = new Set(["mcporter", "hermes-config", "deepagents-config"]);
+const MCP_HOST_ALIASES = new Set([
+  "host.openshell.internal",
+  "host.docker.internal",
+  "host.containers.internal",
+]);
 
 // Outcome of the last live sandbox GPU proof run during onboarding/recovery.
 // `status` separates a configured-but-unverified GPU from one whose CUDA
@@ -439,23 +450,56 @@ function normalizeSandboxMcpState(value: unknown): SandboxMcpState | undefined {
   return Object.keys(bridges).length > 0 ? { bridges } : undefined;
 }
 
+function normalizeMcpUrl(value: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+  if (!parsed.hostname || parsed.username || parsed.password) return null;
+  const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (!MCP_HOST_ALIASES.has(hostname)) {
+    try {
+      if (hostname === "metadata" || isPrivateHostname(hostname)) return null;
+    } catch {
+      if (hostname === "metadata" || hostname === "localhost" || hostname.endsWith(".localhost")) {
+        return null;
+      }
+    }
+  }
+  if (parsed.hash) parsed.hash = "";
+  if (!parsed.pathname) parsed.pathname = "/";
+  return parsed.toString();
+}
+
 function normalizeMcpBridgeEntry(server: string, value: unknown): McpBridgeEntry | null {
   if (!isRecord(value)) return null;
-  const url = typeof value.url === "string" ? value.url : "";
+  const serverName = typeof value.server === "string" && value.server ? value.server : server;
+  if (!MCP_SERVER_RE.test(serverName)) return null;
+  const url = typeof value.url === "string" ? normalizeMcpUrl(value.url) : null;
   const policyName = typeof value.policyName === "string" ? value.policyName : "";
-  if (!url || !policyName) return null;
-  const env = Array.isArray(value.env)
-    ? value.env.filter((entry): entry is string => typeof entry === "string")
-    : [];
+  if (!url || !MCP_SAFE_NAME_RE.test(policyName)) return null;
+  const rawEnv = value.env;
+  const env =
+    Array.isArray(rawEnv) &&
+    rawEnv.every((entry): entry is string => typeof entry === "string" && MCP_ENV_RE.test(entry))
+      ? [...new Set(rawEnv)]
+      : null;
+  if (!env) return null;
+  const adapter = typeof value.adapter === "string" && value.adapter ? value.adapter : undefined;
+  if (adapter && !MCP_ADAPTERS.has(adapter)) return null;
+  const providerName =
+    typeof value.providerName === "string" && value.providerName ? value.providerName : undefined;
+  if (providerName && !MCP_SAFE_NAME_RE.test(providerName)) return null;
   return {
-    server: typeof value.server === "string" && value.server ? value.server : server,
+    server: serverName,
     agent: typeof value.agent === "string" && value.agent ? value.agent : "openclaw",
-    ...(typeof value.adapter === "string" && value.adapter ? { adapter: value.adapter } : {}),
+    ...(adapter ? { adapter } : {}),
     url,
     env,
-    ...(typeof value.providerName === "string" && value.providerName
-      ? { providerName: value.providerName }
-      : {}),
+    ...(providerName ? { providerName } : {}),
     policyName,
     addedAt:
       typeof value.addedAt === "string" && value.addedAt

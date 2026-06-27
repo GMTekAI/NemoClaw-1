@@ -448,6 +448,47 @@ describe("sandbox-policy.schema.json", () => {
     expectValid(validate, valid, "mcp policy allow-all");
   });
 
+  it("rejects sandbox-policy JSON-RPC and MCP endpoints above the body-size cap", () => {
+    const oversizedJsonRpc = {
+      version: 1,
+      network_policies: {
+        rpc: {
+          name: "RPC",
+          binaries: [{ path: "/usr/local/bin/tool" }],
+          endpoints: [
+            {
+              host: "mcp.example.com",
+              port: 443,
+              protocol: "json-rpc",
+              json_rpc: { max_body_bytes: 1048577 },
+              rules: [{ allow: { method: "initialize" } }],
+            },
+          ],
+        },
+      },
+    };
+    expect(validate(oversizedJsonRpc)).toBe(false);
+
+    const oversizedMcp = {
+      version: 1,
+      network_policies: {
+        mcp_bridge: {
+          name: "MCP Bridge",
+          binaries: [{ path: "/usr/local/bin/mcporter" }],
+          endpoints: [
+            {
+              host: "mcp.example.com",
+              port: 443,
+              protocol: "mcp",
+              mcp: { max_body_bytes: 1048577, allow_all_known_mcp_methods: true },
+            },
+          ],
+        },
+      },
+    };
+    expect(validate(oversizedMcp)).toBe(false);
+  });
+
   it("rejects sandbox-policy JSON-RPC and MCP endpoints with REST access presets", () => {
     const base = {
       version: 1,
@@ -751,6 +792,47 @@ describe("policy-preset.schema.json", () => {
       },
     };
     expect(validate(mcpAccess)).toBe(false);
+  });
+
+  it("rejects preset JSON-RPC and MCP endpoints above the body-size cap", () => {
+    const oversizedJsonRpc = {
+      preset: { name: "rpc", description: "RPC" },
+      network_policies: {
+        rpc: {
+          name: "RPC",
+          binaries: [{ path: "/usr/local/bin/tool" }],
+          endpoints: [
+            {
+              host: "mcp.example.com",
+              port: 443,
+              protocol: "json-rpc",
+              json_rpc: { max_body_bytes: 1048577 },
+              rules: [{ allow: { method: "initialize" } }],
+            },
+          ],
+        },
+      },
+    };
+    expect(validate(oversizedJsonRpc)).toBe(false);
+
+    const oversizedMcp = {
+      preset: { name: "mcp", description: "MCP" },
+      network_policies: {
+        mcp_bridge: {
+          name: "MCP Bridge",
+          binaries: [{ path: "/usr/local/bin/mcporter" }],
+          endpoints: [
+            {
+              host: "mcp.example.com",
+              port: 443,
+              protocol: "mcp",
+              mcp: { max_body_bytes: 1048577, allow_all_known_mcp_methods: true },
+            },
+          ],
+        },
+      },
+    };
+    expect(validate(oversizedMcp)).toBe(false);
   });
 
   it("rejects preset endpoint with protocol websocket but no rules", () => {

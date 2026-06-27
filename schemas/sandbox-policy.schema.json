@@ -199,14 +199,14 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "max_body_bytes": { "type": "integer", "minimum": 1 }
+        "max_body_bytes": { "type": "integer", "minimum": 1, "maximum": 1048576 }
       }
     },
     "mcpOptions": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "max_body_bytes": { "type": "integer", "minimum": 1 },
+        "max_body_bytes": { "type": "integer", "minimum": 1, "maximum": 1048576 },
         "strict_tool_names": { "type": "boolean" },
         "allow_all_known_mcp_methods": { "type": "boolean" }
       }

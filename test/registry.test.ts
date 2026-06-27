@@ -329,6 +329,71 @@ describe("registry", () => {
     expect(raw).not.toContain("secret-value");
   });
 
+  it("drops invalid persisted MCP bridge entries during registry serialization", () => {
+    registry.registerSandbox({ name: "mcp-safe", agent: "openclaw" });
+    registry.updateSandbox("mcp-safe", {
+      mcp: {
+        bridges: {
+          ok: {
+            server: "ok",
+            agent: "openclaw",
+            adapter: "mcporter",
+            url: "https://api.githubcopilot.com/mcp/#ignored",
+            env: ["GITHUB_TOKEN", "GITHUB_TOKEN"],
+            providerName: "mcp-safe-mcp-ok",
+            policyName: "mcp-bridge-ok",
+            addedAt: new Date(0).toISOString(),
+          },
+          credentialUrl: {
+            server: "credentialUrl",
+            agent: "openclaw",
+            adapter: "mcporter",
+            url: "https://user:secret@example.test/mcp",
+            env: ["TOKEN"],
+            providerName: "mcp-safe-mcp-credential",
+            policyName: "mcp-bridge-credential",
+            addedAt: new Date(0).toISOString(),
+          },
+          privateIp: {
+            server: "privateIp",
+            agent: "openclaw",
+            adapter: "mcporter",
+            url: "http://127.0.0.1:31337/mcp",
+            env: ["TOKEN"],
+            providerName: "mcp-safe-mcp-private",
+            policyName: "mcp-bridge-private",
+            addedAt: new Date(0).toISOString(),
+          },
+          invalidEnv: {
+            server: "invalidEnv",
+            agent: "openclaw",
+            adapter: "mcporter",
+            url: "https://api.githubcopilot.com/mcp/",
+            env: ["TOKEN=secret"],
+            providerName: "mcp-safe-mcp-invalid-env",
+            policyName: "mcp-bridge-invalid-env",
+            addedAt: new Date(0).toISOString(),
+          },
+          unknownAdapter: {
+            server: "unknownAdapter",
+            agent: "openclaw",
+            adapter: "unknown",
+            url: "https://api.githubcopilot.com/mcp/",
+            env: ["TOKEN"],
+            providerName: "mcp-safe-mcp-unknown",
+            policyName: "mcp-bridge-unknown",
+            addedAt: new Date(0).toISOString(),
+          },
+        },
+      },
+    });
+
+    const bridges = registry.getSandbox("mcp-safe").mcp.bridges;
+    expect(Object.keys(bridges)).toEqual(["ok"]);
+    expect(bridges.ok.url).toBe("https://api.githubcopilot.com/mcp/");
+    expect(bridges.ok.env).toEqual(["GITHUB_TOKEN"]);
+  });
+
   it("updateSandbox returns false for nonexistent sandbox", () => {
     expect(registry.updateSandbox("nope", {})).toBe(false);
   });

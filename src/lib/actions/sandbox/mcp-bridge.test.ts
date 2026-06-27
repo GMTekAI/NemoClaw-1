@@ -81,6 +81,24 @@ describe("MCP CLI parsing", () => {
     );
   });
 
+  it("rejects local and private URL targets except OpenShell host aliases", () => {
+    expect(() => normalizeMcpServerUrl("http://localhost:31337/mcp")).toThrow(
+      /private, local, or special-use IP/,
+    );
+    expect(() => normalizeMcpServerUrl("http://127.0.0.1:31337/mcp")).toThrow(
+      /private, local, or special-use IP/,
+    );
+    expect(() => normalizeMcpServerUrl("http://169.254.169.254/latest")).toThrow(
+      /private, local, or special-use IP/,
+    );
+    expect(() => normalizeMcpServerUrl("http://[::1]:31337/mcp")).toThrow(
+      /private, local, or special-use IP/,
+    );
+    expect(normalizeMcpServerUrl("http://host.openshell.internal:31337/mcp")).toBe(
+      "http://host.openshell.internal:31337/mcp",
+    );
+  });
+
   it("resolves host env values without requiring them for provider reuse", () => {
     const prior = process.env.MCP_BRIDGE_TEST_TOKEN;
     process.env.MCP_BRIDGE_TEST_TOKEN = "secret-value";
@@ -171,7 +189,7 @@ describe("MCP OpenShell policy", () => {
             path: string;
             protocol: string;
             mcp: { max_body_bytes: number; allow_all_known_mcp_methods?: boolean };
-            rules: Array<{ allow: { method: string } }>;
+            rules?: Array<{ allow: { method: string } }>;
           }>;
           binaries: Array<{ path: string }>;
         }
@@ -191,10 +209,8 @@ describe("MCP OpenShell policy", () => {
         max_body_bytes: MCP_BRIDGE_POLICY_MAX_BODY_BYTES,
       },
     });
-    expect(entry.endpoints[0].mcp.allow_all_known_mcp_methods).toBeUndefined();
-    expect(entry.endpoints[0].rules.map((rule) => rule.allow.method)).toEqual(
-      expect.arrayContaining(["initialize", "tools/list", "tools/call"]),
-    );
+    expect(entry.endpoints[0].mcp.allow_all_known_mcp_methods).toBe(true);
+    expect(entry.endpoints[0].rules).toBeUndefined();
     expect(entry.binaries.map((binary) => binary.path)).toEqual([
       "/usr/local/bin/mcporter",
       "/usr/bin/mcporter",
@@ -242,7 +258,7 @@ describe("MCP OpenShell policy", () => {
       "ServerNameThatWouldOtherwiseExceedTheProviderNameLimit",
     );
     expect(long.length).toBeLessThanOrEqual(63);
-    expect(long).toMatch(/^sandbox-name-with-a-long-prefix-mcp-servernamethatwo-[a-f0-9]{10}$/);
+    expect(long).toMatch(/^sandbox-name-with-a-long-prefix-mcp-servername-[a-f0-9]{16}$/);
   });
 });
 
