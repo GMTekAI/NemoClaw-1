@@ -11,15 +11,13 @@ content:
 ---
 import { AgentOnly } from "../_components/AgentGuide";
 
-<!-- markdownlint-disable MD037 -->
-
 NemoClaw ships with deny-by-default security controls across five layers: network, filesystem, process, gateway authentication, and inference.
 You can tune every control, but each change shifts the risk profile.
 This page documents each configurable control, its default, what it protects, the concrete risk of relaxing it, and a recommendation for common use cases.
 
 For background on how the layers fit together, refer to [How It Works](../about/how-it-works).
 
-{/* TODO: uncomment after the OpenShell docs are published
+{/*TODO: uncomment after the OpenShell docs are published
 <Note>
 OpenShell enforces the platform-level mechanisms that NemoClaw configures, including network namespace isolation, seccomp filters, SSRF protection, TLS termination, and gateway authentication.
 For the full platform-level controls reference, refer to [OpenShell Security Best Practices](https://docs.nvidia.com/openshell/latest/security/best-practices.html).
@@ -97,8 +95,8 @@ flowchart TB
 NemoClaw controls which hosts, ports, and HTTP methods the sandbox can reach, and lets you approve or deny requests in real time.
 Network policy allowlists do not disable OpenShell's SSRF guard; refer to [Customize the Network Policy](/network-policy/customize-network-policy) for the interaction between egress rules and internal-address blocking.
 
-{/* OpenShell provides additional network enforcement mechanisms not covered here, including network namespace isolation, SSRF protection, TLS auto-detection and termination, and audit-vs-enforce modes.
-Refer to the [Network Controls](https://docs.nvidia.com/openshell/latest/security/best-practices.html#network-controls) section of the OpenShell Security Best Practices. */}
+{/*OpenShell provides additional network enforcement mechanisms not covered here, including network namespace isolation, SSRF protection, TLS auto-detection and termination, and audit-vs-enforce modes.
+Refer to the [Network Controls](https://docs.nvidia.com/openshell/latest/security/best-practices.html#network-controls) section of the OpenShell Security Best Practices.*/}
 
 ### Deny-by-Default Egress
 
@@ -186,8 +184,8 @@ Review the preset's YAML file before applying to understand the endpoints, metho
 
 NemoClaw restricts which paths the agent can read and write, protecting system binaries, configuration files, and gateway credentials.
 
-{/* OpenShell covers additional filesystem enforcement details, including `hard_requirement` compatibility mode for Landlock and policy path validation rules.
-Refer to the [Filesystem Controls](https://docs.nvidia.com/openshell/latest/security/best-practices.html#filesystem-controls) section of the OpenShell Security Best Practices. */}
+{/*OpenShell covers additional filesystem enforcement details, including `hard_requirement` compatibility mode for Landlock and policy path validation rules.
+Refer to the [Filesystem Controls](https://docs.nvidia.com/openshell/latest/security/best-practices.html#filesystem-controls) section of the OpenShell Security Best Practices.*/}
 
 ### Read-Only System Paths
 
@@ -294,8 +292,8 @@ Landlock is a Linux Security Module that enforces filesystem access rules at the
 
 NemoClaw limits the capabilities, user privileges, and resource quotas available to processes inside the sandbox.
 
-{/* OpenShell enforces additional process-level controls not covered here, including seccomp BPF socket domain filters and a specific enforcement application order (namespace entry, privilege drop, Landlock, seccomp).
-Refer to the [Process Controls](https://docs.nvidia.com/openshell/latest/security/best-practices.html#process-controls) section of the OpenShell Security Best Practices. */}
+{/*OpenShell enforces additional process-level controls not covered here, including seccomp BPF socket domain filters and a specific enforcement application order (namespace entry, privilege drop, Landlock, seccomp).
+Refer to the [Process Controls](https://docs.nvidia.com/openshell/latest/security/best-practices.html#process-controls) section of the OpenShell Security Best Practices.*/}
 
 ### Capability Drops
 
@@ -655,4 +653,4 @@ The following patterns weaken security without providing meaningful benefit.
 </AgentOnly>
 - [Inference Options](../inference/inference-options) for provider configuration details.
 - [How It Works](../about/how-it-works) for the protection layer architecture.
-{/* - OpenShell [Security Best Practices](https://docs.nvidia.com/openshell/latest/security/best-practices.html) for the platform-level controls reference, including network namespace isolation, seccomp filters, SSRF protection, TLS termination, and gateway authentication. */}
+{/*- OpenShell [Security Best Practices](https://docs.nvidia.com/openshell/latest/security/best-practices.html) for the platform-level controls reference, including network namespace isolation, seccomp filters, SSRF protection, TLS termination, and gateway authentication.*/}
