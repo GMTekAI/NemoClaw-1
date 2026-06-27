@@ -65,7 +65,7 @@ export function runDockerShell(command: string, sandboxRoot: string) {
     "#!/usr/bin/env bash",
     // Extracted RUN snippets execute as shell, not docker builds; export mirrors the ARG value
     // so unit tests stay daemon-free while the real verifier covers --build-arg behavior.
-    "set -euo pipefail; export NEMOCLAW_STALE_OPENCLAW_BASE_DIGEST=sha256:60333c1982ad855d55887b4488e867eb343f3930a30aa8e0268e5397fc6f2926",
+    "set -euo pipefail; export BASE_IMAGE=${BASE_IMAGE:-nemoclaw-hermes-base-local}; export NEMOCLAW_STALE_OPENCLAW_BASE_DIGEST=sha256:60333c1982ad855d55887b4488e867eb343f3930a30aa8e0268e5397fc6f2926",
     `call_log=${JSON.stringify(logPath)}`,
     'chown() { printf "chown %s\\n" "$*" >> "$call_log"; }',
     rewritten,

@@ -285,6 +285,12 @@ RUN set -eu; \
             echo "ERROR: use an immutable Hermes base digest while stale .openclaw cleanup is present; BASE_IMAGE=$BASE_IMAGE" >&2; \
             exit 1; \
             ;; \
+        nemoclaw-hermes-base-local | nemoclaw-hermes-stale-openclaw-dir-base:* | nemoclaw-hermes-stale-openclaw-link-base:*) \
+            ;; \
+        *) \
+            echo "ERROR: unsupported Hermes BASE_IMAGE while stale .openclaw cleanup is present; BASE_IMAGE=${BASE_IMAGE:-unset}" >&2; \
+            exit 1; \
+            ;; \
     esac; \
     config_dir=/sandbox/.hermes; \
     data_dir=/sandbox/.hermes-data; \
