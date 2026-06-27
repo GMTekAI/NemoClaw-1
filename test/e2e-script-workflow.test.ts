@@ -965,6 +965,16 @@ describe("E2E reusable workflow contract", () => {
       }
       expect(parsed.NEMOCLAW_PUBLIC_INSTALL_REF, name).toBeUndefined();
     }
+
+    const networkPolicyEnv = JSON.parse(
+      nightlyWorkflow.jobs["network-policy-e2e"].with?.env_json ?? "{}",
+    ) as Record<string, unknown>;
+    expect(networkPolicyEnv.NEMOCLAW_OPENSHELL_CHANNEL).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && inputs.openshell_channel || 'stable' }}",
+    );
+    expect(networkPolicyEnv.NEMOCLAW_OPENSHELL_ARTIFACT_RUN_ID).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && inputs.openshell_artifact_run_id || '' }}",
+    );
   });
 
   it("exports checked-out commit SHAs for reusable public-installer jobs", () => {

@@ -1552,7 +1552,7 @@ jobs:
       script: test/e2e/test-network-policy.sh
       artifact_name: "network-policy-test-log"
       artifact_path: "test-network-policy-*.log"
-      env_json: '{"NEMOCLAW_ACCEPT_THIRD_PARTY_SOFTWARE":"1","NEMOCLAW_NON_INTERACTIVE":"1","NEMOCLAW_POLICY_TIER":"restricted","NEMOCLAW_RECREATE_SANDBOX":"1"}'
+      env_json: '{"NEMOCLAW_ACCEPT_THIRD_PARTY_SOFTWARE":"1","NEMOCLAW_NON_INTERACTIVE":"1","NEMOCLAW_POLICY_TIER":"restricted","NEMOCLAW_RECREATE_SANDBOX":"1","NEMOCLAW_OPENSHELL_CHANNEL":"${{ github.event_name == ''workflow_dispatch'' && inputs.openshell_channel || ''stable'' }}","NEMOCLAW_OPENSHELL_ARTIFACT_RUN_ID":"${{ github.event_name == ''workflow_dispatch'' && inputs.openshell_artifact_run_id || '''' }}"}'
       nvidia_api_key: true
     secrets: *nightly-e2e-default-secrets
   state-backup-restore-e2e:
