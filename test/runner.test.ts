@@ -2,18 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { StdioOptions } from "node:child_process";
-
-import { spawnSync } from "node:child_process";
-import childProcess from "node:child_process";
+import childProcess, { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import YAML from "yaml";
 
-import { redact, runCapture } from "../dist/lib/runner";
+import { redact, runCapture } from "../src/lib/runner";
 
-const runnerPath = path.join(import.meta.dirname, "..", "dist", "lib", "runner.js");
+const runnerPath = path.join(import.meta.dirname, "..", "src", "lib", "runner.ts");
 
 type SpawnCallOptions = {
   stdio?: StdioOptions;
@@ -661,7 +659,7 @@ describe("regression guards", () => {
         path.join(tmpBin, "openshell"),
         `#!/usr/bin/env bash
 if [ "\${1:-}" = "--version" ]; then echo "openshell 0.0.1"; exit 0; fi
-# request-body-credential-rewrite websocket-credential-rewrite allow_all_known_mcp_methods
+# request-body-credential-rewrite websocket-credential-rewrite allow_all_known_mcp_methods authenticated-mcp-policy-bound-credential-rewrite-v1
 exit 0
 `,
         { mode: 0o755 },
@@ -711,7 +709,7 @@ exit 0
         export -f curl
         sha256sum() { cat >/dev/null; echo "checksum OK"; return 0; }
         export -f sha256sum
-        strings() { echo "request-body-credential-rewrite websocket-credential-rewrite allow_all_known_mcp_methods"; }
+        strings() { echo "request-body-credential-rewrite websocket-credential-rewrite allow_all_known_mcp_methods authenticated-mcp-policy-bound-credential-rewrite-v1"; }
         export -f strings
         tar() { return 0; }; export -f tar
         install() { return 0; }; export -f install
@@ -739,7 +737,7 @@ exit 0
         path.join(tmpBin, "openshell"),
         `#!/usr/bin/env bash
 if [ "\${1:-}" = "--version" ]; then echo "openshell 0.0.1"; exit 0; fi
-# request-body-credential-rewrite websocket-credential-rewrite allow_all_known_mcp_methods
+# request-body-credential-rewrite websocket-credential-rewrite allow_all_known_mcp_methods authenticated-mcp-policy-bound-credential-rewrite-v1
 exit 0
 `,
         { mode: 0o755 },
@@ -755,7 +753,7 @@ exit 0
         export -f curl
         sha256sum() { echo "SHA256SUM $*" >> ${JSON.stringify(checksumLog)}; echo "checksum OK"; return 0; }
         export -f sha256sum
-        strings() { echo "request-body-credential-rewrite websocket-credential-rewrite allow_all_known_mcp_methods"; }
+        strings() { echo "request-body-credential-rewrite websocket-credential-rewrite allow_all_known_mcp_methods authenticated-mcp-policy-bound-credential-rewrite-v1"; }
         export -f strings
         tar() { return 0; }; export -f tar
         install() { return 0; }; export -f install

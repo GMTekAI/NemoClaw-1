@@ -85,6 +85,9 @@ navigation:
               - page: "Set Up Messaging Channels"
                 path: _build/agent-variants/manage-sandboxes/messaging-channels.openclaw.generated.mdx
                 slug: messaging-channels
+              - page: "Set Up MCP Servers"
+                path: _build/agent-variants/deployment/set-up-mcp-bridge.openclaw.generated.mdx
+                slug: set-up-mcp-servers
               - page: "Workspace Files"
                 path: _build/agent-variants/manage-sandboxes/workspace-files.openclaw.generated.mdx
                 slug: workspace-files
@@ -244,6 +247,9 @@ navigation:
               - page: "Set Up Messaging Channels"
                 path: _build/agent-variants/manage-sandboxes/messaging-channels.hermes.generated.mdx
                 slug: messaging-channels
+              - page: "Set Up MCP Servers"
+                path: _build/agent-variants/deployment/set-up-mcp-bridge.hermes.generated.mdx
+                slug: set-up-mcp-servers
               - page: "Workspace Files"
                 path: _build/agent-variants/manage-sandboxes/workspace-files.hermes.generated.mdx
                 slug: workspace-files

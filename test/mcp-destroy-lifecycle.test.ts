@@ -12,38 +12,80 @@ function runDestroyLifecycleScenario(body: string) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-mcp-destroy-"));
   const script = `
 process.env.HOME = ${JSON.stringify(home)};
-const registry = require("./dist/lib/state/registry.js");
-const globalActions = require("./dist/lib/actions/global.js");
-const gatewayRuntime = require("./dist/lib/gateway-runtime-action.js");
-const policies = require("./dist/lib/policy/index.js");
-const processRecovery = require("./dist/lib/actions/sandbox/process-recovery.js");
+const registry = require("./src/lib/state/registry.js");
+const globalActions = require("./src/lib/actions/global.js");
+const gatewayRuntime = require("./src/lib/gateway-runtime-action.js");
+const policies = require("./src/lib/policy/index.js");
+const processRecovery = require("./src/lib/actions/sandbox/process-recovery.js");
 
 const providers = new Map([
-  ["alpha-mcp-github", "GITHUB_TOKEN"],
-  ["alpha-mcp-slack", "SLACK_TOKEN"],
+  [
+    "alpha-mcp-github",
+    { credential: "GITHUB_TOKEN", id: "11111111-2222-4333-8444-555555555555" },
+  ],
+  [
+    "alpha-mcp-slack",
+    { credential: "SLACK_TOKEN", id: "66666666-7777-4888-8999-000000000000" },
+  ],
 ]);
+const attachedProviders = new Set(providers.keys());
 const calls = [];
 const adapterCalls = [];
+let adapterRegistered = true;
 let policyApplyCalls = 0;
 let failProviderDelete = null;
+let failProviderDetach = null;
 globalActions.runOpenshellProviderCommand = (args) => {
   calls.push(args.join(" "));
+  if (args.join(" ") === "status --output json") {
+    return {
+      status: 0,
+      stdout: JSON.stringify({ capabilities: ["authenticated-mcp-policy-bound-credential-rewrite-v1"] }),
+      stderr: "",
+    };
+  }
   if (args[0] === "provider" && args[1] === "get") {
-    const credential = providers.get(args[2]);
-    return credential
-      ? { status: 0, stdout: "Type: generic\\nCredential keys: " + credential + "\\n", stderr: "" }
+    const provider = providers.get(args[2]);
+    return provider
+      ? { status: 0, stdout: "Id: " + provider.id + "\\nType: generic\\nResource version: 1\\nCredential keys: " + provider.credential + "\\n", stderr: "" }
       : { status: 1, stdout: "", stderr: "Provider not found" };
   }
+  if (args[0] === "sandbox" && args[1] === "provider" && args[2] === "list") {
+    return {
+      status: 0,
+      stdout: JSON.stringify({
+        attachments: [...attachedProviders].map((name) => {
+          const provider = providers.get(name);
+          return {
+            name,
+            provider_present: !!provider,
+            provider_id: provider?.id ?? "",
+            provider_resource_version: provider ? 1 : 0,
+            credential_keys: provider ? [provider.credential] : [],
+            bound_provider_id: provider?.id ?? "",
+            bound_credential_keys: provider ? [provider.credential] : [],
+          };
+        }),
+      }),
+      stderr: "",
+    };
+  }
   if (args[0] === "sandbox" && args[1] === "provider" && args[2] === "detach") {
+    if (failProviderDetach === args[4]) {
+      return { status: 9, stdout: "", stderr: "provider detach failed" };
+    }
+    attachedProviders.delete(args[4]);
     return { status: 0, stdout: "Detached provider", stderr: "" };
   }
   if (args[0] === "sandbox" && args[1] === "provider" && args[2] === "attach") {
+    attachedProviders.add(args[4]);
     return { status: 0, stdout: "Attached provider", stderr: "" };
   }
   if (args[0] === "provider" && args[1] === "delete") {
     if (failProviderDelete === args[2]) {
       return { status: 9, stdout: "", stderr: "provider delete failed" };
     }
+    attachedProviders.delete(args[2]);
     providers.delete(args[2]);
     return { status: 0, stdout: "Deleted provider", stderr: "" };
   }
@@ -62,6 +104,21 @@ policies.applyPresetContent = () => {
 policies.getPresetContentGatewayState = () => "match";
 processRecovery.executeSandboxCommand = (_sandbox, command) => {
   adapterCalls.push(command);
+  if (command.includes("'config' 'add'")) {
+    adapterRegistered = true;
+    return { status: 0, stdout: "", stderr: "" };
+  }
+  if (command.includes('["config", "remove"')) {
+    adapterRegistered = false;
+    return { status: 0, stdout: "", stderr: "" };
+  }
+  if (command.includes('["config", "get"')) {
+    return {
+      status: 0,
+      stdout: adapterRegistered ? "registered\\n" : "absent\\n",
+      stderr: "",
+    };
+  }
   return {
     status: 0,
     stdout: command === "command -v mcporter" ? "/usr/local/bin/mcporter\\n" : "",
@@ -70,6 +127,8 @@ processRecovery.executeSandboxCommand = (_sandbox, command) => {
 };
 processRecovery.executeSandboxExecCommand = (_sandbox, command) => ({
   status:
+    command.includes("authenticated-mcp-policy-bound-credential-rewrite-v1") ||
+    command.includes('[ -z "\${') ||
     command.includes("openshell:resolve:env:GITHUB_TOKEN") ||
     command.includes("openshell:resolve:env:SLACK_TOKEN")
       ? 0
@@ -85,6 +144,7 @@ const bridgeEntry = (server, credential) => ({
   url: "https://8.8.8.8/" + server,
   env: [credential],
   providerName: "alpha-mcp-" + server,
+  providerId: providers.get("alpha-mcp-" + server).id,
   policyName: "mcp-bridge-" + server,
   addedAt: "2026-06-27T00:00:00.000Z",
 });
@@ -118,7 +178,7 @@ registry.registerSandbox({
   gatewayName: "nemoclaw",
   mcp: { bridges: { github: bridgeEntries.github } },
 });
-const bridge = require("./dist/lib/actions/sandbox/mcp-bridge.js");
+const bridge = require("./src/lib/actions/sandbox/mcp-bridge.js");
 (async () => {
   const preparation = await bridge.prepareMcpBridgesForAbsentSandboxRebuild("alpha");
   process.stdout.write(JSON.stringify({
@@ -157,7 +217,7 @@ registry.registerSandbox({
   mcp: { bridges: { github: bridgeEntries.github } },
 });
 registry.addCustomPolicy("alpha", ownedPolicy("github"));
-const bridge = require("./dist/lib/actions/sandbox/mcp-bridge.js");
+const bridge = require("./src/lib/actions/sandbox/mcp-bridge.js");
 (async () => {
   const preparation = await bridge.prepareMcpBridgesForAbsentSandboxDestroy("alpha");
   await bridge.finalizeMcpBridgesAfterSandboxDelete("alpha", preparation);
@@ -196,7 +256,7 @@ registry.registerSandbox({
   mcp: { bridges: { github: bridgeEntries.github } },
 });
 registry.addCustomPolicy("alpha", ownedPolicy("github"));
-const bridge = require("./dist/lib/actions/sandbox/mcp-bridge.js");
+const bridge = require("./src/lib/actions/sandbox/mcp-bridge.js");
 (async () => {
   const preparation = await bridge.prepareMcpBridgesForDestroy("alpha");
   await bridge.restoreMcpBridgesAfterDestroyAbort("alpha", preparation);
@@ -228,7 +288,11 @@ const bridge = require("./dist/lib/actions/sandbox/mcp-bridge.js");
     };
     expect(payload.secretPresent).toBe(false);
     expect(payload.providers).toContain("alpha-mcp-github");
-    expect(payload.calls).toContain("sandbox provider attach alpha alpha-mcp-github");
+    expect(
+      payload.calls.some((call) =>
+        call.startsWith("sandbox provider attach alpha alpha-mcp-github "),
+      ),
+    ).toBe(true);
     expect(payload.calls.some((call) => /^provider (create|update) /.test(call))).toBe(false);
     expect(payload.policyApplyCalls).toBe(1);
     expect(payload.adapterCalls).toContain("command -v mcporter");
@@ -249,7 +313,7 @@ registry.registerSandbox({
 });
 registry.addCustomPolicy("alpha", ownedPolicy("github"));
 registry.addCustomPolicy("alpha", { name: "operator", content: "version: 1\\n" });
-const bridge = require("./dist/lib/actions/sandbox/mcp-bridge.js");
+const bridge = require("./src/lib/actions/sandbox/mcp-bridge.js");
 (async () => {
   const preparation = await bridge.prepareMcpBridgesForDestroy("alpha");
   const afterPrepare = registry.getSandbox("alpha");
@@ -292,10 +356,118 @@ const bridge = require("./dist/lib/actions/sandbox/mcp-bridge.js");
     expect(payload.afterFinalize.mcp).toBeUndefined();
     expect(payload.afterFinalize.customPolicies.map((policy) => policy.name)).toEqual(["operator"]);
     expect(payload.providers).not.toContain("alpha-mcp-github");
-    expect(payload.calls).toContain("sandbox provider detach alpha alpha-mcp-github");
+    expect(
+      payload.calls.some((call) =>
+        call.startsWith("sandbox provider detach alpha alpha-mcp-github "),
+      ),
+    ).toBe(true);
     expect(
       payload.adapterCalls.some((call) => call.includes("config") && call.includes("remove")),
     ).toBe(true);
+  });
+
+  for (const [label, prepareFunction] of [
+    ["destroy", "prepareMcpBridgesForDestroy"],
+    ["rebuild", "prepareMcpBridgesForRebuild"],
+  ] as const) {
+    it(`reattaches an already-absent first provider when a later ${label} detach fails`, () => {
+      const result = runDestroyLifecycleScenario(`
+registry.registerSandbox({
+  name: "alpha",
+  agent: "openclaw",
+  gatewayName: "nemoclaw",
+  mcp: { bridges: bridgeEntries },
+});
+registry.addCustomPolicy("alpha", ownedPolicy("github"));
+registry.addCustomPolicy("alpha", ownedPolicy("slack"));
+// Simulate a prior process dying after the first detach but before a durable
+// prepared marker. The retry must own rollback of this already-absent binding.
+attachedProviders.delete("alpha-mcp-github");
+failProviderDetach = "alpha-mcp-slack";
+const bridge = require("./src/lib/actions/sandbox/mcp-bridge.js");
+(async () => {
+  let message = "";
+  try {
+    await bridge.${prepareFunction}("alpha");
+  } catch (error) {
+    message = error.message;
+  }
+  process.stdout.write(JSON.stringify({
+    message,
+    attached: [...attachedProviders].sort(),
+    calls,
+    adapterRegistered,
+  }));
+})().catch((error) => { console.error(error); process.exit(1); });
+`);
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      const payload = JSON.parse(result.stdout) as {
+        message: string;
+        attached: string[];
+        calls: string[];
+        adapterRegistered: boolean;
+      };
+      expect(payload.message).toContain("provider detach failed");
+      expect(payload.attached).toEqual(["alpha-mcp-github", "alpha-mcp-slack"]);
+      expect(
+        payload.calls.some((call) =>
+          call.startsWith("sandbox provider attach alpha alpha-mcp-github "),
+        ),
+      ).toBe(true);
+      expect(payload.adapterRegistered).toBe(true);
+    });
+  }
+
+  it("reattaches every desired provider when rebuild deletion aborts after a retry", () => {
+    const result = runDestroyLifecycleScenario(`
+registry.registerSandbox({
+  name: "alpha",
+  agent: "openclaw",
+  gatewayName: "nemoclaw",
+  mcp: { bridges: bridgeEntries },
+});
+registry.addCustomPolicy("alpha", ownedPolicy("github"));
+registry.addCustomPolicy("alpha", ownedPolicy("slack"));
+// The first rebuild process died after detaching github. A retry completes
+// preparation, then sandbox deletion is modeled as failed by invoking abort.
+attachedProviders.delete("alpha-mcp-github");
+const bridge = require("./src/lib/actions/sandbox/mcp-bridge.js");
+(async () => {
+  const preparation = await bridge.prepareMcpBridgesForRebuild("alpha");
+  const detachedBeforeAbort = [...attachedProviders].sort();
+  await bridge.reattachMcpProvidersAfterRebuildAbort(
+    "alpha",
+    preparation.detachedProviderEntries,
+    preparation.scrubbedAdapterEntries,
+  );
+  process.stdout.write(JSON.stringify({
+    preparation,
+    detachedBeforeAbort,
+    attachedAfterAbort: [...attachedProviders].sort(),
+    calls,
+    adapterRegistered,
+  }));
+})().catch((error) => { console.error(error); process.exit(1); });
+`);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    const payload = JSON.parse(result.stdout) as {
+      preparation: { detachedProviderEntries: unknown[] };
+      detachedBeforeAbort: string[];
+      attachedAfterAbort: string[];
+      calls: string[];
+      adapterRegistered: boolean;
+    };
+    expect(payload.preparation.detachedProviderEntries).toHaveLength(2);
+    expect(payload.detachedBeforeAbort).toEqual([]);
+    expect(payload.attachedAfterAbort).toEqual(["alpha-mcp-github", "alpha-mcp-slack"]);
+    expect(
+      payload.calls.some((call) =>
+        call.startsWith("sandbox provider attach alpha alpha-mcp-github "),
+      ),
+    ).toBe(true);
+    expect(payload.adapterRegistered).toBe(true);
   });
 
   it("keeps a pending manifest after partial provider deletion and completes on retry", () => {
@@ -307,7 +479,7 @@ registry.registerSandbox({
 });
 registry.addCustomPolicy("alpha", ownedPolicy("github"));
 registry.addCustomPolicy("alpha", ownedPolicy("slack"));
-const bridge = require("./dist/lib/actions/sandbox/mcp-bridge.js");
+const bridge = require("./src/lib/actions/sandbox/mcp-bridge.js");
 (async () => {
   const preparation = await bridge.prepareMcpBridgesForDestroy("alpha");
   failProviderDelete = "alpha-mcp-slack";
@@ -358,7 +530,9 @@ const bridge = require("./dist/lib/actions/sandbox/mcp-bridge.js");
     expect(payload.afterRetry.customPolicies).toBeUndefined();
     expect(payload.providers).toEqual([]);
     expect(
-      payload.calls.filter((call) => call === "sandbox provider detach alpha alpha-mcp-github"),
+      payload.calls.filter((call) =>
+        call.startsWith("sandbox provider detach alpha alpha-mcp-github "),
+      ),
     ).toHaveLength(1);
   });
 
@@ -370,7 +544,7 @@ registry.registerSandbox({
   mcp: { bridges: { github: bridgeEntries.github } },
 });
 registry.addCustomPolicy("alpha", ownedPolicy("github"));
-const bridge = require("./dist/lib/actions/sandbox/mcp-bridge.js");
+const bridge = require("./src/lib/actions/sandbox/mcp-bridge.js");
 (async () => {
   await bridge.prepareMcpBridgesForDestroy("alpha");
   const callsAfterFirstPrepare = calls.length;
@@ -404,9 +578,11 @@ const bridge = require("./dist/lib/actions/sandbox/mcp-bridge.js");
     };
     expect(payload.retry.destroyAlreadyPrepared).toBe(true);
     expect(payload.retry.destroyAlreadyPending).toBe(false);
-    expect(payload.calls.slice(0, payload.callsAfterFirstPrepare)).toContain(
-      "sandbox provider detach alpha alpha-mcp-github",
-    );
+    expect(
+      payload.calls
+        .slice(0, payload.callsAfterFirstPrepare)
+        .some((call) => call.startsWith("sandbox provider detach alpha alpha-mcp-github ")),
+    ).toBe(true);
     expect(
       payload.calls
         .slice(payload.callsAfterFirstPrepare)
@@ -419,7 +595,10 @@ const bridge = require("./dist/lib/actions/sandbox/mcp-bridge.js");
 
   it("does not let force delete a drifted global provider", () => {
     const result = runDestroyLifecycleScenario(`
-providers.set("alpha-mcp-github", "OTHER_TOKEN");
+providers.set("alpha-mcp-github", {
+  credential: "OTHER_TOKEN",
+  id: "11111111-2222-4333-8444-555555555555",
+});
 registry.registerSandbox({
   name: "alpha",
   agent: "openclaw",
@@ -429,7 +608,7 @@ registry.registerSandbox({
   },
 });
 registry.addCustomPolicy("alpha", ownedPolicy("github"));
-const bridge = require("./dist/lib/actions/sandbox/mcp-bridge.js");
+const bridge = require("./src/lib/actions/sandbox/mcp-bridge.js");
 (async () => {
   const sandbox = registry.getSandbox("alpha");
   const preparation = {
@@ -465,6 +644,8 @@ const bridge = require("./dist/lib/actions/sandbox/mcp-bridge.js");
     expect(payload.message).toContain("--force does not delete");
     expect(payload.sandbox.mcp.bridges).toHaveProperty("github");
     expect(payload.providers).toContain("alpha-mcp-github");
-    expect(payload.calls).not.toContain("provider delete alpha-mcp-github");
+    expect(
+      payload.calls.some((call) => call.startsWith("provider delete alpha-mcp-github ")),
+    ).toBe(false);
   });
 });

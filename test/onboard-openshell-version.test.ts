@@ -14,7 +14,7 @@ const {
   getInstalledOpenshellVersion,
   getStableGatewayImageRef,
   versionGte,
-} = require("../dist/lib/onboard") as {
+} = require("../src/lib/onboard") as {
   getBlueprintMaxOpenshellVersion: (rootDir?: string) => string | null;
   getBlueprintMinOpenshellVersion: (rootDir?: string) => string | null;
   getInstalledOpenshellVersion: (versionOutput?: string | null) => string | null;
@@ -22,7 +22,7 @@ const {
   versionGte: (left?: string | null, right?: string | null) => boolean;
 };
 
-const installModule = require("../dist/lib/onboard/openshell-install") as {
+const installModule = require("../src/lib/onboard/openshell-install") as {
   parseOpenshellReleaseTag: (tag: unknown) => string | null;
   resolveOpenshellInstallVersion: (
     available: readonly string[],
@@ -39,7 +39,7 @@ const installModule = require("../dist/lib/onboard/openshell-install") as {
   };
 };
 
-const pinModule = require("../dist/lib/onboard/openshell-pin") as {
+const pinModule = require("../src/lib/onboard/openshell-pin") as {
   resolveOpenshellInstallPin: (deps: {
     getBlueprintMinOpenshellVersion?: () => string | null;
     getBlueprintMaxOpenshellVersion: () => string | null;
@@ -399,10 +399,8 @@ describe("resolveOpenshellInstallPin", () => {
 });
 
 describe("computeOpenshellInstallEnv", () => {
-  it.each([
-    "dev",
-    "artifact",
-  ])("does not apply stable release discovery to the %s channel", (channel) => {
+  it("does not apply stable release discovery to the dev channel", () => {
+    const channel = "dev";
     const result = pinModule.computeOpenshellInstallEnv(
       { NEMOCLAW_OPENSHELL_CHANNEL: channel },
       {

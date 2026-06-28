@@ -1,1855 +1,126 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import crypto from "node:crypto";
-import dns from "node:dns/promises";
-import YAML from "yaml";
-
-import { runOpenshellProviderCommand } from "../../actions/global";
-import { stripAnsi } from "../../adapters/openshell/client";
-import { type AgentDefinition, type AgentMcpAdapter, loadAgent } from "../../agent/defs";
-import { waitUntil } from "../../core/wait";
-import { recoverNamedGatewayRuntime } from "../../gateway-runtime-action";
+import type { AgentDefinition, AgentMcpAdapter } from "../../agent/defs";
 import * as policies from "../../policy";
-import { shellQuote } from "../../runner";
-import {
-  isBlockedMcpUrlTargetHost,
-  isOpenShellMcpHostAlias,
-  MCP_SERVER_URL_MAX_LENGTH,
-} from "../../security/mcp-url-target";
-import { redact } from "../../security/redact";
 import { withMcpLifecycleLock } from "../../state/mcp-lifecycle-lock";
 import type { McpBridgeEntry, SandboxEntry } from "../../state/registry";
 import * as registry from "../../state/registry";
-import { getSandboxTargetGatewayName } from "./gateway-target";
-import { executeSandboxCommand, executeSandboxExecCommand } from "./process-recovery";
-
-export const MCPORTER_VERSION = "0.7.3";
-export { MCP_SERVER_URL_MAX_LENGTH };
-// deepagents-code 0.1.12 auto-discovers this as the user-level MCP config.
-// `/sandbox/.mcp.json` is project-level and is intentionally rejected by
-// headless `dcode -n` unless project MCP has been separately trusted.
-export const DEEPAGENTS_MCP_CONFIG_PATH = "/sandbox/.deepagents/.mcp.json";
-export const MCP_BRIDGE_POLICY_SOURCE = "generated:nemoclaw-mcp-bridge";
-export const MCP_BRIDGE_POLICY_MAX_BODY_BYTES = 131_072;
-export const MCP_BRIDGE_ALLOWED_METHODS = [
-  "initialize",
-  "notifications/initialized",
-  "ping",
-  "tools/list",
-  "tools/call",
-  "resources/list",
-  "resources/read",
-  "resources/templates/list",
-  "resources/subscribe",
-  "resources/unsubscribe",
-  "prompts/list",
-  "prompts/get",
-  "tasks/list",
-  "tasks/get",
-  "tasks/update",
-  "tasks/result",
-  "tasks/cancel",
-  "completion/complete",
-  "logging/setLevel",
-  "server/discover",
-  "messages/listen",
-  "notifications/cancelled",
-  "notifications/progress",
-  "notifications/roots/list_changed",
-  "notifications/elicitation/complete",
-] as const;
-
-const VALID_SERVER_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
-const VALID_ENV_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
-const VALID_SANDBOX_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
-// Keep this synchronized with OpenShell google_cloud::STATIC_CONFIG_KEYS.
-// Those keys are intentionally de-placeholderized for child SDK startup and
-// therefore cannot be used for a host-only bearer credential.
-const OPENSHELL_RAW_CHILD_ENV_KEYS = new Set([
-  "GCP_PROJECT_ID",
-  "GOOGLE_CLOUD_PROJECT",
-  "CLOUD_ML_REGION",
-  "GCP_LOCATION",
-  "GCP_SERVICE_ACCOUNT_EMAIL",
-  "GOOSE_PROVIDER",
-  "ANTHROPIC_VERTEX_PROJECT_ID",
-  "VERTEX_LOCATION",
-]);
-const OPENSHELL_REWRITTEN_CHILD_ENV_KEYS = new Set(["GCE_METADATA_HOST"]);
-const DEFAULT_AUTH_HEADER = "Authorization";
-const DEFAULT_AUTH_SCHEME = "Bearer";
-const MCP_PROVIDER_HASH_BYTES = 8;
-export class McpBridgeError extends Error {
-  constructor(
-    message: string,
-    readonly exitCode = 1,
-  ) {
-    super(message);
-    this.name = "McpBridgeError";
-  }
-}
-
-export interface ParsedEnvReference {
-  name: string;
-  value?: string;
-}
-
-export interface ParsedMcpAddArgs {
-  server: string;
-  url: string;
-  env: ParsedEnvReference[];
-}
-
-export interface McpBridgeAddOptions extends ParsedMcpAddArgs {}
-
-export interface McpBridgeStatus {
-  server: string;
-  agent: string;
-  support: {
-    supported: boolean;
-    mode: "bridge" | "disabled";
-    adapter?: AgentMcpAdapter;
-    reason?: string;
-  };
-  url?: string;
-  env: {
-    names: string[];
-    missing: string[];
-    ready: boolean;
-  };
-  provider: {
-    name?: string;
-    registryPresent: boolean;
-    gatewayPresent: boolean | null;
-    attached: boolean | null;
-    credentialReady: boolean | null;
-    detail?: string;
-  };
-  policy: {
-    name?: string;
-    registryPresent: boolean;
-    gatewayPresent: boolean | null;
-  };
-  adapter: {
-    registered: boolean | null;
-    detail?: string;
-  };
-  addState?: "prepared" | "preflighted";
-  addedAt?: string;
-  updatedAt?: string;
-}
-
-interface McpBridgeJsonSummary {
-  sandbox: string;
-  agent: string;
-  support: McpBridgeStatus["support"];
-  bridges: McpBridgeStatus[];
-}
-
-type OpenShellCommandResult = {
-  status: number | null;
-  stdout?: string | Buffer | null;
-  stderr?: string | Buffer | null;
-};
-
-type McpProviderInspection = {
-  exists: boolean | null;
-  type: string | null;
-  credentialKeys: string[] | null;
-  error?: string;
-};
-
-function nowIso(): string {
-  return new Date().toISOString();
-}
-
-function validateSandboxName(name: string): void {
-  if (!name || name.length > 63 || !VALID_SANDBOX_RE.test(name)) {
-    throw new McpBridgeError(
-      `Invalid sandbox name '${name}'. Names must be 1-63 lowercase alphanumeric characters with optional internal hyphens.`,
-      2,
-    );
-  }
-}
-
-export function validateMcpServerName(name: string): void {
-  if (!VALID_SERVER_RE.test(name)) {
-    throw new McpBridgeError(
-      `Invalid MCP server name '${name}'. Names must start with a letter and contain only letters, digits, hyphens, and underscores.`,
-      2,
-    );
-  }
-}
-
-export function validateMcpCredentialEnvName(name: string): void {
-  if (!VALID_ENV_RE.test(name)) {
-    throw new McpBridgeError(
-      `Invalid environment variable name '${name}'. Names must match [A-Za-z_][A-Za-z0-9_]*.`,
-      2,
-    );
-  }
-  if (OPENSHELL_RAW_CHILD_ENV_KEYS.has(name)) {
-    throw new McpBridgeError(
-      `MCP credential environment name '${name}' is materialized as a raw child-process value by OpenShell's Google Cloud compatibility path. Use a distinct secret name to preserve the host-only credential boundary.`,
-      2,
-    );
-  }
-  if (OPENSHELL_REWRITTEN_CHILD_ENV_KEYS.has(name)) {
-    throw new McpBridgeError(
-      `MCP credential environment name '${name}' is rewritten by OpenShell's Google Cloud metadata compatibility path. Use a distinct secret name so credential attachment remains deterministic.`,
-      2,
-    );
-  }
-}
-
-export function normalizeMcpServerUrl(rawUrl: string): string {
-  if (rawUrl.length > MCP_SERVER_URL_MAX_LENGTH) {
-    throw new McpBridgeError(
-      `MCP server URL must be at most ${MCP_SERVER_URL_MAX_LENGTH} characters.`,
-      2,
-    );
-  }
-  let parsed: URL;
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
-    throw new McpBridgeError(`Invalid MCP server URL '${rawUrl}'.`, 2);
-  }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new McpBridgeError("MCP server URL must use http:// or https://.", 2);
-  }
-  if (!parsed.hostname) {
-    throw new McpBridgeError("MCP server URL must include a hostname.", 2);
-  }
-  if (/[*{};]/.test(parsed.hostname)) {
-    throw new McpBridgeError(
-      "MCP server URL hosts must be literal; wildcard and glob hostnames are not supported.",
-      2,
-    );
-  }
-  if (parsed.hostname.startsWith("[") && parsed.hostname.endsWith("]")) {
-    throw new McpBridgeError(
-      "IPv6-literal MCP server URLs are not supported by the current OpenShell proxy target parser. Use a DNS hostname with public A/AAAA records.",
-      2,
-    );
-  }
-  if (parsed.username || parsed.password) {
-    throw new McpBridgeError(
-      "MCP server URL must not embed credentials. Use --env KEY so OpenShell resolves host-only credentials.",
-      2,
-    );
-  }
-  if (parsed.search) {
-    throw new McpBridgeError(
-      "MCP server URLs must not include a query string because URLs are persisted and displayed. Put credentials in --env and use a stable endpoint path.",
-      2,
-    );
-  }
-  if (parsed.hash) {
-    throw new McpBridgeError(
-      "MCP server URLs must not include a fragment because fragments are not sent to the server.",
-      2,
-    );
-  }
-  if (parsed.port === "0") {
-    throw new McpBridgeError("MCP server URL port must be between 1 and 65535.", 2);
-  }
-  if (
-    /%[0-9a-f]{2}/i.test(rawUrl) ||
-    rawUrl.includes("\\") ||
-    /[\*\[\]\{\};]/.test(parsed.pathname)
-  ) {
-    throw new McpBridgeError(
-      "MCP server URL paths must be literal and canonical; percent escapes, backslashes, semicolons, and glob metacharacters are not supported.",
-      2,
-    );
-  }
-  if (isOpenShellMcpHostAlias(parsed.hostname) && parsed.hostname.endsWith(".")) {
-    // OpenShell's trusted host-alias matcher requires the canonical spelling.
-    parsed.hostname = parsed.hostname.slice(0, -1);
-  }
-  validateMcpServerUrlTarget(parsed);
-  if (parsed.protocol === "http:" && !isOpenShellMcpHostAlias(parsed.hostname)) {
-    throw new McpBridgeError(
-      "Public MCP server URLs must use https:// so provider credentials are encrypted in transit. Plain HTTP is allowed only for OpenShell host aliases.",
-      2,
-    );
-  }
-  if (!parsed.pathname) parsed.pathname = "/";
-  const normalized = parsed.toString();
-  if (normalized.length > MCP_SERVER_URL_MAX_LENGTH) {
-    throw new McpBridgeError(
-      `MCP server URL must be at most ${MCP_SERVER_URL_MAX_LENGTH} characters after normalization.`,
-      2,
-    );
-  }
-  return normalized;
-}
-
-function validateMcpServerUrlTarget(parsed: URL): void {
-  if (isBlockedMcpUrlTargetHost(parsed.hostname)) {
-    throw new McpBridgeError(
-      `MCP server URL host '${parsed.hostname}' is a private, local, or special-use IP address. Use host.openshell.internal for host MCP endpoints.`,
-      2,
-    );
-  }
-}
-
-async function validateMcpServerUrlResolvedTarget(parsed: URL): Promise<string[] | undefined> {
-  if (isOpenShellMcpHostAlias(parsed.hostname)) {
-    return undefined;
-  }
-  if (isBlockedMcpUrlTargetHost(parsed.hostname)) {
-    validateMcpServerUrlTarget(parsed);
-  }
-  let addresses: Array<{ address: string }>;
-  try {
-    addresses = await dns.lookup(parsed.hostname, {
-      all: true,
-      verbatim: true,
-    });
-  } catch (error) {
-    const detail = error instanceof Error && error.message ? ` ${error.message}` : "";
-    throw new McpBridgeError(
-      `MCP server URL host '${parsed.hostname}' could not be resolved before policy registration.${detail}`,
-      2,
-    );
-  }
-  if (addresses.length === 0) {
-    throw new McpBridgeError(
-      `MCP server URL host '${parsed.hostname}' resolved without any addresses before policy registration.`,
-      2,
-    );
-  }
-  for (const { address } of addresses) {
-    if (isBlockedMcpUrlTargetHost(address)) {
-      throw new McpBridgeError(
-        `MCP server URL host '${parsed.hostname}' resolves to private, local, or special-use address '${address}'. Use host.openshell.internal for host MCP endpoints.`,
-        2,
-      );
-    }
-  }
-  return [...new Set(addresses.map(({ address }) => address.toLowerCase()))];
-}
-
-function parseMcpUrl(rawUrl: string): URL {
-  return new URL(normalizeMcpServerUrl(rawUrl));
-}
-
-function getSandboxOrThrow(sandboxName: string): SandboxEntry {
-  const sandbox = registry.getSandbox(sandboxName);
-  if (!sandbox) {
-    throw new McpBridgeError(`Sandbox '${sandboxName}' not found.`, 1);
-  }
-  return sandbox;
-}
-
-function getSandboxAgentName(sandbox: SandboxEntry): string {
-  return sandbox.agent || "openclaw";
-}
-
-function getSandboxAgent(sandbox: SandboxEntry): AgentDefinition {
-  return loadAgent(getSandboxAgentName(sandbox));
-}
-
-function unsupportedMessage(agent: AgentDefinition): string {
-  const reason = agent.mcpCapability.reason
-    ? ` ${agent.mcpCapability.reason}`
-    : " MCP support is disabled for this agent.";
-  return `${agent.displayName} does not support managed MCP servers yet.${reason} Issue #566 tracks future design.`;
-}
-
-function assertBridgeSupported(agent: AgentDefinition): void {
-  if (agent.mcpCapability.support === "bridge") return;
-  throw new McpBridgeError(unsupportedMessage(agent), 1);
-}
-
-function getBridgeAdapter(agent: AgentDefinition): AgentMcpAdapter {
-  assertBridgeSupported(agent);
-  const adapter = agent.mcpCapability.adapter;
-  if (!adapter) {
-    throw new McpBridgeError(
-      `${agent.displayName} declares MCP support but does not declare an adapter.`,
-      1,
-    );
-  }
-  return adapter;
-}
-
-function isAgentMcpAdapter(value: unknown): value is AgentMcpAdapter {
-  return value === "mcporter" || value === "hermes-config" || value === "deepagents-config";
-}
-
-function getEntryAdapter(
-  entry: Pick<McpBridgeEntry, "adapter"> | undefined,
-  agent: AgentDefinition,
-): AgentMcpAdapter | null {
-  if (entry && isAgentMcpAdapter(entry.adapter)) return entry.adapter;
-  return agent.mcpCapability.support === "bridge" && agent.mcpCapability.adapter
-    ? agent.mcpCapability.adapter
-    : null;
-}
-
-function bridgeState(sandbox: SandboxEntry): Record<string, McpBridgeEntry> {
-  return sandbox.mcp?.bridges ?? {};
-}
-
-function setBridgeState(sandboxName: string, bridges: Record<string, McpBridgeEntry>): void {
-  const mcpState = registry.getSandbox(sandboxName)?.mcp;
-  const destroyPreparedAt = mcpState?.destroyPreparedAt;
-  const destroyPendingAt = mcpState?.destroyPendingAt;
-  const updated = registry.updateSandbox(sandboxName, {
-    mcp:
-      Object.keys(bridges).length > 0
-        ? {
-            bridges,
-            ...(destroyPreparedAt ? { destroyPreparedAt } : {}),
-            ...(destroyPendingAt ? { destroyPendingAt } : {}),
-          }
-        : undefined,
-  });
-  if (!updated) {
-    throw new McpBridgeError(`Could not persist MCP lifecycle state for sandbox '${sandboxName}'.`);
-  }
-}
-
-function assertMcpDestroyNotPending(sandbox: SandboxEntry): void {
-  if (!sandbox.mcp?.destroyPreparedAt && !sandbox.mcp?.destroyPendingAt) return;
-  throw new McpBridgeError(
-    `Sandbox '${sandbox.name}' has an incomplete MCP destroy transaction. Re-run the sandbox destroy command to finish cleanup before using MCP commands.`,
-  );
-}
-
-function assertNoDerivedResourceCollision(
-  sandbox: SandboxEntry,
-  server: string,
-  providerName: string | undefined,
-  policyName: string,
-): void {
-  const conflictingCustomPolicy = sandbox.customPolicies?.find(
-    (policy) => policy.name === policyName && policy.sourcePath !== MCP_BRIDGE_POLICY_SOURCE,
-  );
-  if (conflictingCustomPolicy || sandbox.policies?.includes(policyName)) {
-    throw new McpBridgeError(
-      `Generated MCP policy name '${policyName}' conflicts with an existing non-MCP policy. Choose a different server name.`,
-      2,
-    );
-  }
-  for (const entry of Object.values(bridgeState(sandbox))) {
-    if (entry.server === server) continue;
-    const providerCollision =
-      providerName !== undefined &&
-      entry.providerName !== undefined &&
-      entry.providerName === providerName;
-    if (providerCollision || entry.policyName === policyName) {
-      throw new McpBridgeError(
-        `MCP server '${server}' conflicts with existing server '${entry.server}' after OpenShell resource-name normalization. Choose a name that differs beyond case, hyphens, and underscores.`,
-        2,
-      );
-    }
-  }
-}
-
-export function parseMcpAddArgs(argv: string[]): ParsedMcpAddArgs {
-  const env: ParsedEnvReference[] = [];
-  let server = "";
-  let url = "";
-
-  for (let i = 0; i < argv.length; i++) {
-    const token = argv[i];
-    if (token === "--") {
-      throw new McpBridgeError(
-        "Host stdio MCP commands are not supported. Use --url so OpenShell can enforce MCP traffic and provider credentials.",
-        2,
-      );
-    }
-    if (token === "--env" || token === "-e") {
-      const raw = argv[++i] ?? "";
-      const eq = raw.indexOf("=");
-      const name = eq >= 0 ? raw.slice(0, eq) : raw;
-      validateMcpCredentialEnvName(name);
-      if (eq >= 0) {
-        throw new McpBridgeError(
-          "Inline --env KEY=VALUE is not accepted because it exposes the secret in the NemoClaw process arguments and shell history. Export KEY, then pass --env KEY.",
-          2,
-        );
-      }
-      env.push({ name });
-      continue;
-    }
-    if (token?.startsWith("--env=")) {
-      const raw = token.slice("--env=".length);
-      const eq = raw.indexOf("=");
-      const name = eq >= 0 ? raw.slice(0, eq) : raw;
-      validateMcpCredentialEnvName(name);
-      if (eq >= 0) {
-        throw new McpBridgeError(
-          "Inline --env KEY=VALUE is not accepted because it exposes the secret in the NemoClaw process arguments and shell history. Export KEY, then pass --env KEY.",
-          2,
-        );
-      }
-      env.push({ name });
-      continue;
-    }
-    if (token === "--url") {
-      url = normalizeMcpServerUrl(argv[++i] ?? "");
-      continue;
-    }
-    if (token?.startsWith("--url=")) {
-      url = normalizeMcpServerUrl(token.slice("--url=".length));
-      continue;
-    }
-    if (token?.startsWith("-")) {
-      throw new McpBridgeError(`Unknown mcp add option: ${token}`, 2);
-    }
-    if (!server) {
-      server = token ?? "";
-      validateMcpServerName(server);
-      continue;
-    }
-    throw new McpBridgeError(
-      "Usage: nemoclaw <sandbox> mcp add <server> --url <http-mcp-url> --env KEY",
-      2,
-    );
-  }
-
-  if (!server) {
-    throw new McpBridgeError(
-      "Usage: nemoclaw <sandbox> mcp add <server> --url <http-mcp-url> --env KEY",
-      2,
-    );
-  }
-  if (!url) {
-    throw new McpBridgeError("MCP server URL is required. Pass --url <http-mcp-url>.", 2);
-  }
-  if (env.length !== 1) {
-    throw new McpBridgeError(
-      "Authenticated MCP requires exactly one --env KEY bearer credential reference.",
-      2,
-    );
-  }
-
-  return { server, url, env };
-}
-
-function uniqueEnvNames(env: readonly ParsedEnvReference[] | readonly string[]): string[] {
-  const names = env.map((entry) => (typeof entry === "string" ? entry : entry.name));
-  return [...new Set(names)];
-}
-
-function assertAuthenticatedCredentialReference(env: readonly ParsedEnvReference[]): void {
-  if (env.length !== 1) {
-    throw new McpBridgeError(
-      "Authenticated MCP requires exactly one --env KEY bearer credential reference.",
-      2,
-    );
-  }
-  validateMcpCredentialEnvName(env[0].name);
-}
-
-function assertAuthenticatedBridgeEntry(entry: McpBridgeEntry): void {
-  if (!Array.isArray(entry.env) || entry.env.length !== 1 || !entry.providerName) {
-    throw new McpBridgeError(
-      `MCP server '${entry.server}' has no complete authenticated credential binding. Remove it with --force, then add it again with --env KEY.`,
-      2,
-    );
-  }
-  validateMcpCredentialEnvName(entry.env[0]);
-}
-
-export function resolveCredentialEnv(env: readonly ParsedEnvReference[]): Record<string, string> {
-  const resolved: Record<string, string> = {};
-  for (const entry of env) {
-    validateMcpCredentialEnvName(entry.name);
-    const value = entry.value ?? process.env[entry.name];
-    if (value !== undefined && value !== "") {
-      resolved[entry.name] = value;
-    }
-  }
-  return resolved;
-}
-
-export function buildMcpBridgeProviderName(sandboxName: string, server: string): string {
-  validateSandboxName(sandboxName);
-  validateMcpServerName(server);
-  const serverSlug = server
-    .toLowerCase()
-    .replace(/_/g, "-")
-    .replace(/[^a-z0-9-]/g, "-");
-  const base = `${sandboxName}-mcp-${serverSlug}`.replace(/-+/g, "-").replace(/^-|-$/g, "");
-  if (base.length <= 63) return base;
-  const hash = crypto
-    .createHash("sha256")
-    .update(`${sandboxName}:${server}`)
-    .digest("hex")
-    .slice(0, MCP_PROVIDER_HASH_BYTES * 2);
-  const suffix = `-${hash}`;
-  return `${base.slice(0, 63 - suffix.length).replace(/-+$/g, "")}${suffix}`;
-}
-
-export function buildMcpBridgePolicyName(server: string): string {
-  validateMcpServerName(server);
-  return `mcp-bridge-${server.toLowerCase().replace(/_/g, "-")}`;
-}
-
-function buildMcpBridgePolicyKey(server: string): string {
-  return buildMcpBridgePolicyName(server).replace(/-/g, "_");
-}
-
-function endpointPort(url: URL): number {
-  if (url.port) return Number.parseInt(url.port, 10);
-  return url.protocol === "https:" ? 443 : 80;
-}
-
-function endpointPath(url: URL): string {
-  return url.pathname || "/";
-}
-
-function binariesForAdapter(adapter: AgentMcpAdapter): Array<{ path: string }> {
-  switch (adapter) {
-    case "mcporter":
-      return [
-        { path: "/usr/local/bin/mcporter" },
-        { path: "/usr/bin/mcporter" },
-        { path: "/usr/local/bin/openclaw" },
-        // Both npm entrypoints are #!/usr/bin/env node scripts. OpenShell binds
-        // policy to /proc/<pid>/exe and ancestors, not spoofable argv paths.
-        // The explicit endpoint/path/MCP method rules below are the compensating
-        // boundary for other Node processes in the sandbox.
-        { path: "/usr/local/bin/node" },
-        { path: "/usr/bin/node" },
-      ];
-    case "hermes-config":
-      return [{ path: "/usr/local/bin/hermes" }, { path: "/opt/hermes/.venv/bin/python*" }];
-    case "deepagents-config":
-      return [{ path: "/usr/local/bin/dcode" }, { path: "/opt/venv/bin/python3*" }];
-  }
-}
-
-function allowedIpsForEndpoint(
-  hostname: string,
-  resolvedAddresses: readonly string[] | undefined,
-): string[] | undefined {
-  if (isOpenShellMcpHostAlias(hostname)) {
-    return ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"];
-  }
-  return resolvedAddresses && resolvedAddresses.length > 0 ? [...resolvedAddresses] : undefined;
-}
-
-export function buildMcpBridgePolicyYaml(
-  server: string,
-  url: string,
-  adapter: AgentMcpAdapter = "mcporter",
-  resolvedAddresses?: readonly string[],
-): string {
-  const parsed = parseMcpUrl(url);
-  const key = buildMcpBridgePolicyKey(server);
-  const allowedIps = allowedIpsForEndpoint(parsed.hostname, resolvedAddresses);
-  return YAML.stringify({
-    preset: {
-      name: buildMcpBridgePolicyName(server),
-      description: `Generated MCP policy for ${server}`,
-    },
-    network_policies: {
-      [key]: {
-        name: key,
-        endpoints: [
-          {
-            host: parsed.hostname,
-            port: endpointPort(parsed),
-            path: endpointPath(parsed),
-            protocol: "mcp",
-            enforcement: "enforce",
-            ...(allowedIps ? { allowed_ips: allowedIps } : {}),
-            mcp: {
-              max_body_bytes: MCP_BRIDGE_POLICY_MAX_BODY_BYTES,
-              strict_tool_names: true,
-              allow_all_known_mcp_methods: false,
-            },
-            rules: MCP_BRIDGE_ALLOWED_METHODS.map((method) => ({
-              allow: { method },
-            })),
-          },
-        ],
-        binaries: binariesForAdapter(adapter),
-      },
-    },
-  });
-}
-
-function authPlaceholder(entry: Pick<McpBridgeEntry, "env">): string | null {
-  const envName = entry.env[0];
-  return envName ? `openshell:resolve:env:${envName}` : null;
-}
-
-function authorizationValue(entry: Pick<McpBridgeEntry, "env">): string | null {
-  const placeholder = authPlaceholder(entry);
-  return placeholder ? `${DEFAULT_AUTH_SCHEME} ${placeholder}` : null;
-}
-
-function entryHeaders(entry: Pick<McpBridgeEntry, "env">): Record<string, string> {
-  const authorization = authorizationValue(entry);
-  return authorization ? { [DEFAULT_AUTH_HEADER]: authorization } : {};
-}
-
-/**
- * mcporter@0.7.3 normalizes every HTTP definition returned by
- * `config get --json` with an `accept: application/json, text/event-stream`
- * header, even when that header is absent from the persisted config. Treat
- * only that synthesized header as equivalent; every persisted/other header
- * remains part of the ownership fingerprint.
- *
- * This function is also serialized into the in-sandbox inspection commands,
- * so keep it self-contained (no references to module-scope values).
- */
-export function mcporterHeadersMatchExpected(
-  actual: unknown,
-  expected: Record<string, string>,
-): boolean {
-  if (!actual || typeof actual !== "object" || Array.isArray(actual)) {
-    return false;
-  }
-  const actualHeaders = actual as Record<string, unknown>;
-  for (const [name, value] of Object.entries(expected)) {
-    if (actualHeaders[name] !== value) return false;
-  }
-  const extraNames = Object.keys(actualHeaders).filter((name) => !Object.hasOwn(expected, name));
-  if (extraNames.length === 0) return true;
-  if (extraNames.length !== 1) return false;
-  const [extraName] = extraNames;
-  return (
-    extraName.toLowerCase() === "accept" &&
-    actualHeaders[extraName] === "application/json, text/event-stream"
-  );
-}
-
-function mcporterHeaderMatcherSource(): string {
-  return `const mcporterHeadersMatchExpected = ${mcporterHeadersMatchExpected.toString()};`;
-}
-
-function ensureMcporter(sandboxName: string): void {
-  const check = executeSandboxCommand(sandboxName, "command -v mcporter");
-  if (check?.status === 0 && check.stdout.trim()) return;
-  throw new McpBridgeError(
-    `mcporter is not available in sandbox '${sandboxName}'. Rebuild with a NemoClaw image that includes mcporter@${MCPORTER_VERSION}.`,
-  );
-}
-
-export function buildOpenClawMcporterRegisterCommand(
-  entry: McpBridgeEntry,
-  replaceExisting = false,
-): string {
-  const args = ["mcporter", "config", "add", entry.server, "--url", entry.url];
-  const authorization = authorizationValue(entry);
-  if (authorization) args.push("--header", `${DEFAULT_AUTH_HEADER}=${authorization}`);
-  args.push("--scope", "home");
-  const addCommand = args.map(shellQuote).join(" ");
-  if (replaceExisting) return addCommand;
-  const getCommand = ["mcporter", "config", "get", entry.server, "--json"]
-    .map(shellQuote)
-    .join(" ");
-  return [
-    `if ${getCommand} >/dev/null 2>&1; then`,
-    `  echo ${shellQuote(`MCP server '${entry.server}' already exists in mcporter config and is not managed by NemoClaw.`)} >&2`,
-    "  exit 2",
-    "fi",
-    addCommand,
-  ].join("\n");
-}
-
-function pythonJsonLiteral(value: unknown): string {
-  return JSON.stringify(JSON.stringify(value));
-}
-
-export function buildHermesMcpRegisterCommand(
-  entry: McpBridgeEntry,
-  replaceExisting = false,
-): string[] {
-  const payload = {
-    server: entry.server,
-    url: entry.url,
-    headers: entryHeaders(entry),
-    replace_existing: replaceExisting,
-  };
-  return [
-    "/opt/hermes/.venv/bin/python",
-    "/usr/local/lib/nemoclaw/hermes-mcp-config-transaction.py",
-    "add",
-    "--payload",
-    JSON.stringify(payload),
-  ];
-}
-
-function buildHermesMcpRemoveCommand(entry: McpBridgeEntry, force = false): string[] {
-  const payload = {
-    server: entry.server,
-    url: entry.url,
-    headers: entryHeaders(entry),
-    force,
-  };
-  return [
-    "/opt/hermes/.venv/bin/python",
-    "/usr/local/lib/nemoclaw/hermes-mcp-config-transaction.py",
-    "remove",
-    "--payload",
-    JSON.stringify(payload),
-  ];
-}
-
-export function buildHermesMcpLifecycleExecArgs(
-  sandboxName: string,
-  command: readonly string[],
-): string[] {
-  return ["sandbox", "exec", "--name", sandboxName, "--no-tty", "--", ...command];
-}
-
-function hermesManagedServerConfig(entry: McpBridgeEntry): Record<string, unknown> {
-  const headers = entryHeaders(entry);
-  return {
-    url: entry.url,
-    enabled: true,
-    timeout: 120,
-    connect_timeout: 60,
-    tools: { resources: true, prompts: true },
-    ...(Object.keys(headers).length > 0 ? { headers } : {}),
-  };
-}
-
-function buildHermesMcpStatusCommand(entry: McpBridgeEntry): string {
-  const payload = {
-    server: entry.server,
-    expected: hermesManagedServerConfig(entry),
-  };
-  return [
-    "/opt/hermes/.venv/bin/python - <<'PY'",
-    "import json, pathlib, yaml",
-    `payload = json.loads(${pythonJsonLiteral(payload)})`,
-    'config_path = pathlib.Path("/sandbox/.hermes/config.yaml")',
-    "data = yaml.safe_load(config_path.read_text(encoding='utf-8')) if config_path.exists() else {}",
-    "servers = data.get('mcp_servers') if isinstance(data, dict) else None",
-    "present = isinstance(servers, dict) and payload['server'] in servers",
-    "server = servers.get(payload['server']) if present else None",
-    "ok = server == payload['expected']",
-    "print('registered' if ok else ('mismatch' if present else 'absent'))",
-    "PY",
-  ].join("\n");
-}
-
-export function buildDeepAgentsMcpRegisterCommand(
-  entry: McpBridgeEntry,
-  replaceExisting = false,
-): string {
-  const payload = {
-    server: entry.server,
-    expected: deepAgentsManagedServerConfig(entry),
-    replaceExisting,
-  };
-  return [
-    "python3 - <<'PY'",
-    "import json, os, pathlib, sys",
-    `payload = json.loads(${pythonJsonLiteral(payload)})`,
-    `config_path = pathlib.Path(${JSON.stringify(DEEPAGENTS_MCP_CONFIG_PATH)})`,
-    "data = {}",
-    "if config_path.exists():",
-    "    try:",
-    "        data = json.loads(config_path.read_text(encoding='utf-8') or '{}')",
-    "    except json.JSONDecodeError as exc:",
-    `        print(f'Invalid ${DEEPAGENTS_MCP_CONFIG_PATH}: {exc}', file=sys.stderr)`,
-    "        raise SystemExit(2)",
-    "if not isinstance(data, dict):",
-    `    print('Invalid ${DEEPAGENTS_MCP_CONFIG_PATH}: expected a JSON object', file=sys.stderr)`,
-    "    raise SystemExit(2)",
-    "servers = data.setdefault('mcpServers', {})",
-    "if not isinstance(servers, dict):",
-    `    print('Invalid ${DEEPAGENTS_MCP_CONFIG_PATH}: mcpServers must be an object', file=sys.stderr)`,
-    "    raise SystemExit(2)",
-    "if payload['server'] in servers and not payload['replaceExisting']:",
-    `    print(f"MCP server '{payload['server']}' already exists in ${DEEPAGENTS_MCP_CONFIG_PATH} and is not managed by NemoClaw.", file=sys.stderr)`,
-    "    raise SystemExit(2)",
-    "servers[payload['server']] = payload['expected']",
-    "tmp = config_path.with_name(config_path.name + '.nemoclaw-mcp.tmp')",
-    "tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + '\\n', encoding='utf-8')",
-    "os.chmod(tmp, 0o600)",
-    "os.replace(tmp, config_path)",
-    "os.chmod(config_path, 0o600)",
-    "PY",
-  ].join("\n");
-}
-
-function deepAgentsManagedServerConfig(entry: McpBridgeEntry): Record<string, unknown> {
-  const headers = entryHeaders(entry);
-  return {
-    type: "http",
-    url: entry.url,
-    ...(Object.keys(headers).length > 0 ? { headers } : {}),
-  };
-}
-
-export function buildDeepAgentsMcpRemoveCommand(entry: McpBridgeEntry, force = false): string {
-  const payload = {
-    server: entry.server,
-    expected: deepAgentsManagedServerConfig(entry),
-    force,
-  };
-  return [
-    "python3 - <<'PY'",
-    "import json, os, pathlib, sys",
-    `payload = json.loads(${pythonJsonLiteral(payload)})`,
-    `config_path = pathlib.Path(${JSON.stringify(DEEPAGENTS_MCP_CONFIG_PATH)})`,
-    "if not config_path.exists():",
-    "    raise SystemExit(0)",
-    "try:",
-    "    data = json.loads(config_path.read_text(encoding='utf-8') or '{}')",
-    "except json.JSONDecodeError as exc:",
-    `    print(f'Invalid ${DEEPAGENTS_MCP_CONFIG_PATH}: {exc}', file=sys.stderr)`,
-    "    raise SystemExit(2)",
-    "if not isinstance(data, dict):",
-    `    print('Invalid ${DEEPAGENTS_MCP_CONFIG_PATH}: expected a JSON object', file=sys.stderr)`,
-    "    raise SystemExit(2)",
-    "servers = data.get('mcpServers')",
-    "if servers is not None and not isinstance(servers, dict):",
-    `    print('Invalid ${DEEPAGENTS_MCP_CONFIG_PATH}: mcpServers must be an object', file=sys.stderr)`,
-    "    raise SystemExit(2)",
-    "if isinstance(servers, dict):",
-    "    present = payload['server'] in servers",
-    "    current = servers.get(payload['server'])",
-    "    if present and not payload['force']:",
-    "        if current != payload['expected']:",
-    `            print(f"Refusing to remove modified MCP server '{payload['server']}' from ${DEEPAGENTS_MCP_CONFIG_PATH}. Use --force to remove it.", file=sys.stderr)`,
-    "            raise SystemExit(2)",
-    "    servers.pop(payload['server'], None)",
-    "    if not servers:",
-    "        data.pop('mcpServers', None)",
-    "        if not data:",
-    "            config_path.unlink()",
-    "            raise SystemExit(0)",
-    "tmp = config_path.with_name(config_path.name + '.nemoclaw-mcp.tmp')",
-    "tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + '\\n', encoding='utf-8')",
-    "os.chmod(tmp, 0o600)",
-    "os.replace(tmp, config_path)",
-    "os.chmod(config_path, 0o600)",
-    "PY",
-  ].join("\n");
-}
-
-export function buildDeepAgentsMcpStatusCommand(entry: McpBridgeEntry): string {
-  const payload = {
-    server: entry.server,
-    expected: deepAgentsManagedServerConfig(entry),
-  };
-  return [
-    "python3 - <<'PY'",
-    "import json, pathlib",
-    `payload = json.loads(${pythonJsonLiteral(payload)})`,
-    `config_path = pathlib.Path(${JSON.stringify(DEEPAGENTS_MCP_CONFIG_PATH)})`,
-    "try:",
-    "    data = json.loads(config_path.read_text(encoding='utf-8') or '{}')",
-    "except Exception:",
-    "    data = {}",
-    "servers = data.get('mcpServers') if isinstance(data, dict) else None",
-    "present = isinstance(servers, dict) and payload['server'] in servers",
-    "server = servers.get(payload['server']) if present else None",
-    "ok = server == payload['expected']",
-    "print('registered' if ok else ('mismatch' if present else 'absent'))",
-    "PY",
-  ].join("\n");
-}
-
-export function redactBridgeSecretsForDisplay(
-  text: string,
-  entry?: Pick<McpBridgeEntry, "env">,
-  envValues: Record<string, string> = {},
-): string {
-  let output = redact(text || "");
-  for (const envName of entry?.env ?? []) {
-    const value = envValues[envName] ?? process.env[envName];
-    if (value) output = output.replaceAll(value, "***REDACTED***");
-  }
-  for (const value of Object.values(envValues)) {
-    if (value) output = output.replaceAll(value, "***REDACTED***");
-  }
-  return output
-    .replace(/\b(authorization\b["']?\s*[:=]\s*["']?Bearer\s+)([^"',\s}\]]+)/gi, "$1***REDACTED***")
-    .replace(/Authorization=Bearer\s+\S+/g, "Authorization=Bearer ***REDACTED***");
-}
-
-export function buildOpenClawMcporterInspectCommand(
-  entry: McpBridgeEntry,
-  failOnMismatch: boolean,
-): string {
-  const payload = {
-    server: entry.server,
-    url: entry.url,
-    headers: entryHeaders(entry),
-    failOnMismatch,
-  };
-  return [
-    "node - <<'NODE'",
-    'const { spawnSync } = require("node:child_process");',
-    `const expected = JSON.parse(${pythonJsonLiteral(payload)});`,
-    'const result = spawnSync("mcporter", ["config", "get", expected.server, "--json"], { encoding: "utf8" });',
-    "if (result.error) { console.error(result.error.message); process.exit(3); }",
-    "if (result.status !== 0) {",
-    '  const detail = `${result.stderr || ""}\n${result.stdout || ""}`;',
-    "  if (/not\\s+found|does\\s+not\\s+exist|unknown\\s+server/i.test(detail)) { console.log('absent'); process.exit(0); }",
-    "  console.error(detail.trim() || `mcporter config get exited ${result.status}`);",
-    "  process.exit(3);",
-    "}",
-    "let actual = null;",
-    "try { actual = JSON.parse(result.stdout); } catch {}",
-    'const headers = actual && actual.headers && typeof actual.headers === "object" ? actual.headers : {};',
-    mcporterHeaderMatcherSource(),
-    'const registered = !!actual && actual.name === expected.server && actual.transport === "http" && actual.baseUrl === expected.url && mcporterHeadersMatchExpected(headers, expected.headers);',
-    'console.log(registered ? "registered" : "mismatch");',
-    "if (!registered && expected.failOnMismatch) process.exit(2);",
-    "NODE",
-  ].join("\n");
-}
-
-export function buildOpenClawMcporterRemoveCommand(entry: McpBridgeEntry, force = false): string {
-  const payload = {
-    server: entry.server,
-    url: entry.url,
-    headers: entryHeaders(entry),
-    force,
-  };
-  return [
-    "node - <<'NODE'",
-    'const { spawnSync } = require("node:child_process");',
-    `const expected = JSON.parse(${pythonJsonLiteral(payload)});`,
-    'const get = spawnSync("mcporter", ["config", "get", expected.server, "--json"], { encoding: "utf8" });',
-    "if (get.error) { console.error(get.error.message); process.exit(3); }",
-    'const getDetail = `${get.stderr || ""}\n${get.stdout || ""}`;',
-    "const absent = get.status !== 0 && /not\\s+found|does\\s+not\\s+exist|unknown\\s+server/i.test(getDetail);",
-    "if (absent) process.exit(0);",
-    "if (get.status !== 0) { console.error(getDetail.trim()); process.exit(3); }",
-    "let actual = null; try { actual = JSON.parse(get.stdout); } catch {}",
-    'const headers = actual && actual.headers && typeof actual.headers === "object" ? actual.headers : {};',
-    mcporterHeaderMatcherSource(),
-    'const registered = !!actual && actual.name === expected.server && actual.transport === "http" && actual.baseUrl === expected.url && mcporterHeadersMatchExpected(headers, expected.headers);',
-    "if (!registered && !expected.force) { console.error(`Refusing to remove modified mcporter MCP server '${expected.server}'. Use --force to remove it.`); process.exit(2); }",
-    'const remove = spawnSync("mcporter", ["config", "remove", expected.server], { encoding: "utf8" });',
-    "if (remove.stdout) process.stdout.write(remove.stdout);",
-    "if (remove.stderr) process.stderr.write(remove.stderr);",
-    "if (remove.error) { console.error(remove.error.message); process.exit(3); }",
-    'const removeDetail = `${remove.stderr || ""}\n${remove.stdout || ""}`;',
-    "if (remove.status !== 0 && /not\\s+found|does\\s+not\\s+exist|unknown\\s+server/i.test(removeDetail)) process.exit(0);",
-    "process.exit(remove.status === null ? 3 : remove.status);",
-    "NODE",
-  ].join("\n");
-}
-
-function registerOpenClawAdapter(
-  sandboxName: string,
-  entry: McpBridgeEntry,
-  envValues: Record<string, string> = {},
-  replaceExisting = false,
-): void {
-  ensureMcporter(sandboxName);
-  const result = executeSandboxCommand(
-    sandboxName,
-    buildOpenClawMcporterRegisterCommand(entry, replaceExisting),
-  );
-  const output = redactBridgeSecretsForDisplay(
-    [result?.stdout, result?.stderr].filter(Boolean).join("\n").trim(),
-    entry,
-    envValues,
-  );
-  if (!result || result.status !== 0) {
-    throw new McpBridgeError(output || `mcporter config add failed for '${entry.server}'.`);
-  }
-}
-
-function runAdapterCommand(
-  sandboxName: string,
-  entry: Pick<McpBridgeEntry, "env">,
-  command: string,
-  failureMessage: string,
-  options: {
-    force?: boolean;
-    bestEffort?: boolean;
-    envValues?: Record<string, string>;
-  } = {},
-): void {
-  const result = executeSandboxCommand(sandboxName, command);
-  const output = redactBridgeSecretsForDisplay(
-    [result?.stdout, result?.stderr].filter(Boolean).join("\n").trim(),
-    entry,
-    options.envValues ?? {},
-  );
-  if (!result || result.status !== 0) {
-    if (options.bestEffort) return;
-    throw new McpBridgeError(output || failureMessage);
-  }
-}
-
-type AdapterRegistrationInspection =
-  | { state: "absent" | "registered" | "mismatch" }
-  | { state: "error"; detail: string };
-
-function inspectAgentAdapterRegistration(
-  sandboxName: string,
-  adapter: AgentMcpAdapter,
-  entry: McpBridgeEntry,
-): AdapterRegistrationInspection {
-  const command =
-    adapter === "mcporter"
-      ? buildOpenClawMcporterInspectCommand(entry, false)
-      : adapter === "hermes-config"
-        ? buildHermesMcpStatusCommand(entry)
-        : buildDeepAgentsMcpStatusCommand(entry);
-  const result = executeSandboxCommand(sandboxName, command);
-  if (!result) return { state: "error", detail: "sandbox unreachable" };
-  const output = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
-  if (result.status !== 0) {
-    return {
-      state: "error",
-      detail:
-        redactBridgeSecretsForDisplay(output, entry) ||
-        `MCP adapter inspection exited ${result.status}.`,
-    };
-  }
-  const state = output.split(/\r?\n/).at(-1)?.trim();
-  if (state === "absent" || state === "registered" || state === "mismatch") {
-    return { state };
-  }
-  return {
-    state: "error",
-    detail: redactBridgeSecretsForDisplay(
-      output || "MCP adapter inspection returned no state.",
-      entry,
-    ),
-  };
-}
-
-function parseLastJsonObject(output: string): Record<string, unknown> | null {
-  for (const line of output.trim().split(/\r?\n/).reverse()) {
-    try {
-      const parsed = JSON.parse(line) as unknown;
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed as Record<string, unknown>;
-      }
-    } catch {
-      // OpenShell may frame diagnostics around the command's JSON line.
-    }
-  }
-  return null;
-}
-
-function runHermesAdapterCommand(
-  sandboxName: string,
-  entry: McpBridgeEntry,
-  command: readonly string[],
-  failureMessage: string,
-  options: {
-    bestEffort?: boolean;
-    envValues?: Record<string, string>;
-    requireReload?: boolean;
-  } = {},
-): void {
-  // OpenShell current main runs this one-shot command with the sandbox's
-  // configured workload uid and network namespace. That is the same identity
-  // and loopback namespace as Hermes, without a listener, proxy, or persistent
-  // privileged service. The argv carries only an OpenShell placeholder.
-  let result: ReturnType<typeof runOpenshellProviderCommand>;
-  try {
-    result = runOpenshellProviderCommand(buildHermesMcpLifecycleExecArgs(sandboxName, command), {
-      ignoreError: true,
-      stdio: ["ignore", "pipe", "pipe"],
-      // Hermes can spend up to 180s draining, followed by a 60s health window.
-      timeout: 645_000,
-    });
-  } catch (error) {
-    if (options.bestEffort) return;
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new McpBridgeError(
-      redactBridgeSecretsForDisplay(detail, entry, options.envValues ?? {}) || failureMessage,
-    );
-  }
-  const output = redactBridgeSecretsForDisplay(
-    commandOutput(result, options.envValues ?? {}),
-    entry,
-    options.envValues ?? {},
-  );
-  if (result.status !== 0 || result.error) {
-    if (options.bestEffort) return;
-    const errorDetail = result.error
-      ? redactBridgeSecretsForDisplay(result.error.message, entry, options.envValues ?? {})
-      : "";
-    throw new McpBridgeError(errorDetail || output || failureMessage);
-  }
-  const stdout = result.stdout || "";
-  const response = parseLastJsonObject(stdout);
-  if (
-    response?.ok !== true ||
-    typeof response.changed !== "boolean" ||
-    typeof response.reloaded !== "boolean"
-  ) {
-    if (options.bestEffort) return;
-    throw new McpBridgeError(
-      `Hermes MCP lifecycle command returned an invalid response for '${entry.server}'.`,
-    );
-  }
-  if (options.requireReload && response.reloaded !== true) {
-    if (options.bestEffort) return;
-    throw new McpBridgeError(
-      `Hermes gateway was not running, so MCP server '${entry.server}' was not loaded.`,
-    );
-  }
-}
-
-function registerAgentAdapter(
-  sandboxName: string,
-  adapter: AgentMcpAdapter,
-  entry: McpBridgeEntry,
-  envValues: Record<string, string> = {},
-  options: { replaceExisting?: boolean } = {},
-): void {
-  switch (adapter) {
-    case "mcporter":
-      registerOpenClawAdapter(sandboxName, entry, envValues, options.replaceExisting === true);
-      return;
-    case "hermes-config":
-      runHermesAdapterCommand(
-        sandboxName,
-        entry,
-        buildHermesMcpRegisterCommand(entry, options.replaceExisting === true),
-        `Hermes MCP config registration failed for '${entry.server}'.`,
-        { envValues, requireReload: true },
-      );
-      return;
-    case "deepagents-config":
-      runAdapterCommand(
-        sandboxName,
-        entry,
-        buildDeepAgentsMcpRegisterCommand(entry, options.replaceExisting === true),
-        `Deep Agents Code MCP config registration failed for '${entry.server}'.`,
-        { envValues },
-      );
-      return;
-  }
-}
-
-function unregisterOpenClawAdapter(
-  sandboxName: string,
-  entry: McpBridgeEntry,
-  options: {
-    force?: boolean;
-    bestEffort?: boolean;
-    envValues?: Record<string, string>;
-  } = {},
-): void {
-  const result = executeSandboxCommand(
-    sandboxName,
-    buildOpenClawMcporterRemoveCommand(entry, options.force === true),
-  );
-  const output = redactBridgeSecretsForDisplay(
-    [result?.stdout, result?.stderr].filter(Boolean).join("\n").trim(),
-    entry,
-    options.envValues ?? {},
-  );
-  if (!result || result.status !== 0) {
-    if (options.bestEffort) return;
-    throw new McpBridgeError(output || `mcporter config remove failed for '${entry.server}'.`);
-  }
-}
-
-function unregisterAgentAdapter(
-  sandboxName: string,
-  adapter: AgentMcpAdapter,
-  entry: McpBridgeEntry,
-  options: {
-    force?: boolean;
-    bestEffort?: boolean;
-    envValues?: Record<string, string>;
-  } = {},
-): void {
-  switch (adapter) {
-    case "mcporter":
-      unregisterOpenClawAdapter(sandboxName, entry, options);
-      return;
-    case "hermes-config":
-      runHermesAdapterCommand(
-        sandboxName,
-        entry,
-        buildHermesMcpRemoveCommand(entry, options.force === true),
-        `Hermes MCP config removal failed for '${entry.server}'.`,
-        options,
-      );
-      return;
-    case "deepagents-config":
-      runAdapterCommand(
-        sandboxName,
-        entry,
-        buildDeepAgentsMcpRemoveCommand(entry, options.force === true),
-        `Deep Agents Code MCP config removal failed for '${entry.server}'.`,
-        options,
-      );
-      return;
-  }
-}
-
-export function redactCredentialValuesForDisplay(
-  value: string,
-  envValues: Record<string, string>,
-): string {
-  let redacted = redact(value);
-  for (const secret of Object.values(envValues)) {
-    if (!secret) continue;
-    redacted = redacted.split(secret).join("***REDACTED***");
-  }
-  return redacted;
-}
-
-function commandOutput(
-  result: OpenShellCommandResult,
-  envValues: Record<string, string> = {},
-): string {
-  const stdout =
-    typeof result.stdout === "string" ? result.stdout : (result.stdout?.toString() ?? "");
-  const stderr =
-    typeof result.stderr === "string" ? result.stderr : (result.stderr?.toString() ?? "");
-  return redactCredentialValuesForDisplay(`${stderr}${stdout}`, envValues)
-    .replace(/\r/g, "")
-    .trim();
-}
-
-export function parseMcpProviderMetadata(output: string): Omit<McpProviderInspection, "exists"> {
-  const clean = stripAnsi(output).replace(/\r/g, "");
-  const typeMatch = clean.match(/^\s*Type:\s*(\S.*?)\s*$/m);
-  const credentialMatch = clean.match(/^\s*Credential keys:\s*(.*?)\s*$/m);
-  const rawKeys = credentialMatch?.[1]?.trim();
-  return {
-    type: typeMatch?.[1]?.trim() || null,
-    credentialKeys:
-      rawKeys === undefined
-        ? null
-        : rawKeys === "<none>" || rawKeys === ""
-          ? []
-          : rawKeys.split(",").map((key) => key.trim()),
-  };
-}
-
-function inspectMcpProvider(providerName: string | undefined): McpProviderInspection {
-  if (!providerName) {
-    return { exists: false, type: null, credentialKeys: null };
-  }
-  const result = runOpenshellProviderCommand(["provider", "get", providerName], {
-    ignoreError: true,
-    stdio: ["ignore", "pipe", "pipe"],
-  }) as OpenShellCommandResult;
-  if (result.status !== 0) {
-    const output = commandOutput(result);
-    if (/not\s+found|NotFound|does\s+not\s+exist|unknown\s+provider/i.test(output)) {
-      return { exists: false, type: null, credentialKeys: null };
-    }
-    return {
-      exists: null,
-      type: null,
-      credentialKeys: null,
-      error: output || `Could not inspect OpenShell provider '${providerName}'.`,
-    };
-  }
-  return {
-    exists: true,
-    ...parseMcpProviderMetadata(commandOutput(result)),
-  };
-}
-
-function providerMatchesCredential(
-  inspection: McpProviderInspection,
-  expectedCredential: string | undefined,
-): boolean {
-  return (
-    inspection.exists === true &&
-    inspection.type === "generic" &&
-    expectedCredential !== undefined &&
-    inspection.credentialKeys?.length === 1 &&
-    inspection.credentialKeys[0] === expectedCredential
-  );
-}
-
-function providerShapeDetail(
-  inspection: McpProviderInspection,
-  expectedCredential: string | undefined,
-): string | undefined {
-  if (inspection.exists === null) return inspection.error ?? "provider inspection failed";
-  if (!inspection.exists) return undefined;
-  if (providerMatchesCredential(inspection, expectedCredential)) return undefined;
-  const type = inspection.type ?? "unparseable";
-  const keys = inspection.credentialKeys?.join(", ") || "none or unparseable";
-  return `Expected generic provider with only credential key '${expectedCredential ?? "<missing>"}', found type '${type}' with keys '${keys}'.`;
-}
-
-function assertMcpProviderRecoverable(entry: McpBridgeEntry): McpProviderInspection {
-  assertAuthenticatedBridgeEntry(entry);
-  const expectedCredential = entry.env[0];
-  const inspection = inspectMcpProvider(entry.providerName);
-  if (inspection.exists === null) {
-    throw new McpBridgeError(
-      inspection.error ?? `Could not inspect OpenShell provider '${entry.providerName}'.`,
-    );
-  }
-  if (inspection.exists) {
-    if (!providerMatchesCredential(inspection, expectedCredential)) {
-      throw new McpBridgeError(
-        `OpenShell provider '${entry.providerName}' no longer matches MCP server '${entry.server}'. ${providerShapeDetail(inspection, expectedCredential)}`,
-      );
-    }
-    return inspection;
-  }
-  if (!process.env[expectedCredential]) {
-    throw new McpBridgeError(
-      `OpenShell provider '${entry.providerName}' is missing. Export host environment variable '${expectedCredential}' before retrying so the authenticated MCP provider can be recreated.`,
-    );
-  }
-  return inspection;
-}
-
-async function preflightMcpEntryTargets(
-  entries: readonly McpBridgeEntry[],
-): Promise<Map<string, string[] | undefined>> {
-  for (const entry of entries) assertAuthenticatedBridgeEntry(entry);
-  const results = await Promise.all(
-    entries.map(async (entry) => {
-      const normalized = normalizeMcpServerUrl(entry.url);
-      if (normalized !== entry.url) {
-        throw new McpBridgeError(
-          `MCP server '${entry.server}' has a non-canonical stored URL. Remove it with --force and add it again before lifecycle operations.`,
-        );
-      }
-      const addresses = await validateMcpServerUrlResolvedTarget(new URL(normalized));
-      return [entry.server, addresses] as const;
-    }),
-  );
-  return new Map(results);
-}
-
-export function buildMcpBridgeProviderArgs(
-  action: "create" | "update",
-  providerName: string,
-  env: readonly ParsedEnvReference[],
-  envValues: Record<string, string>,
-): string[] {
-  const args =
-    action === "create"
-      ? ["provider", "create", "--name", providerName, "--type", "generic"]
-      : ["provider", "update", providerName];
-  for (const entry of env) {
-    validateMcpCredentialEnvName(entry.name);
-    const value = envValues[entry.name];
-    if (value !== undefined && value !== "") {
-      args.push("--credential", entry.name);
-    }
-  }
-  return args;
-}
-
-function upsertMcpProvider(
-  providerName: string,
-  env: readonly ParsedEnvReference[],
-  options: { allowExisting: boolean },
-): "created" | "updated" | "reused" | "none" {
-  const envNames = uniqueEnvNames(env);
-  if (envNames.length === 0) return "none";
-  const envValues = resolveCredentialEnv(env);
-  const inspection = inspectMcpProvider(providerName);
-  if (inspection.exists === null) {
-    throw new McpBridgeError(
-      inspection.error ?? `Could not inspect OpenShell provider '${providerName}'.`,
-    );
-  }
-  if (inspection.exists && !options.allowExisting) {
-    throw new McpBridgeError(
-      `OpenShell provider '${providerName}' already exists but is not owned by a registered MCP bridge. Remove or rename that provider before retrying.`,
-    );
-  }
-  if (inspection.exists && !providerMatchesCredential(inspection, envNames[0])) {
-    throw new McpBridgeError(
-      `OpenShell provider '${providerName}' no longer matches MCP server credential '${envNames[0]}'. ${providerShapeDetail(inspection, envNames[0])} Remove the stale provider and run mcp restart with the credential exported.`,
-    );
-  }
-  if (Object.keys(envValues).length === 0) {
-    if (inspection.exists) return "reused";
-    throw new McpBridgeError(
-      `Host environment variable '${envNames[0]}' is required to create MCP provider '${providerName}'.`,
-      1,
-    );
-  }
-  const action = inspection.exists ? "update" : "create";
-  const result = runOpenshellProviderCommand(
-    buildMcpBridgeProviderArgs(action, providerName, env, envValues),
-    {
-      ignoreError: true,
-      env: envValues,
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  ) as OpenShellCommandResult;
-  if (result.status !== 0) {
-    throw new McpBridgeError(
-      commandOutput(result, envValues) || `Failed to ${action} MCP provider '${providerName}'.`,
-    );
-  }
-  return action === "create" ? "created" : "updated";
-}
-
-function attachProvider(sandboxName: string, providerName: string | undefined): void {
-  if (!providerName) return;
-  const result = runOpenshellProviderCommand(
-    ["sandbox", "provider", "attach", sandboxName, providerName],
-    { ignoreError: true, stdio: ["ignore", "pipe", "pipe"] },
-  ) as OpenShellCommandResult;
-  if (result.status !== 0) {
-    const output = commandOutput(result);
-    if (/already\s+attached|AlreadyExists/i.test(output)) return;
-    throw new McpBridgeError(output || `Failed to attach MCP provider '${providerName}'.`);
-  }
-}
-
-const MCP_CREDENTIAL_SNAPSHOT_PATH_RE = /^\/tmp\/nemoclaw-mcp-provider-sync-[0-9a-f-]{36}$/;
-
-function validateMcpCredentialSnapshotPath(snapshotPath: string): void {
-  if (!MCP_CREDENTIAL_SNAPSHOT_PATH_RE.test(snapshotPath)) {
-    throw new McpBridgeError("Invalid MCP credential revision snapshot path.");
-  }
-}
-
-function mcpCredentialPlaceholderValidatorShell(envName: string): string[] {
-  validateMcpCredentialEnvName(envName);
-  const canonical = `openshell:resolve:env:${envName}`;
-  const revisionPrefix = "openshell:resolve:env:v";
-  const revisionSuffix = `_${envName}`;
-  return [
-    `canonical=${shellQuote(canonical)}`,
-    `prefix=${shellQuote(revisionPrefix)}`,
-    `suffix=${shellQuote(revisionSuffix)}`,
-    "valid_placeholder() {",
-    '  candidate="$1"',
-    '  [ "$candidate" = "$canonical" ] && return 0',
-    '  versioned="${candidate#"$prefix"}"',
-    '  [ "$versioned" != "$candidate" ] || return 1',
-    '  revision="${versioned%"$suffix"}"',
-    '  [ "$revision" != "$versioned" ] || return 1',
-    '  [ "$versioned" = "$revision$suffix" ] || return 1',
-    '  case "$revision" in ""|*[!0-9]*) return 1 ;; *) return 0 ;; esac',
-    "}",
-  ];
-}
-
-/**
- * Capture only a validated OpenShell placeholder in a descriptor opened with
- * noclobber. Raw environment values are never written or printed. The file is
- * used solely to compare the supervisor's provider revision across fresh execs.
- */
-export function buildMcpCredentialRevisionSnapshotCommand(
-  envName: string,
-  snapshotPath: string,
-): string {
-  validateMcpCredentialSnapshotPath(snapshotPath);
-  return [
-    ...mcpCredentialPlaceholderValidatorShell(envName),
-    `snapshot=${shellQuote(snapshotPath)}`,
-    "umask 077",
-    "set -C",
-    'exec 3>"$snapshot" || exit 1',
-    "set +C",
-    `value="\${${envName}-}"`,
-    '[ -z "$value" ] && exit 0',
-    'valid_placeholder "$value" || exit 1',
-    'printf "%s" "$value" >&3',
-  ].join("\n");
-}
-
-export function buildMcpCredentialReadinessCommand(
-  envName: string,
-  previousRevisionSnapshotPath?: string,
-): string {
-  if (previousRevisionSnapshotPath) {
-    validateMcpCredentialSnapshotPath(previousRevisionSnapshotPath);
-  }
-  return [
-    ...mcpCredentialPlaceholderValidatorShell(envName),
-    `value="\${${envName}-}"`,
-    'valid_placeholder "$value" || exit 1',
-    ...(previousRevisionSnapshotPath
-      ? [
-          `snapshot=${shellQuote(previousRevisionSnapshotPath)}`,
-          '[ -f "$snapshot" ] && [ ! -L "$snapshot" ] || exit 1',
-          'prior="$(cat -- "$snapshot")" || exit 1',
-          '[ -z "$prior" ] || valid_placeholder "$prior" || exit 1',
-          '[ -z "$prior" ] || [ "$value" != "$prior" ] || exit 1',
-        ]
-      : []),
-  ].join("\n");
-}
-
-function snapshotMcpCredentialRevision(sandboxName: string, entry: McpBridgeEntry): string {
-  assertAuthenticatedBridgeEntry(entry);
-  const snapshotPath = `/tmp/nemoclaw-mcp-provider-sync-${crypto.randomUUID()}`;
-  const result = executeSandboxExecCommand(
-    sandboxName,
-    buildMcpCredentialRevisionSnapshotCommand(entry.env[0], snapshotPath),
-  );
-  if (!result || result.status !== 0) {
-    throw new McpBridgeError(
-      `Could not capture the current OpenShell credential revision for sandbox '${sandboxName}'.`,
-    );
-  }
-  return snapshotPath;
-}
-
-function removeMcpCredentialRevisionSnapshot(
-  sandboxName: string,
-  snapshotPath: string | undefined,
-): void {
-  if (!snapshotPath) return;
-  validateMcpCredentialSnapshotPath(snapshotPath);
-  executeSandboxExecCommand(sandboxName, `rm -f -- ${shellQuote(snapshotPath)}`);
-}
-
-function waitForAttachedMcpCredential(
-  sandboxName: string,
-  entry: McpBridgeEntry,
-  options: { previousRevisionSnapshotPath?: string } = {},
-): void {
-  assertAuthenticatedBridgeEntry(entry);
-  const envName = entry.env[0];
-  const timeoutSeconds = Number.parseInt(
-    process.env.NEMOCLAW_MCP_PROVIDER_SYNC_TIMEOUT_SECONDS ?? "30",
-    10,
-  );
-  const ready = waitUntil(
-    () => {
-      // Each exec is a fresh OpenShell process. A status-zero comparison proves
-      // the supervisor has consumed the provider_env_revision without ever
-      // printing either a placeholder or a credential value.
-      const probe = executeSandboxExecCommand(
-        sandboxName,
-        buildMcpCredentialReadinessCommand(envName, options.previousRevisionSnapshotPath),
-      );
-      return probe?.status === 0;
-    },
-    Number.isFinite(timeoutSeconds) && timeoutSeconds > 0 ? timeoutSeconds : 30,
-    1_000,
-  );
-  if (!ready) {
-    throw new McpBridgeError(
-      `OpenShell did not synchronize the expected credential revision for placeholder '${envName}' into sandbox '${sandboxName}' after provider attachment or update.`,
-    );
-  }
-}
-
-export function providerDetachChangedState(status: number | null, output: string): boolean {
-  return (
-    status === 0 &&
-    !/\bwas\s+not\s+attached\b|\balready\s+detached\b|\bNotAttached\b/i.test(stripAnsi(output))
-  );
-}
-
-function detachProvider(
-  sandboxName: string,
-  providerName: string | undefined,
-  options: { bestEffort?: boolean } = {},
-): boolean {
-  if (!providerName) return false;
-  const result = runOpenshellProviderCommand(
-    ["sandbox", "provider", "detach", sandboxName, providerName],
-    {
-      ignoreError: true,
-      stdio: ["ignore", "pipe", "pipe"],
-      suppressOutput: true,
-    } as Record<string, unknown>,
-  ) as OpenShellCommandResult;
-  const output = commandOutput(result);
-  if (result.status !== 0) {
-    if (/not\s+attached|NotAttached|not\s+found|NotFound/i.test(output)) return false;
-    if (options.bestEffort) return false;
-    throw new McpBridgeError(output || `Failed to detach MCP provider '${providerName}'.`);
-  }
-  return providerDetachChangedState(result.status, output);
-}
-
-function deleteProvider(
-  providerName: string | undefined,
-  options: { allowMissing?: boolean; bestEffort?: boolean } = {},
-): void {
-  if (!providerName) return;
-  const result = runOpenshellProviderCommand(["provider", "delete", providerName], {
-    ignoreError: true,
-    stdio: ["ignore", "pipe", "pipe"],
-    suppressOutput: true,
-  } as Record<string, unknown>) as OpenShellCommandResult;
-  if (result.status !== 0) {
-    const output = commandOutput(result);
-    if (options.allowMissing && /not\s+found|NotFound/i.test(output)) return;
-    if (options.bestEffort) return;
-    throw new McpBridgeError(output || `Failed to delete MCP provider '${providerName}'.`);
-  }
-}
-
-function providerAttached(sandboxName: string, providerName: string | undefined): boolean | null {
-  if (!providerName) return null;
-  const result = runOpenshellProviderCommand(["sandbox", "provider", "list", sandboxName], {
-    ignoreError: true,
-    stdio: ["ignore", "pipe", "pipe"],
-  }) as OpenShellCommandResult;
-  if (result.status !== 0) return null;
-  const output = commandOutput(result);
-  return output.split(/\s+/).includes(providerName);
-}
-
-function applyGeneratedPolicy(
-  sandboxName: string,
-  entry: McpBridgeEntry,
-  resolvedAddresses?: readonly string[],
-): void {
-  const adapter = isAgentMcpAdapter(entry.adapter) ? entry.adapter : "mcporter";
-  const content = buildMcpBridgePolicyYaml(entry.server, entry.url, adapter, resolvedAddresses);
-  const policyKey = buildMcpBridgePolicyKey(entry.server);
-  const previousPolicy = registry
-    .getCustomPolicies(sandboxName)
-    .find(
-      (policy) =>
-        policy.name === entry.policyName && policy.sourcePath === MCP_BRIDGE_POLICY_SOURCE,
-    );
-  let ownsExistingPolicyKey = false;
-  if (previousPolicy) {
-    const previousState = policies.getPresetContentGatewayState(
-      sandboxName,
-      previousPolicy.content,
-    );
-    if (previousState !== "absent" && previousState !== "match") {
-      throw new McpBridgeError(
-        `Generated MCP policy '${entry.policyName}' has drifted or could not be inspected against its recorded content. Refusing to replace the live key.`,
-      );
-    }
-    // A prior ownership record may have been reserved immediately before a
-    // process died, so an absent key is safe to create. A present key is safe
-    // to replace only after its full content matches that ownership record.
-    ownsExistingPolicyKey = previousState === "match";
-  } else if (!previousPolicy) {
-    const unownedState = policies.getPresetContentGatewayState(sandboxName, content);
-    if (unownedState !== "absent") {
-      throw new McpBridgeError(
-        `Generated MCP policy key '${policyKey}' is already present or could not be inspected without a NemoClaw ownership record.`,
-      );
-    }
-  }
-
-  // Reserve/update ownership before the live gateway mutation. This avoids a
-  // successful policy set followed by a registry-write failure leaving an
-  // unowned live key that neither rollback nor retry can safely touch.
-  const ownershipRecorded = registry.addCustomPolicy(sandboxName, {
-    name: entry.policyName,
-    content,
-    sourcePath: MCP_BRIDGE_POLICY_SOURCE,
-  });
-  if (!ownershipRecorded) {
-    throw new McpBridgeError(
-      `Could not reserve ownership for generated MCP policy '${entry.policyName}'.`,
-    );
-  }
-  const ok = policies.applyPresetContent(sandboxName, entry.policyName, content, {
-    custom: { sourcePath: MCP_BRIDGE_POLICY_SOURCE },
-    allowedExistingNetworkPolicyKeys: ownsExistingPolicyKey ? [policyKey] : [],
-    nonFatal: true,
-    skipRegistryUpdate: true,
-  });
-  if (ok === false) {
-    const after = policies.getPresetContentGatewayState(sandboxName, content);
-    if (after !== "match") {
-      if (previousPolicy) {
-        registry.addCustomPolicy(sandboxName, previousPolicy);
-      } else {
-        registry.removeCustomPolicyByName(sandboxName, entry.policyName);
-      }
-    }
-    throw new McpBridgeError(`Failed to apply generated MCP policy '${entry.policyName}'.`);
-  }
-}
-
-function generatedPolicyContent(entry: McpBridgeEntry): string {
-  const adapter = isAgentMcpAdapter(entry.adapter) ? entry.adapter : "mcporter";
-  return buildMcpBridgePolicyYaml(entry.server, entry.url, adapter);
-}
-
-function assertGeneratedPolicyMutationSafe(sandboxName: string, entry: McpBridgeEntry): void {
-  const registeredPolicy = registry
-    .getCustomPolicies(sandboxName)
-    .find((policy) => policy.name === entry.policyName);
-  const content = registeredPolicy?.content ?? generatedPolicyContent(entry);
-  const state = policies.getPresetContentGatewayState(sandboxName, content);
-  const owned = registeredPolicy?.sourcePath === MCP_BRIDGE_POLICY_SOURCE;
-  if (state === "absent") return;
-  if (!owned || state !== "match") {
-    throw new McpBridgeError(
-      `Generated MCP policy '${entry.policyName}' is unowned, unreachable, or drifted. Refusing to mutate the adapter, provider, or same-key live policy until ownership is resolved.`,
-    );
-  }
-}
-
-function removeGeneratedPolicy(
-  sandboxName: string,
-  entry: McpBridgeEntry,
-  options: { bestEffort?: boolean } = {},
-): void {
-  const policyName = entry.policyName;
-  const registeredPolicy = registry
-    .getCustomPolicies(sandboxName)
-    .find((policy) => policy.name === policyName);
-  const content = registeredPolicy?.content ?? generatedPolicyContent(entry);
-  const gatewayState = policies.getPresetContentGatewayState(sandboxName, content);
-  if (gatewayState === "absent") {
-    if (registeredPolicy?.sourcePath === MCP_BRIDGE_POLICY_SOURCE) {
-      registry.removeCustomPolicyByName(sandboxName, policyName);
-    }
-    return;
-  }
-  const ownsRegistration = registeredPolicy?.sourcePath === MCP_BRIDGE_POLICY_SOURCE;
-  if (!ownsRegistration || gatewayState !== "match") {
-    if (options.bestEffort) return;
-    throw new McpBridgeError(
-      `Generated MCP policy '${policyName}' is unowned, unreachable, or no longer matches its registered content. Refusing to delete same-key policy state.`,
-    );
-  }
-  const ok = policies.removePreset(sandboxName, policyName, { nonFatal: true });
-  if (!ok) {
-    if (options.bestEffort) return;
-    throw new McpBridgeError(`Failed to remove generated MCP policy '${policyName}'.`);
-  }
-  registry.removeCustomPolicyByName(sandboxName, policyName);
-}
-
-function writeBridgeEntry(sandboxName: string, entry: McpBridgeEntry): void {
-  const sandbox = getSandboxOrThrow(sandboxName);
-  const bridges = { ...bridgeState(sandbox), [entry.server]: entry };
-  setBridgeState(sandboxName, bridges);
-}
-
-function removeBridgeEntry(sandboxName: string, server: string): void {
-  const sandbox = getSandboxOrThrow(sandboxName);
-  const bridges = { ...bridgeState(sandbox) };
-  delete bridges[server];
-  setBridgeState(sandboxName, bridges);
-}
-
-async function ensureSandboxGatewaySelected(sandboxName: string): Promise<void> {
-  const gatewayName = getSandboxTargetGatewayName(sandboxName);
-  const recovery = await recoverNamedGatewayRuntime({
-    gatewayName,
-  });
-  if (!recovery.recovered || recovery.after.state !== "healthy_named") {
-    throw new McpBridgeError(
-      `Could not select healthy OpenShell gateway '${gatewayName}' for sandbox '${sandboxName}' (before: ${recovery.before.state}, after: ${recovery.after.state}). Refusing to mutate MCP resources on another gateway.`,
-    );
-  }
-  // Pin every subsequent OpenShell subprocess in this lifecycle operation to
-  // the sandbox's recorded gateway. The globally selected gateway is mutable
-  // shared metadata and another NemoClaw process may select a sibling between
-  // this health check and the provider/policy mutation.
-  process.env.OPENSHELL_GATEWAY = gatewayName;
-}
+import {
+  inspectAgentAdapterRegistration,
+  registerAgentAdapter,
+  unregisterAgentAdapter,
+} from "./mcp-bridge-adapters";
+import {
+  isAgentMcpAdapter,
+  MCP_BRIDGE_POLICY_SOURCE,
+  type McpBridgeAddOptions,
+  McpBridgeError,
+  type McpBridgeStatus,
+} from "./mcp-bridge-contracts";
+import {
+  applyGeneratedPolicy,
+  assertGeneratedPolicyMutationSafe,
+  buildMcpBridgePolicyKey,
+  buildMcpBridgePolicyName,
+  buildMcpBridgePolicyYaml,
+  removeGeneratedPolicy,
+} from "./mcp-bridge-policy";
+import {
+  assertMcpGatewayCapability,
+  assertNoAttachedProviderCredentialCollision,
+  assertMcpProviderRecoverable,
+  assertMcpTransportRuntimeCapability,
+  attachProvider,
+  deleteProvider,
+  detachProvider,
+  inspectMcpProvider,
+  inspectMcpProviderAttachments,
+  type McpProviderInspection,
+  preflightMcpEntryTargets,
+  providerMatchesCredential,
+  providerShapeDetail,
+  removeMcpCredentialRevisionSnapshot,
+  snapshotMcpCredentialRevision,
+  upsertMcpProvider,
+  waitForAttachedMcpCredential,
+  waitForDetachedMcpCredential,
+} from "./mcp-bridge-provider";
+import {
+  assertMcpDestroyNotPending,
+  assertNoDerivedResourceCollision,
+  bridgeState,
+  ensureSandboxGatewaySelected,
+  getBridgeAdapter,
+  getSandboxAgent,
+  getSandboxOrThrow,
+  nowIso,
+  removeBridgeEntry,
+  setBridgeState,
+  writeBridgeEntry,
+} from "./mcp-bridge-state";
+import { buildJsonSummary, statusMcpBridge } from "./mcp-bridge-status";
+import {
+  assertAuthenticatedBridgeEntry,
+  assertAuthenticatedCredentialReference,
+  buildMcpBridgeProviderName,
+  normalizeMcpServerUrl,
+  parseMcpAddArgs,
+  resolveCredentialEnv,
+  uniqueEnvNames,
+  validateMcpServerName,
+  validateMcpServerUrlResolvedTarget,
+  validateSandboxName,
+} from "./mcp-bridge-validation";
+
+export {
+  buildDeepAgentsMcpRegisterCommand,
+  buildDeepAgentsMcpRemoveCommand,
+  buildDeepAgentsMcpStatusCommand,
+  buildHermesMcpLifecycleExecArgs,
+  buildHermesMcpRegisterCommand,
+  buildOpenClawMcporterInspectCommand,
+  buildOpenClawMcporterRegisterCommand,
+  buildOpenClawMcporterRemoveCommand,
+  DEEPAGENTS_MCP_CONFIG_PATH,
+  MCPORTER_VERSION,
+  mcporterHeadersMatchExpected,
+  parseAdapterRegistrationInspection,
+} from "./mcp-bridge-adapters";
+export type {
+  McpBridgeAddOptions,
+  McpBridgeStatus,
+  ParsedEnvReference,
+  ParsedMcpAddArgs,
+} from "./mcp-bridge-contracts";
+export { MCP_BRIDGE_POLICY_SOURCE, McpBridgeError } from "./mcp-bridge-contracts";
+export {
+  redactBridgeSecretsForDisplay,
+  redactCredentialValuesForDisplay,
+} from "./mcp-bridge-output";
+export {
+  buildMcpBridgePolicyName,
+  buildMcpBridgePolicyYaml,
+  MCP_BRIDGE_ALLOWED_METHODS,
+  MCP_BRIDGE_POLICY_MAX_BODY_BYTES,
+} from "./mcp-bridge-policy";
+export {
+  buildMcpBridgeProviderArgs,
+  buildMcpCredentialReadinessCommand,
+  buildMcpCredentialRevisionSnapshotCommand,
+  parseMcpProviderMetadata,
+  providerDetachChangedState,
+} from "./mcp-bridge-provider";
+export { statusMcpBridge } from "./mcp-bridge-status";
+export {
+  buildMcpBridgeProviderName,
+  MCP_SERVER_URL_MAX_LENGTH,
+  normalizeMcpServerUrl,
+  parseMcpAddArgs,
+  resolveCredentialEnv,
+  validateMcpCredentialEnvName,
+  validateMcpServerName,
+} from "./mcp-bridge-validation";
 
 function sameMcpAddIntent(existing: McpBridgeEntry, requested: McpBridgeEntry): boolean {
   return (
@@ -1904,6 +175,7 @@ function assertPreparedMcpAddResourcesAbsent(
     entry.server,
     entry.url,
     adapter,
+    entry.env[0],
     resolvedAddresses,
   );
   const policyState = policies.getPresetContentGatewayState(sandboxName, policyContent);
@@ -1986,13 +258,14 @@ async function addMcpBridgeUnlocked(
   if (!existingEntry) writeBridgeEntry(sandboxName, entry);
 
   let providerCreated = false;
-  let providerAttachedState = false;
+  let providerAttachAttempted = false;
   let policyApplied = false;
   let adapterMutationAttempted = false;
   let credentialRevisionSnapshotPath: string | undefined;
   const adapterEnvValues = resolveCredentialEnv(options.env);
   try {
     await ensureSandboxGatewaySelected(sandboxName);
+    assertMcpTransportRuntimeCapability(sandboxName);
 
     if (entry.addState === "prepared") {
       assertPreparedMcpAddResourcesAbsent(sandboxName, adapter, entry, resolvedAddresses);
@@ -2017,16 +290,34 @@ async function addMcpBridgeUnlocked(
       );
     }
     credentialRevisionSnapshotPath = snapshotMcpCredentialRevision(sandboxName, entry);
-    const providerAction = upsertMcpProvider(providerName ?? "", options.env, {
-      allowExisting: true,
+    const providerResult = upsertMcpProvider(providerName ?? "", options.env, {
+      // A first mutation must still observe the absence proven above. Only a
+      // retry of the durable preflighted transaction may encounter an exact
+      // provider whose immutable ID was already persisted by this add.
+      allowExisting: resumingPreflightedAdd,
+      expectedProviderId: entry.providerId,
     });
-    providerCreated = providerAction === "created";
+    providerCreated = providerResult.action === "created";
+    const providerId = providerResult.inspection.id;
+    if (!providerId) {
+      throw new McpBridgeError(
+        `OpenShell did not return a stable provider ID for '${providerName}'. Refusing later MCP side effects.`,
+      );
+    }
+    if (entry.providerId !== providerId) {
+      entry = { ...entry, providerId };
+      // The immutable OpenShell identity is the ownership boundary for every
+      // later lifecycle action. Persist it before policy, attachment, or
+      // adapter mutations. A process death before this write fails closed.
+      writeBridgeEntry(sandboxName, entry);
+    }
+    assertNoAttachedProviderCredentialCollision(sandboxName, entry);
     applyGeneratedPolicy(sandboxName, entry, resolvedAddresses);
     policyApplied = true;
-    attachProvider(sandboxName, providerName);
-    providerAttachedState = !!providerName;
+    providerAttachAttempted = true;
+    attachProvider(sandboxName, entry);
     waitForAttachedMcpCredential(sandboxName, entry, {
-      ...(providerAction === "updated"
+      ...(providerResult.action === "updated"
         ? {
             previousRevisionSnapshotPath: credentialRevisionSnapshotPath,
           }
@@ -2043,6 +334,13 @@ async function addMcpBridgeUnlocked(
     const { addState: _completedAddState, ...committedEntry } = entry;
     writeBridgeEntry(sandboxName, committedEntry);
   } catch (error) {
+    const rollbackProviderInspection =
+      (providerAttachAttempted || providerCreated) && entry.providerId
+        ? inspectMcpProvider(providerName)
+        : undefined;
+    const rollbackProviderOwned =
+      !!rollbackProviderInspection &&
+      providerMatchesCredential(rollbackProviderInspection, entry.env[0], entry.providerId);
     if (adapterMutationAttempted) {
       unregisterAgentAdapter(sandboxName, adapter, entry, {
         force: false,
@@ -2050,12 +348,28 @@ async function addMcpBridgeUnlocked(
         envValues: adapterEnvValues,
       });
     }
-    if (providerAttachedState) detachProvider(sandboxName, providerName, { bestEffort: true });
-    if (policyApplied)
+    const detachOutcome = providerAttachAttempted
+      ? detachProvider(sandboxName, entry, { bestEffort: true })
+      : "absent";
+    let reservationCleanupProved = !providerAttachAttempted;
+    if (providerAttachAttempted && detachOutcome !== "unknown") {
+      try {
+        waitForDetachedMcpCredential(sandboxName, entry);
+        reservationCleanupProved = true;
+      } catch {
+        reservationCleanupProved = false;
+      }
+    }
+    if (policyApplied && reservationCleanupProved)
       removeGeneratedPolicy(sandboxName, entry, {
         bestEffort: true,
       });
-    if (providerCreated) deleteProvider(providerName, { allowMissing: true, bestEffort: true });
+    if (providerCreated && rollbackProviderOwned && reservationCleanupProved) {
+      const beforeDelete = inspectMcpProvider(providerName);
+      if (providerMatchesCredential(beforeDelete, entry.env[0], entry.providerId)) {
+        deleteProvider(entry, { allowMissing: true, bestEffort: true });
+      }
+    }
     // Exception rollback is best-effort and process death skips it entirely.
     // Keep the durable add manifest until a retry converges or `mcp remove`
     // proves and cleans each exact resource.
@@ -2097,26 +411,58 @@ async function restartMcpBridgeUnlocked(sandboxName: string, server?: string): P
     .filter((entry): entry is McpBridgeEntry => !!entry);
   const resolvedByServer = await preflightMcpEntryTargets(targetEntries);
   await ensureSandboxGatewaySelected(sandboxName);
+  assertMcpTransportRuntimeCapability(sandboxName);
   // Prove every policy key is absent or still matches its recorded ownership
   // before inspecting or updating any provider. `applyGeneratedPolicy` repeats
   // this check immediately before mutation to close the preflight-to-apply race.
   for (const entry of targetEntries) assertGeneratedPolicyMutationSafe(sandboxName, entry);
   for (const entry of targetEntries) assertMcpProviderRecoverable(entry);
-  for (const [name, entry] of targets) {
+  for (const [name, storedEntry] of targets) {
     // Validated as a complete authenticated entry before gateway side effects.
-    if (!entry) continue;
+    if (!storedEntry) continue;
+    let entry = storedEntry;
     const envRefs = entry.env.map((envName) => ({ name: envName }));
     const adapterEnvValues = resolveCredentialEnv(envRefs);
     const resolvedAddresses = resolvedByServer.get(entry.server);
     const credentialRevisionSnapshotPath = snapshotMcpCredentialRevision(sandboxName, entry);
     try {
-      const providerAction = upsertMcpProvider(entry.providerName ?? "", envRefs, {
+      const beforeUpsert = inspectMcpProvider(entry.providerName);
+      if (beforeUpsert.exists === false) {
+        // A prior provider may have disappeared while its exact scoped
+        // attachment remains durable in the sandbox spec. Revoke that old ID
+        // before creating a replacement, and keep the old registry identity
+        // until replacement creation succeeds.
+        const detachOutcome = detachProvider(sandboxName, entry);
+        if (detachOutcome === "unknown") {
+          throw new McpBridgeError(
+            `Could not prove revocation of the prior immutable provider '${entry.providerId}' for MCP server '${entry.server}'. Preserved the prior registry identity and refused to create a replacement provider.`,
+          );
+        }
+        waitForDetachedMcpCredential(sandboxName, entry);
+      }
+      const providerResult = upsertMcpProvider(entry.providerName ?? "", envRefs, {
         allowExisting: true,
+        expectedProviderId: entry.providerId,
       });
+      const providerId = providerResult.inspection.id;
+      if (!providerId) {
+        throw new McpBridgeError(
+          `OpenShell did not return a stable provider ID for '${entry.providerName}'. Refusing later MCP side effects.`,
+        );
+      }
+      const refreshedEntry =
+        providerId === entry.providerId ? entry : { ...entry, providerId, updatedAt: nowIso() };
+      if (refreshedEntry !== entry) {
+        // A missing owned provider may be recreated during restart. Record the
+        // replacement object's immutable ID before policy/attach/adapter work.
+        writeBridgeEntry(sandboxName, refreshedEntry);
+        entry = refreshedEntry;
+      }
+      assertNoAttachedProviderCredentialCollision(sandboxName, entry);
       applyGeneratedPolicy(sandboxName, entry, resolvedAddresses);
-      attachProvider(sandboxName, entry.providerName);
+      attachProvider(sandboxName, entry);
       waitForAttachedMcpCredential(sandboxName, entry, {
-        ...(providerAction === "updated"
+        ...(providerResult.action === "updated"
           ? { previousRevisionSnapshotPath: credentialRevisionSnapshotPath }
           : {}),
       });
@@ -2160,6 +506,7 @@ function mcpBridgeEntriesEqual(left: McpBridgeEntry, right: McpBridgeEntry): boo
     left.adapter === right.adapter &&
     left.url === right.url &&
     left.providerName === right.providerName &&
+    left.providerId === right.providerId &&
     left.policyName === right.policyName &&
     left.addedAt === right.addedAt &&
     left.updatedAt === right.updatedAt &&
@@ -2211,6 +558,11 @@ function inspectExactMcpDestroyProvider(
   options: { allowMissing: boolean; force?: boolean },
 ): McpProviderInspection {
   assertAuthenticatedBridgeEntry(entry);
+  if (!entry.providerId) {
+    throw new McpBridgeError(
+      `MCP server '${entry.server}' has no stable OpenShell provider ID. Refusing destructive cleanup of same-name provider '${entry.providerName}'. Remove the legacy bridge with --force only after independently cleaning that provider.`,
+    );
+  }
   const inspection = inspectMcpProvider(entry.providerName);
   if (inspection.exists === null) {
     throw new McpBridgeError(
@@ -2223,12 +575,12 @@ function inspectExactMcpDestroyProvider(
       `OpenShell provider '${entry.providerName}' is missing. Refusing to destroy sandbox state because a failed sandbox delete could not restore authenticated MCP without the preserved provider credential.`,
     );
   }
-  if (!providerMatchesCredential(inspection, entry.env[0])) {
+  if (!providerMatchesCredential(inspection, entry.env[0], entry.providerId)) {
     const forceDetail = options.force
       ? " --force does not delete a non-matching global provider because it may be owned by another workflow."
       : "";
     throw new McpBridgeError(
-      `OpenShell provider '${entry.providerName}' no longer exactly matches MCP server '${entry.server}'. ${providerShapeDetail(inspection, entry.env[0])}${forceDetail}`,
+      `OpenShell provider '${entry.providerName}' no longer exactly matches MCP server '${entry.server}'. ${providerShapeDetail(inspection, entry.env[0], entry.providerId)}${forceDetail}`,
     );
   }
   return inspection;
@@ -2329,6 +681,7 @@ export async function prepareMcpBridgesForDestroy(
   }
 
   await ensureSandboxGatewaySelected(sandboxName);
+  assertMcpTransportRuntimeCapability(sandboxName);
   const detached: McpBridgeEntry[] = [];
   const scrubbedAdapters: McpBridgeEntry[] = [];
   try {
@@ -2342,7 +695,19 @@ export async function prepareMcpBridgesForDestroy(
       scrubbedAdapters.push(entry);
     }
     for (const entry of entries) {
-      if (detachProvider(sandboxName, entry.providerName)) detached.push(entry);
+      inspectExactMcpDestroyProvider(entry, { allowMissing: false });
+      const detachOutcome = detachProvider(sandboxName, entry);
+      if (detachOutcome === "unknown") {
+        throw new McpBridgeError(
+          `Could not prove provider detach for MCP server '${entry.server}'.`,
+        );
+      }
+      waitForDetachedMcpCredential(sandboxName, entry);
+      // Both an acknowledged detach and a freshly-proven absent binding are
+      // rollback responsibilities until destroyPreparedAt is durable. This
+      // closes retry-after-process-death gaps where an earlier attempt already
+      // detached one entry before a later entry fails.
+      detached.push(entry);
     }
     const marked = registry.updateSandbox(sandboxName, {
       mcp: {
@@ -2361,7 +726,8 @@ export async function prepareMcpBridgesForDestroy(
     const rollbackFailures: string[] = [];
     for (const entry of [...detached].reverse()) {
       try {
-        attachProvider(sandboxName, entry.providerName);
+        inspectExactMcpDestroyProvider(entry, { allowMissing: false });
+        attachProvider(sandboxName, entry);
         // Reattach preserves the provider value, so presence is sufficient;
         // still wait before reloading an adapter that may connect immediately.
         waitForAttachedMcpCredential(sandboxName, entry);
@@ -2466,6 +832,9 @@ export async function finalizeMcpBridgesAfterSandboxDelete(
   const entries = preparation.entries;
   if (entries.length === 0) return;
 
+  await ensureSandboxGatewaySelected(sandboxName);
+  assertMcpGatewayCapability();
+
   const sandbox = assertMcpDestroySnapshotCurrent(sandboxName, entries);
   if (!sandbox.mcp?.destroyPendingAt) {
     const marked = registry.updateSandbox(sandboxName, {
@@ -2495,7 +864,12 @@ export async function finalizeMcpBridgesAfterSandboxDelete(
   );
   for (const [index, entry] of entries.entries()) {
     if (!inspections[index]?.exists) continue;
-    deleteProvider(entry.providerName, { allowMissing: true });
+    const beforeDelete = inspectExactMcpDestroyProvider(entry, {
+      allowMissing: true,
+      force: options.force,
+    });
+    if (!beforeDelete.exists) continue;
+    deleteProvider(entry, { allowMissing: true });
     const after = inspectMcpProvider(entry.providerName);
     if (after.exists !== false) {
       throw new McpBridgeError(
@@ -2582,6 +956,7 @@ export async function prepareMcpBridgesForRebuild(
   }
   await preflightMcpEntryTargets(entries);
   await ensureSandboxGatewaySelected(sandboxName);
+  assertMcpTransportRuntimeCapability(sandboxName);
   for (const entry of entries) assertMcpProviderRecoverable(entry);
   const detached: McpBridgeEntry[] = [];
   const scrubbedAdapters: McpBridgeEntry[] = [];
@@ -2599,13 +974,25 @@ export async function prepareMcpBridgesForRebuild(
     for (const entry of entries) {
       // Keep the provider and its host-only credentials for the replacement
       // sandbox, but detach it before OpenShell deletes the old attachment.
-      if (detachProvider(sandboxName, entry.providerName)) detached.push(entry);
+      inspectExactMcpDestroyProvider(entry, { allowMissing: false });
+      const detachOutcome = detachProvider(sandboxName, entry);
+      if (detachOutcome === "unknown") {
+        throw new McpBridgeError(
+          `Could not prove provider detach for MCP server '${entry.server}'.`,
+        );
+      }
+      waitForDetachedMcpCredential(sandboxName, entry);
+      // A binding already absent on retry was still detached by this rebuild
+      // transaction (possibly before a prior process died), so it must be
+      // reattached if sandbox deletion later aborts.
+      detached.push(entry);
     }
   } catch (error) {
     const rollbackFailures: string[] = [];
     for (const entry of detached.reverse()) {
       try {
-        attachProvider(sandboxName, entry.providerName);
+        inspectExactMcpDestroyProvider(entry, { allowMissing: false });
+        attachProvider(sandboxName, entry);
         // Reattach preserves the provider value, so presence is sufficient;
         // still wait before reloading an adapter that may connect immediately.
         waitForAttachedMcpCredential(sandboxName, entry);
@@ -2656,11 +1043,16 @@ export async function reattachMcpProvidersAfterRebuildAbort(
 ): Promise<void> {
   if (entries.length === 0 && scrubbedAdapterEntries.length === 0) return;
   await ensureSandboxGatewaySelected(sandboxName);
+  assertMcpTransportRuntimeCapability(sandboxName);
 
   const failures: string[] = [];
   for (const entry of entries) {
     try {
-      attachProvider(sandboxName, entry.providerName);
+      // Rebuild abort helpers are exported and may run after a long sandbox
+      // delete attempt; re-prove the immutable provider identity immediately
+      // before reattaching by its mutable name.
+      assertMcpProviderRecoverable(entry);
+      attachProvider(sandboxName, entry);
       waitForAttachedMcpCredential(sandboxName, entry);
     } catch (error) {
       failures.push(error instanceof Error ? error.message : String(error));
@@ -2748,38 +1140,58 @@ async function removeMcpBridgeUnlocked(
     ? entry.adapter
     : getBridgeAdapter(getSandboxAgent(sandbox));
   await ensureSandboxGatewaySelected(sandboxName);
+  assertMcpTransportRuntimeCapability(sandboxName);
 
   assertGeneratedPolicyMutationSafe(sandboxName, entry);
   const failures: string[] = [];
   let providerOwnershipProved = !entry.providerName;
   let providerWasMissing = false;
   if (entry.providerName) {
-    const inspection = inspectMcpProvider(entry.providerName);
-    if (inspection.exists === false) {
-      providerOwnershipProved = true;
-      providerWasMissing = true;
-    } else if (
-      inspection.exists === true &&
-      entry.env.length === 1 &&
-      providerMatchesCredential(inspection, entry.env[0])
-    ) {
-      providerOwnershipProved = true;
-    } else {
-      const detail =
-        inspection.exists === null
-          ? (inspection.error ?? `Could not inspect OpenShell provider '${entry.providerName}'.`)
-          : `OpenShell provider '${entry.providerName}' has drifted or lacks a complete registered credential binding. ${providerShapeDetail(inspection, entry.env[0]) ?? ""}`;
-      if (!options.force) {
-        throw new McpBridgeError(detail);
+    if (!entry.providerId) {
+      const inspection = inspectMcpProvider(entry.providerName);
+      if (inspection.exists === false) {
+        // With no live provider there is no global object to adopt or destroy.
+        // This lets an operator independently remove a legacy/orphan provider,
+        // then use MCP remove to clear only the exact adapter/policy manifest.
+        providerOwnershipProved = true;
+        providerWasMissing = true;
+      } else {
+        const detail =
+          inspection.exists === null
+            ? (inspection.error ?? `Could not inspect OpenShell provider '${entry.providerName}'.`)
+            : `MCP server '${entry.server}' has no stable OpenShell provider ID. Refusing to detach or delete same-name provider '${entry.providerName}'.`;
+        if (!options.force) throw new McpBridgeError(detail);
+        failures.push(detail);
       }
-      // Force is allowed to continue cleaning resources whose ownership is
-      // independently provable, but it never broadens ownership of a global
-      // provider merely because the local bridge registry names it.
-      failures.push(detail);
+    } else {
+      const inspection = inspectMcpProvider(entry.providerName);
+      if (inspection.exists === false) {
+        providerOwnershipProved = true;
+        providerWasMissing = true;
+      } else if (
+        inspection.exists === true &&
+        entry.env.length === 1 &&
+        providerMatchesCredential(inspection, entry.env[0], entry.providerId)
+      ) {
+        providerOwnershipProved = true;
+      } else {
+        const detail =
+          inspection.exists === null
+            ? (inspection.error ?? `Could not inspect OpenShell provider '${entry.providerName}'.`)
+            : `OpenShell provider '${entry.providerName}' has drifted or lacks a complete registered credential binding. ${providerShapeDetail(inspection, entry.env[0], entry.providerId) ?? ""}`;
+        if (!options.force) {
+          throw new McpBridgeError(detail);
+        }
+        // Force is allowed to continue cleaning resources whose ownership is
+        // independently provable, but it never broadens ownership of a global
+        // provider merely because the local bridge registry names it.
+        failures.push(detail);
+      }
     }
   }
 
   const adapterEnvValues = resolveCredentialEnv(entry.env.map((envName) => ({ name: envName })));
+  let adapterCleanupProved = true;
   try {
     unregisterAgentAdapter(
       sandboxName,
@@ -2790,29 +1202,73 @@ async function removeMcpBridgeUnlocked(
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     if (!options.force) throw new McpBridgeError(detail);
+    adapterCleanupProved = false;
     failures.push(detail);
   }
-  if (providerOwnershipProved) {
+  let reservationCleanupProved = !entry.providerName && adapterCleanupProved;
+  if (adapterCleanupProved && providerOwnershipProved && entry.providerName) {
     try {
-      detachProvider(sandboxName, entry.providerName);
+      if (providerWasMissing && !entry.providerId) {
+        // A create response lost before immutable-ID persistence is never
+        // adoptable. If the operator independently removed that provider, an
+        // authoritative structured attachment snapshot plus fresh-exec
+        // revocation can nevertheless prove there is no runtime binding to
+        // clean, without naming or deleting any replacement object.
+        const attachments = inspectMcpProviderAttachments(sandboxName);
+        if (!attachments.attachments) {
+          throw new McpBridgeError(
+            attachments.error ??
+              `Could not prove absence of legacy provider attachment '${entry.providerName}'.`,
+          );
+        }
+        if (attachments.attachments.some((attachment) => attachment.name === entry.providerName)) {
+          throw new McpBridgeError(
+            `Legacy provider attachment '${entry.providerName}' still exists but the immutable provider ID was never persisted. Refusing inexact detach.`,
+          );
+        }
+        waitForDetachedMcpCredential(sandboxName, entry);
+        reservationCleanupProved = true;
+      } else {
+        const detachOutcome = detachProvider(sandboxName, entry);
+        if (detachOutcome !== "unknown") {
+          waitForDetachedMcpCredential(sandboxName, entry);
+          reservationCleanupProved = true;
+        }
+      }
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       if (!options.force) throw new McpBridgeError(detail);
       failures.push(detail);
     }
   }
-  try {
-    removeGeneratedPolicy(sandboxName, entry);
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    if (!options.force) throw new McpBridgeError(detail);
-    failures.push(detail);
-  }
-  if (providerOwnershipProved) {
+  if (reservationCleanupProved) {
     try {
-      deleteProvider(entry.providerName, {
-        allowMissing:
-          options.force === true || entry.addState === "preflighted" || providerWasMissing,
+      removeGeneratedPolicy(sandboxName, entry);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      if (!options.force) throw new McpBridgeError(detail);
+      failures.push(detail);
+    }
+  } else {
+    failures.push(
+      `Provider detach state for '${entry.providerName}' is unknown; preserved the MCP policy and ownership manifest.`,
+    );
+  }
+  if (
+    reservationCleanupProved &&
+    providerOwnershipProved &&
+    !providerWasMissing &&
+    entry.providerName
+  ) {
+    try {
+      // Recheck immediately before the mutable-name delete so a same-name
+      // replacement cannot inherit ownership from the earlier preflight.
+      inspectExactMcpDestroyProvider(entry, {
+        allowMissing: false,
+        force: options.force,
+      });
+      deleteProvider(entry, {
+        allowMissing: options.force === true || entry.addState === "preflighted",
       });
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
@@ -2831,175 +1287,6 @@ async function removeMcpBridgeUnlocked(
   }
   removeBridgeEntry(sandboxName, server);
   console.log(`  Removed MCP server '${server}' from sandbox '${sandboxName}'.`);
-}
-
-function getRegisteredGeneratedPolicy(
-  sandboxName: string,
-  entry: McpBridgeEntry | undefined,
-): ReturnType<typeof registry.getCustomPolicies>[number] | undefined {
-  if (!entry?.policyName) return undefined;
-  return registry
-    .getCustomPolicies(sandboxName)
-    .find(
-      (policy) =>
-        policy.name === entry.policyName && policy.sourcePath === MCP_BRIDGE_POLICY_SOURCE,
-    );
-}
-
-function getPolicyPresence(sandboxName: string, entry: McpBridgeEntry | undefined): boolean | null {
-  if (!entry?.policyName) return false;
-  const registeredPolicy = getRegisteredGeneratedPolicy(sandboxName, entry);
-  if (!registeredPolicy) return null;
-  return policies.presetContentMatchesGateway(sandboxName, registeredPolicy.content);
-}
-
-function getAdapterRegistration(
-  sandboxName: string,
-  agent: AgentDefinition,
-  entry: McpBridgeEntry | undefined,
-): McpBridgeStatus["adapter"] {
-  if (!entry) return { registered: null };
-  const adapter = getEntryAdapter(entry, agent);
-  if (!adapter) return { registered: null, detail: "MCP adapter is not declared" };
-  const command =
-    adapter === "mcporter"
-      ? buildOpenClawMcporterInspectCommand(entry, false)
-      : adapter === "hermes-config"
-        ? buildHermesMcpStatusCommand(entry)
-        : buildDeepAgentsMcpStatusCommand(entry);
-  const result = executeSandboxCommand(sandboxName, command);
-  if (!result) return { registered: null, detail: "sandbox unreachable" };
-  if (result.status === 0) {
-    const output = result.stdout.trim();
-    if (output === "registered") return { registered: true };
-    return { registered: false, detail: output || "not found" };
-  }
-  const envValues = resolveCredentialEnv(entry.env.map((envName) => ({ name: envName })));
-  return {
-    registered: false,
-    detail: redactBridgeSecretsForDisplay(
-      result.stderr || result.stdout || "not found",
-      entry,
-      envValues,
-    ),
-  };
-}
-
-export async function statusMcpBridge(
-  sandboxName: string,
-  server?: string,
-): Promise<McpBridgeStatus[]> {
-  validateSandboxName(sandboxName);
-  const sandbox = getSandboxOrThrow(sandboxName);
-  const agent = getSandboxAgent(sandbox);
-  const bridges = bridgeState(sandbox);
-  if (Object.keys(bridges).length > 0) {
-    await ensureSandboxGatewaySelected(sandboxName);
-  }
-  const entries: Array<[string, McpBridgeEntry | undefined]> = server
-    ? [[server, bridges[server]]]
-    : Object.entries(bridges);
-  if (server && !bridges[server]) {
-    return [
-      {
-        server,
-        agent: agent.name,
-        support: {
-          supported: agent.mcpCapability.support === "bridge",
-          mode: agent.mcpCapability.support,
-          ...(agent.mcpCapability.adapter ? { adapter: agent.mcpCapability.adapter } : {}),
-          ...(agent.mcpCapability.reason ? { reason: agent.mcpCapability.reason } : {}),
-        },
-        env: { names: [], missing: [], ready: false },
-        provider: {
-          registryPresent: false,
-          gatewayPresent: false,
-          attached: null,
-          credentialReady: null,
-        },
-        policy: { registryPresent: false, gatewayPresent: false },
-        adapter: { registered: null },
-      },
-    ];
-  }
-
-  return entries.map(([name, entry]) => {
-    const registeredPolicy = getRegisteredGeneratedPolicy(sandboxName, entry);
-    const hasCredentialBinding =
-      !!entry && Array.isArray(entry.env) && entry.env.length === 1 && !!entry.providerName;
-    const missingEnv = entry
-      ? entry.env.filter(
-          (envName: string) => process.env[envName] === undefined || process.env[envName] === "",
-        )
-      : [];
-    const expectedCredential = entry?.env.length === 1 ? entry.env[0] : undefined;
-    const providerInspection = inspectMcpProvider(entry?.providerName);
-    const providerCredentialReady = providerMatchesCredential(
-      providerInspection,
-      expectedCredential,
-    );
-    const providerDetail = providerShapeDetail(providerInspection, expectedCredential);
-    return {
-      server: name,
-      agent: entry?.agent ?? agent.name,
-      support: {
-        supported: agent.mcpCapability.support === "bridge",
-        mode: agent.mcpCapability.support,
-        ...(getEntryAdapter(entry, agent)
-          ? { adapter: getEntryAdapter(entry, agent) ?? undefined }
-          : {}),
-        ...(agent.mcpCapability.reason ? { reason: agent.mcpCapability.reason } : {}),
-      },
-      ...(entry ? { url: entry.url } : {}),
-      ...(entry?.addState ? { addState: entry.addState } : {}),
-      env: {
-        names: entry?.env ?? [],
-        missing: missingEnv,
-        ready:
-          hasCredentialBinding &&
-          !entry?.addState &&
-          (providerInspection.exists ? providerCredentialReady : missingEnv.length === 0),
-      },
-      provider: {
-        name: entry?.providerName,
-        registryPresent: !!entry?.providerName,
-        gatewayPresent: entry?.providerName ? providerInspection.exists : null,
-        attached: providerAttached(sandboxName, entry?.providerName),
-        credentialReady: entry ? providerCredentialReady : null,
-        ...(providerDetail ? { detail: providerDetail } : {}),
-      },
-      policy: {
-        name: entry?.policyName,
-        registryPresent: !!registeredPolicy,
-        gatewayPresent: getPolicyPresence(sandboxName, entry),
-      },
-      adapter: getAdapterRegistration(sandboxName, agent, entry),
-      ...(entry?.addedAt ? { addedAt: entry.addedAt } : {}),
-      ...(entry?.updatedAt ? { updatedAt: entry.updatedAt } : {}),
-    };
-  });
-}
-
-function getSupportSummary(agent: AgentDefinition): McpBridgeStatus["support"] {
-  return {
-    supported: agent.mcpCapability.support === "bridge",
-    mode: agent.mcpCapability.support,
-    ...(agent.mcpCapability.adapter ? { adapter: agent.mcpCapability.adapter } : {}),
-    ...(agent.mcpCapability.reason ? { reason: agent.mcpCapability.reason } : {}),
-  };
-}
-
-function buildJsonSummary(
-  sandboxName: string,
-  agent: AgentDefinition,
-  statuses: McpBridgeStatus[],
-): McpBridgeJsonSummary {
-  return {
-    sandbox: sandboxName,
-    agent: agent.name,
-    support: getSupportSummary(agent),
-    bridges: statuses,
-  };
 }
 
 function renderList(
@@ -3104,7 +1391,7 @@ function renderMcpHelp(subcommand: string): void {
   switch (subcommand) {
     case "add":
       console.log(`USAGE
-  nemoclaw <name> mcp add <server> --url <http-mcp-url> --env KEY
+  nemoclaw <name> mcp add <server> --url <https-mcp-url> --env KEY
 
 FLAGS
   --url URL        MCP Streamable HTTP endpoint

@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import {
   collectSandboxCreateFailureDiagnostics,
   printSandboxCreateFailureDiagnostics,
-} from "../dist/lib/onboard/sandbox-create-failure.js";
+} from "../src/lib/onboard/sandbox-create-failure.js";
 
 describe("sandbox create failure diagnostics", () => {
   it("preserves gateway failure lines and VM console output before cleanup", () => {

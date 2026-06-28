@@ -22,25 +22,14 @@ on:
         type: string
         default: ""
       openshell_channel:
-        description: "OpenShell integration target. Dev tracks current OpenShell main; artifact requires OPENSHELL_ARTIFACT_READ_TOKEN."
+        description: "OpenShell integration target. Dev tracks current OpenShell main."
         required: false
         default: "dev"
         type: choice
         options:
           - stable
           - dev
-          - artifact
           - auto
-      openshell_artifact_run_id:
-        description: "Optional NVIDIA/OpenShell Actions run id used when openshell_channel=artifact."
-        required: false
-        default: ""
-        type: string
-      openshell_artifact_head_sha:
-        description: "Expected 40-hex NVIDIA/OpenShell head SHA for openshell_artifact_run_id."
-        required: false
-        default: ""
-        type: string
 
 permissions:
   contents: read
@@ -399,8 +388,6 @@ jobs:
       NEMOCLAW_MCP_BRIDGE_AGENT_MATRIX: "1"
       NEMOCLAW_RUN_E2E_SCENARIOS: "1"
       NEMOCLAW_OPENSHELL_CHANNEL: ${{ inputs.openshell_channel }}
-      NEMOCLAW_OPENSHELL_ARTIFACT_RUN_ID: ${{ inputs.openshell_artifact_run_id }}
-      NEMOCLAW_OPENSHELL_ARTIFACT_HEAD_SHA: ${{ inputs.openshell_artifact_head_sha }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -449,17 +436,14 @@ jobs:
       - name: Build CLI
         run: npm run build:cli
 
+      - name: Generate MCP test TLS
+        run: bash test/e2e/setup-mcp-test-tls.sh
+
       - name: Install OpenShell CLI
         env:
           NEMOCLAW_OPENSHELL_FORCE_INSTALL: "1"
-          # github.token is repository-scoped and cannot read OpenShell
-          # artifacts. This token needs read-only Actions access to OpenShell.
-          NEMOCLAW_INSTALL_OPENSHELL_GH_TOKEN: ${{ inputs.openshell_channel == 'artifact' && secrets.OPENSHELL_ARTIFACT_READ_TOKEN || '' }}
         run: |
           set -euo pipefail
-          if [[ "${NEMOCLAW_OPENSHELL_CHANNEL}" == "artifact" ]]; then
-            export GH_TOKEN="${NEMOCLAW_INSTALL_OPENSHELL_GH_TOKEN:?OpenShell artifact channel requires the OPENSHELL_ARTIFACT_READ_TOKEN repository secret}"
-          fi
           bash scripts/install-openshell.sh
 
       - name: Run MCP OpenShell provider live test
@@ -1855,7 +1839,6 @@ jobs:
       NEMOCLAW_NON_INTERACTIVE: "1"
       NEMOCLAW_RECREATE_SANDBOX: "1"
       NEMOCLAW_SANDBOX_NAME: e2e-hermes
-      NEMOCLAW_MODEL: minimaxai/minimax-m2.7
       NEMOCLAW_ONBOARD_VALIDATION_TIMEOUT_SECONDS: "60"
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -2000,8 +1983,6 @@ jobs:
       NEMOCLAW_CLI_BIN: ${{ github.workspace }}/bin/nemoclaw.js
       NEMOCLAW_RUN_E2E_SCENARIOS: "1"
       NEMOCLAW_OPENSHELL_CHANNEL: ${{ inputs.openshell_channel }}
-      NEMOCLAW_OPENSHELL_ARTIFACT_RUN_ID: ${{ inputs.openshell_artifact_run_id }}
-      NEMOCLAW_OPENSHELL_ARTIFACT_HEAD_SHA: ${{ inputs.openshell_artifact_head_sha }}
       NEMOCLAW_E2E_USE_HOSTED_INFERENCE: "1"
       # Raw OpenShell sandbox commands in the migrated live test must target
       # the gateway registered by NemoClaw onboarding even when OpenShell has
@@ -2326,6 +2307,7 @@ jobs:
       NEMOCLAW_MODEL: nvidia/nvidia/nemotron-3-ultra
       NEMOCLAW_COMPAT_MODEL: nvidia/nvidia/nemotron-3-ultra
       NEMOCLAW_PREFERRED_API: openai-completions
+      NEMOCLAW_OPENSHELL_CHANNEL: ${{ inputs.openshell_channel }}
       NEMOCLAW_SANDBOX_NAME: e2e-rebuild-hermes
       OPENSHELL_GATEWAY: nemoclaw
     steps:
@@ -2410,6 +2392,7 @@ jobs:
       NEMOCLAW_MODEL: nvidia/nvidia/nemotron-3-ultra
       NEMOCLAW_COMPAT_MODEL: nvidia/nvidia/nemotron-3-ultra
       NEMOCLAW_PREFERRED_API: openai-completions
+      NEMOCLAW_OPENSHELL_CHANNEL: ${{ inputs.openshell_channel }}
       NEMOCLAW_SANDBOX_NAME: e2e-rebuild-hermes-base
       OPENSHELL_GATEWAY: nemoclaw
     steps:

@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import {
   hasRequiredOpenshellMessagingFeatures,
   REQUIRED_OPENSHELL_MCP_FEATURES,
+  REQUIRED_OPENSHELL_SANDBOX_MCP_TRANSPORT_FEATURE,
 } from "./openshell-feature-gate";
 
 describe("OpenShell MCP feature gate", () => {
@@ -20,7 +21,10 @@ describe("OpenShell MCP feature gate", () => {
       const sandbox = path.join(dir, "openshell-sandbox");
       fs.writeFileSync(openshell, `binary ${REQUIRED_OPENSHELL_MCP_FEATURES[0]}`);
       fs.writeFileSync(gateway, `binary ${REQUIRED_OPENSHELL_MCP_FEATURES[1]}`);
-      fs.writeFileSync(sandbox, `binary ${REQUIRED_OPENSHELL_MCP_FEATURES[2]}`);
+      fs.writeFileSync(
+        sandbox,
+        `binary ${REQUIRED_OPENSHELL_MCP_FEATURES[2]} ${REQUIRED_OPENSHELL_SANDBOX_MCP_TRANSPORT_FEATURE}`,
+      );
 
       expect(
         hasRequiredOpenshellMessagingFeatures({
@@ -47,6 +51,49 @@ describe("OpenShell MCP feature gate", () => {
           sandboxBin: null,
         }),
       ).toBe(false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("requires the transport marker from the exact sandbox runtime binary", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-openshell-features-"));
+    try {
+      const openshell = path.join(dir, "openshell");
+      const sandbox = path.join(dir, "openshell-sandbox");
+      fs.writeFileSync(
+        openshell,
+        `binary ${REQUIRED_OPENSHELL_MCP_FEATURES.join(" ")} ${REQUIRED_OPENSHELL_SANDBOX_MCP_TRANSPORT_FEATURE}`,
+      );
+      fs.writeFileSync(sandbox, "binary without the transport boundary");
+
+      expect(
+        hasRequiredOpenshellMessagingFeatures({
+          openshellBin: openshell,
+          gatewayBin: null,
+          sandboxBin: sandbox,
+        }),
+      ).toBe(false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("defers a compressed VM supervisor check to the in-sandbox lifecycle probe", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-openshell-features-"));
+    try {
+      const openshell = path.join(dir, "openshell");
+      const vmDriver = path.join(dir, "openshell-driver-vm");
+      fs.writeFileSync(openshell, `binary ${REQUIRED_OPENSHELL_MCP_FEATURES.join(" ")}`);
+      fs.writeFileSync(vmDriver, "compressed supervisor payload without inspectable markers");
+
+      expect(
+        hasRequiredOpenshellMessagingFeatures({
+          openshellBin: openshell,
+          gatewayBin: null,
+          sandboxBin: null,
+        }),
+      ).toBe(true);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

@@ -990,6 +990,7 @@ function isInferenceRouteReady(provider: string, model: string): boolean {
 }
 
 const {
+  sandboxExistsInGateway,
   pruneStaleSandboxEntry,
   shouldRestoreLatestBackupOnRecreate,
   confirmRecreateForSelectionDrift,
@@ -1058,14 +1059,11 @@ const { shouldIncludeBuildContextPath, copyBuildContextDir, printSandboxCreateRe
   buildContext;
 // classifySandboxCreateFailure — see validation import above
 
-// ---------------------------------------------------------------------------
-// Ollama model prompt/pull/prepare functions — from inference/ollama/proxy.ts
-// (proxy lifecycle functions already imported at the top of this file)
 const {
   promptOllamaModel,
   printOllamaExposureWarning,
   prepareOllamaModel,
-} = require("./inference/ollama/proxy");
+}: typeof import("./inference/ollama/proxy") = require("./inference/ollama/proxy");
 
 const {
   handleWindowsHostOllamaSelection,
@@ -2630,9 +2628,21 @@ async function createSandbox(
   );
 
   const existingRegistryEntryBeforePrune = registry.getSandbox(sandboxName);
+  const preservedMcpState =
+    existingRegistryEntryBeforePrune?.mcp &&
+    Object.keys(existingRegistryEntryBeforePrune.mcp.bridges).length > 0
+      ? existingRegistryEntryBeforePrune.mcp
+      : undefined;
 
   // Reconcile local registry state with the live OpenShell gateway state.
-  const liveExists = pruneStaleSandboxEntry(sandboxName);
+  // An MCP-bearing entry is also the rebuild transaction manifest. Keep it
+  // durable while the old sandbox is absent so process death anywhere before
+  // registration cannot discard provider/policy ownership intent. The fresh
+  // registration below replaces the stale runtime fields and carries only the
+  // validated MCP state forward.
+  const liveExists = preservedMcpState
+    ? sandboxExistsInGateway(sandboxName)
+    : pruneStaleSandboxEntry(sandboxName);
   // #4614: capture default AFTER prune so a stale registry row isn't read as a live sandbox.
   const sandboxWasLiveDefault = liveExists && wasSandboxDefault(registry.getDefault(), sandboxName);
 
@@ -2884,6 +2894,16 @@ async function createSandbox(
       note(`  Sandbox '${sandboxName}' exists and is ready — recreating by explicit request.`);
     } else {
       note(`  Sandbox '${sandboxName}' exists but is not ready — recreating it.`);
+    }
+
+    if (preservedMcpState) {
+      console.error(
+        `  Sandbox '${sandboxName}' has managed MCP servers. Refusing the generic onboard recreation path.`,
+      );
+      console.error(
+        `  Run \`${cliName()} ${sandboxName} rebuild --yes\` so MCP providers and adapter state are preserved transactionally.`,
+      );
+      process.exit(1);
     }
 
     const previousEntry: SandboxEntry | null = registry.getSandbox(sandboxName);
@@ -3193,6 +3213,7 @@ async function createSandbox(
     imageTag: resolvedImageTag,
     appliedPolicies: initialSandboxPolicy.appliedPresets,
     plannedMessagingState,
+    preservedMcpState,
     hermesToolGateways,
     hermesDashboardState: finalHermesDashboardState,
     dashboardPort: actualDashboardPort,
@@ -3272,6 +3293,9 @@ async function selectAndValidateOllamaModel(
 ): Promise<OllamaModelSelectionOutcome> {
   const { requestedModel, recoveredModel } = defaults;
   const probeFailures = new OllamaProbeFailureTracker();
+  const confirm = (question: string, defaultIsYes: boolean) =>
+    promptYesNoOrDefault(question, null, defaultIsYes);
+  const interaction = { isNonInteractive, isAutoYes, confirm };
   while (true) {
     const installedModels = getOllamaModelOptions();
     let model: string | typeof BACK_TO_SELECTION;
@@ -3314,7 +3338,7 @@ async function selectAndValidateOllamaModel(
         }
       }
     }
-    const probe = await prepareOllamaModel(selectedModel, installedModels);
+    const probe = await prepareOllamaModel(selectedModel, installedModels, interaction);
     if (!probe.ok) {
       const probeFailureLimitReached = probeFailures.recordFailure(selectedModel);
       const action = handleOllamaProbeFailure(probe, selectedModel, isNonInteractive);

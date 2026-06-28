@@ -15,7 +15,7 @@ import {
   parseGlibcVersionsFromBinaryText,
   resolveDriftGatewayBin,
   shouldUseContainerizedGateway,
-} from "../../../dist/lib/onboard/docker-driver-gateway-launch";
+} from "./docker-driver-gateway-launch";
 
 function withTempBinaries<T>(
   fn: (paths: { dir: string; gatewayBin: string; sandboxBin: string }) => T,

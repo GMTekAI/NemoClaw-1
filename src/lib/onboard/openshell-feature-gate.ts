@@ -4,11 +4,23 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { OPENSHELL_MCP_TRANSPORT_CAPABILITY_MARKER } from "../adapters/openshell/runtime-capabilities";
+
 export const REQUIRED_OPENSHELL_MCP_FEATURES = [
   "request-body-credential-rewrite",
   "websocket-credential-rewrite",
   "allow_all_known_mcp_methods",
 ] as const;
+
+export const REQUIRED_OPENSHELL_SANDBOX_MCP_TRANSPORT_FEATURE =
+  OPENSHELL_MCP_TRANSPORT_CAPABILITY_MARKER;
+
+// OpenShell current main (NVIDIA/OpenShell#1865) does not expose a CLI or RPC
+// capability query for these security boundaries. The marker strings are
+// compiled into the components that implement them, so checking the complete
+// installed binary set is the only fail-closed preflight available today.
+// Replace this scan with the authoritative capability query once OpenShell
+// publishes one; a version check alone is not sufficient for moving dev builds.
 
 export function hasRequiredOpenshellMessagingFeatures(options: {
   openshellBin: string | null;
@@ -49,9 +61,38 @@ export function hasRequiredOpenshellMessagingFeatures(options: {
         foundMarkers.add(REQUIRED_OPENSHELL_MCP_FEATURES[index]);
       }
     }
-    if (REQUIRED_OPENSHELL_MCP_FEATURES.every((marker) => foundMarkers.has(marker))) {
-      return true;
+    if (REQUIRED_OPENSHELL_MCP_FEATURES.every((marker) => foundMarkers.has(marker))) break;
+  }
+  if (!REQUIRED_OPENSHELL_MCP_FEATURES.every((marker) => foundMarkers.has(marker))) return false;
+
+  // This marker is meaningful only in the sandbox supervisor that performs
+  // TLS enforcement, Host binding, and credential replacement. Do not accept
+  // a matching string from the CLI, gateway, or a union of unrelated binaries.
+  const sandboxCandidates = [
+    options.sandboxBin,
+    path.join(path.dirname(options.openshellBin), "openshell-sandbox"),
+  ].filter(
+    (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
+  );
+  const transportMarker = Buffer.from(REQUIRED_OPENSHELL_SANDBOX_MCP_TRANSPORT_FEATURE);
+  let foundRuntimeArtifact = false;
+  for (const candidate of new Set(sandboxCandidates)) {
+    let fd: number | null = null;
+    try {
+      fd = fs.openSync(candidate, "r");
+      if (!fs.fstatSync(fd).isFile()) continue;
+      foundRuntimeArtifact = true;
+      if (fs.readFileSync(fd).includes(transportMarker)) return true;
+    } catch {
+      // Try the next exact sandbox-runtime candidate.
+    } finally {
+      if (fd !== null) fs.closeSync(fd);
     }
   }
-  return false;
+  // VM drivers embed a compressed supervisor, so scanning their host binary is
+  // neither sufficient nor reliable. Some VM/Docker installations expose no
+  // supervisor host file at all.
+  // The MCP lifecycle performs the authoritative in-sandbox runtime probe
+  // before any provider or policy mutation.
+  return !foundRuntimeArtifact;
 }

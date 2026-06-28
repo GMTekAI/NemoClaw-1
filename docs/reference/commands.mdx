@@ -61,8 +61,11 @@ The `/nemoclaw` slash command is available inside the OpenClaw chat interface fo
 |---|---|
 | `/nemoclaw` | Show slash-command help and host CLI pointers |
 | `/nemoclaw status` | Show sandbox and inference state |
+| `/nemoclaw shields [status]` | Explain that shields status is unavailable inside the sandbox and point to `$$nemoclaw <name> shields status` on the host |
 | `/nemoclaw onboard` | Show onboarding status and reconfiguration guidance |
 | `/nemoclaw eject` | Show rollback instructions for returning to the host installation |
+
+Use host-side `$$nemoclaw <sandbox> shields status|up|down` commands to inspect or change shields posture.
 
 </AgentOnly>
 <AgentOnly variant="hermes">
@@ -1284,19 +1287,23 @@ $$nemoclaw my-assistant mcp list [--json]
 Add an MCP Streamable HTTP server to a sandbox.
 Pass `--url` for the MCP endpoint and the required single `--env KEY` bearer credential for the sandbox-side MCP client.
 NemoClaw registers that credential in an OpenShell provider, installs a generated OpenShell `protocol: mcp` policy for the target endpoint, attaches the provider to the running sandbox, and writes only an `openshell:resolve:env:KEY` placeholder into the agent config.
-Inline `--env KEY=VALUE` is rejected because it would expose the value in NemoClaw process arguments and shell history; export the variable and pass only `--env KEY`.
-Remote endpoints must use HTTPS, and persisted MCP URLs cannot contain query strings, percent-escaped or glob-style paths, or port zero.
-OpenShell enforces the generated endpoint, runtime, path, and MCP-method policy before replacing the placeholder in an allowed outbound request; denied requests are neither rewritten nor sent upstream.
-For full setup details, see [Set Up MCP Servers](../deployment/set-up-mcp-bridge).
+Inline `--env KEY=VALUE` is rejected because it would expose the value in NemoClaw process arguments.
+Load the variable from a secret manager or masked prompt, export it without recording the value in shell history, and pass only `--env KEY`.
+All endpoints must use HTTPS, and persisted MCP URLs cannot contain query strings, percent-escaped or glob-style paths, or port zero.
+OpenShell globally reserves the credential key for the generated policy, requires verified TLS and an exact Host match, then enforces the endpoint, runtime, path, query, and MCP-method boundary before replacing the placeholder; broader overlapping policies cannot widen that decision, and denied requests are neither rewritten nor sent upstream.
+The sandbox client connects directly through OpenShell's existing egress path, and NemoClaw does not run a host-side MCP bridge, proxy, relay, or listener.
+For full setup details, see [Set Up MCP Servers](../manage-sandboxes/set-up-mcp-servers).
 
 ```bash
+export GITHUB_TOKEN=ghp_...
 $$nemoclaw my-assistant mcp add github --url https://api.githubcopilot.com/mcp/ --env GITHUB_TOKEN
+unset GITHUB_TOKEN
 ```
 
 ### `$$nemoclaw <name> mcp status`
 
 Inspect MCP server state for one server or for all configured servers.
-Status includes OpenShell provider presence, provider attachment, generated policy content match, adapter registration, environment readiness, and the selected agent's MCP support mode.
+Status includes OpenShell provider presence and credential-key shape, provider attachment, generated policy content match, adapter registration, current host-variable availability, and the selected agent's MCP support mode.
 
 ```bash
 $$nemoclaw my-assistant mcp status [server] [--json]
@@ -1310,6 +1317,9 @@ $$nemoclaw my-assistant mcp status [server] [--json]
 
 Refresh one MCP server registration, or every server on the sandbox when no server is supplied.
 Restart reapplies the generated policy, reattaches the OpenShell provider when needed, and refreshes the sandbox agent adapter registration.
+If the recorded host variable is exported, restart replaces the provider credential and waits for its new opaque revision.
+Otherwise, restart reuses an existing exact-match provider.
+A missing provider requires the variable to be exported before retrying.
 
 ```bash
 $$nemoclaw my-assistant mcp restart [server]
@@ -1318,7 +1328,8 @@ $$nemoclaw my-assistant mcp restart [server]
 ### `$$nemoclaw <name> mcp remove`
 
 Remove an MCP server from a sandbox.
-NemoClaw unregisters the sandbox agent adapter, detaches and deletes the OpenShell provider, removes the generated policy, and clears the sandbox registry entry.
+NemoClaw unregisters the sandbox agent adapter, detaches and deletes the exact-match OpenShell provider, removes the owned generated policy, and clears the sandbox registry entry.
+The command fails closed on drift. `--force` continues best-effort cleanup of independently provable resources, but never claims a non-matching provider or policy and preserves registry state when residuals remain.
 
 ```bash
 $$nemoclaw my-assistant mcp remove github [--force]

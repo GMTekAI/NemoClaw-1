@@ -14,7 +14,7 @@ const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-test-"));
 process.env.HOME = tmpDir;
 
 const require = createRequire(import.meta.url);
-const registry = require("../dist/lib/state/registry");
+const registry = require("../src/lib/state/registry");
 
 const regFile = path.join(tmpDir, ".nemoclaw", "sandboxes.json");
 
@@ -142,6 +142,7 @@ describe("registry", () => {
             url: "https://api.githubcopilot.com/mcp/",
             env: ["GITHUB_TOKEN"],
             providerName: "alpha-mcp-github",
+            providerId: "11111111-2222-4333-8444-555555555555",
             policyName: "mcp-bridge-github",
             addedAt: new Date(0).toISOString(),
           },
@@ -156,6 +157,7 @@ describe("registry", () => {
       url: "https://api.githubcopilot.com/mcp/",
       env: ["GITHUB_TOKEN"],
       providerName: "alpha-mcp-github",
+      providerId: "11111111-2222-4333-8444-555555555555",
       policyName: "mcp-bridge-github",
     });
     expect(entry.token).toBeUndefined();
@@ -313,6 +315,7 @@ describe("registry", () => {
             url: "https://api.githubcopilot.com/mcp/",
             env: ["GITHUB_TOKEN"],
             providerName: "mcp-sb-mcp-github",
+            providerId: "11111111-2222-4333-8444-555555555555",
             policyName: "mcp-bridge-github",
             addedAt: new Date(0).toISOString(),
           },
@@ -324,6 +327,9 @@ describe("registry", () => {
     const data = JSON.parse(raw);
     expect(data.sandboxes["mcp-sb"].mcp.bridges.github.env).toEqual(["GITHUB_TOKEN"]);
     expect(data.sandboxes["mcp-sb"].mcp.bridges.github.providerName).toBe("mcp-sb-mcp-github");
+    expect(data.sandboxes["mcp-sb"].mcp.bridges.github.providerId).toBe(
+      "11111111-2222-4333-8444-555555555555",
+    );
     expect(data.sandboxes["mcp-sb"].mcp.bridges.github.token).toBeUndefined();
     expect(raw).not.toContain("ghp_");
     expect(raw).not.toContain("secret-value");
@@ -382,6 +388,17 @@ describe("registry", () => {
             env: ["TOKEN"],
             providerName: "mcp-safe-mcp-unknown",
             policyName: "mcp-bridge-unknown",
+            addedAt: new Date(0).toISOString(),
+          },
+          invalidProviderId: {
+            server: "invalidProviderId",
+            agent: "openclaw",
+            adapter: "mcporter",
+            url: "https://api.githubcopilot.com/mcp/",
+            env: ["TOKEN"],
+            providerName: "mcp-safe-mcp-invalid-provider-id",
+            providerId: "invalid provider id",
+            policyName: "mcp-bridge-invalid-provider-id",
             addedAt: new Date(0).toISOString(),
           },
           oversizedUrl: {
@@ -877,7 +894,7 @@ describe("advisory file locking", () => {
   it("concurrent writers do not corrupt the registry", () => {
     const { spawnSync } = require("child_process");
     const registryPath = path.resolve(
-      path.join(import.meta.dirname, "..", "dist", "lib", "state", "registry.js"),
+      path.join(import.meta.dirname, "..", "src", "lib", "state", "registry.ts"),
     );
     const homeDir = path.dirname(path.dirname(regFile));
     // Script that spawns 4 workers in parallel, each writing 5 sandboxes

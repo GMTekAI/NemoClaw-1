@@ -23,7 +23,7 @@ function runPython(source: string, args: string[] = []) {
 }
 
 describe("Hermes managed MCP config transaction", () => {
-  it("rejects raw credentials, private HTTP targets, and non-boolean control flags", () => {
+  it("rejects raw credentials, plaintext targets, and non-boolean control flags", () => {
     const result = runPython(`
 import importlib.util, json, sys
 spec = importlib.util.spec_from_file_location("mcp_tx", sys.argv[1])
@@ -32,7 +32,7 @@ sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 bad = [
     {"server": "fake", "url": "https://mcp.example.test/mcp", "headers": {"Authorization": "Bearer raw-secret"}},
-    {"server": "fake", "url": "http://127.0.0.1/mcp", "headers": {"Authorization": "Bearer openshell:resolve:env:FAKE_TOKEN"}},
+    {"server": "fake", "url": "http://host.openshell.internal/mcp", "headers": {"Authorization": "Bearer openshell:resolve:env:FAKE_TOKEN"}},
     {"server": "fake", "url": "https://mcp.example.test/mcp", "headers": {"Authorization": "Bearer openshell:resolve:env:FAKE_TOKEN"}, "replace_existing": "yes"},
 ]
 errors = []

@@ -1,15 +1,19 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import fs from "node:fs";
 import http from "node:http";
+import https from "node:https";
 import type { AddressInfo } from "node:net";
+
+type TestServer = http.Server | https.Server;
 
 export interface StartedHttpServer {
   port: number;
   close(): Promise<void>;
 }
 
-export interface FakeMcpHttpServer extends StartedHttpServer {
+export interface FakeMcpHttpsServer extends StartedHttpServer {
   requests: Array<{
     method: string;
     path: string;
@@ -45,7 +49,7 @@ async function readRequestBody(req: http.IncomingMessage): Promise<string> {
   });
 }
 
-function requireTcpPort(server: http.Server, label: string): number {
+function requireTcpPort(server: TestServer, label: string): number {
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error(`${label} did not bind to a TCP port`);
@@ -53,13 +57,13 @@ function requireTcpPort(server: http.Server, label: string): number {
   return (address as AddressInfo).port;
 }
 
-function closeServer(server: http.Server): Promise<void> {
+function closeServer(server: TestServer): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
   });
 }
 
-async function listenOnRandomPort(server: http.Server): Promise<void> {
+async function listenOnRandomPort(server: TestServer): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "0.0.0.0", () => {
@@ -212,19 +216,32 @@ export async function startCompatibleMock(options: {
   };
 }
 
-export async function startFakeMcpHttpServer(options: {
+export async function startFakeMcpHttpsServer(options: {
   secret: string;
   challenge?: string;
   resultToken?: string;
-}): Promise<FakeMcpHttpServer> {
+  tls?: { cert: Buffer; key: Buffer };
+}): Promise<FakeMcpHttpsServer> {
+  const tls =
+    options.tls ??
+    (() => {
+      const certPath = process.env.NEMOCLAW_MCP_TLS_CERT;
+      const keyPath = process.env.NEMOCLAW_MCP_TLS_KEY;
+      if (!certPath || !keyPath) {
+        throw new Error(
+          "NEMOCLAW_MCP_TLS_CERT and NEMOCLAW_MCP_TLS_KEY are required for the HTTPS MCP fixture",
+        );
+      }
+      return { cert: fs.readFileSync(certPath), key: fs.readFileSync(keyPath) };
+    })();
   const requests: Array<{
     method: string;
     path: string;
     auth: string;
     body: string;
   }> = [];
-  const server = http.createServer(async (req, res) => {
-    const requestPath = new URL(req.url ?? "/", "http://fake-mcp.local").pathname;
+  const server = https.createServer(tls, async (req, res) => {
+    const requestPath = new URL(req.url ?? "/", "https://fake-mcp.local").pathname;
     const body = await readRequestBody(req);
     const auth = Array.isArray(req.headers.authorization)
       ? req.headers.authorization.join(",")

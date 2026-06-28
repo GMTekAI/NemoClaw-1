@@ -52,14 +52,17 @@ export interface McpBridgeEntry {
   url: string;
   env: string[];
   providerName?: string;
+  /** Immutable OpenShell ObjectMeta.id captured after provider creation. */
+  providerId?: string;
   policyName: string;
   addedAt: string;
   updatedAt?: string;
   /**
    * Durable add-transaction marker. `prepared` owns no OpenShell/adapter
    * resources yet; `preflighted` proves the derived names were absent before
-   * side effects began and makes exact retry/cleanup safe after process death.
-   * Omitted entries are fully committed bridges (including legacy records).
+   * side effects began. Exact retry/cleanup additionally requires `providerId`
+   * once provider creation succeeds. Omitted entries are fully committed
+   * bridges (including legacy records, which fail closed without providerId).
    */
   addState?: "prepared" | "preflighted";
 }
@@ -80,6 +83,7 @@ export interface SandboxMcpState {
 const MCP_SERVER_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const MCP_ENV_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 const MCP_SAFE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+const MCP_PROVIDER_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 const MCP_ADAPTERS = new Set(["mcporter", "hermes-config", "deepagents-config"]);
 
 // Outcome of the last live sandbox GPU proof run during onboarding/recovery.
@@ -510,6 +514,12 @@ function normalizeMcpBridgeEntry(server: string, value: unknown): McpBridgeEntry
   const providerName =
     typeof value.providerName === "string" && value.providerName ? value.providerName : undefined;
   if (providerName && !MCP_SAFE_NAME_RE.test(providerName)) return null;
+  const providerId =
+    typeof value.providerId === "string" && value.providerId ? value.providerId : undefined;
+  if (value.providerId !== undefined && (!providerId || !MCP_PROVIDER_ID_RE.test(providerId))) {
+    return null;
+  }
+  if (providerId && !providerName) return null;
   const rawAddState = value.addState;
   const addState =
     rawAddState === undefined
@@ -524,6 +534,7 @@ function normalizeMcpBridgeEntry(server: string, value: unknown): McpBridgeEntry
     url,
     env,
     ...(providerName ? { providerName } : {}),
+    ...(providerId ? { providerId } : {}),
     policyName,
     addedAt:
       typeof value.addedAt === "string" && value.addedAt

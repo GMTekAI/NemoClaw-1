@@ -180,25 +180,14 @@ on:
         type: boolean
         default: false
       openshell_channel:
-        description: "OpenShell integration target. Dev tracks current OpenShell main; artifact requires OPENSHELL_ARTIFACT_READ_TOKEN."
+        description: "OpenShell integration target. Dev tracks current OpenShell main."
         required: false
         type: choice
         default: "dev"
         options:
           - stable
           - dev
-          - artifact
           - auto
-      openshell_artifact_run_id:
-        description: "Optional NVIDIA/OpenShell Actions run id used when openshell_channel=artifact."
-        required: false
-        type: string
-        default: ""
-      openshell_artifact_head_sha:
-        description: "Expected 40-hex NVIDIA/OpenShell head SHA for openshell_artifact_run_id."
-        required: false
-        type: string
-        default: ""
 
 permissions:
   contents: read
@@ -1693,21 +1682,15 @@ jobs:
       - name: Build CLI
         run: npm run build:cli
 
+      - name: Generate MCP test TLS
+        run: bash test/e2e/setup-mcp-test-tls.sh
+
       - name: Install OpenShell CLI
         env:
           NEMOCLAW_OPENSHELL_FORCE_INSTALL: "1"
           NEMOCLAW_OPENSHELL_CHANNEL: ${{ github.event_name == 'workflow_dispatch' && inputs.openshell_channel || 'dev' }}
-          NEMOCLAW_OPENSHELL_ARTIFACT_RUN_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.openshell_artifact_run_id || '' }}
-          NEMOCLAW_OPENSHELL_ARTIFACT_HEAD_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.openshell_artifact_head_sha || '' }}
-          # github.token is scoped to NemoClaw and cannot read OpenShell Actions
-          # artifacts. Configure this as a fine-grained token with read-only
-          # Actions access to NVIDIA/OpenShell.
-          NEMOCLAW_INSTALL_OPENSHELL_GH_TOKEN: ${{ github.event_name == 'workflow_dispatch' && inputs.openshell_channel == 'artifact' && secrets.OPENSHELL_ARTIFACT_READ_TOKEN || '' }}
         run: |
           set -euo pipefail
-          if [[ "${NEMOCLAW_OPENSHELL_CHANNEL}" == "artifact" ]]; then
-            export GH_TOKEN="${NEMOCLAW_INSTALL_OPENSHELL_GH_TOKEN:?OpenShell artifact channel requires the OPENSHELL_ARTIFACT_READ_TOKEN repository secret}"
-          fi
           bash scripts/install-openshell.sh
 
       - name: Run MCP OpenShell provider Vitest E2E
@@ -1717,8 +1700,6 @@ jobs:
           NEMOCLAW_MCP_BRIDGE_AGENT_MATRIX: "1"
           NEMOCLAW_RUN_E2E_SCENARIOS: "1"
           NEMOCLAW_OPENSHELL_CHANNEL: ${{ github.event_name == 'workflow_dispatch' && inputs.openshell_channel || 'dev' }}
-          NEMOCLAW_OPENSHELL_ARTIFACT_RUN_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.openshell_artifact_run_id || '' }}
-          NEMOCLAW_OPENSHELL_ARTIFACT_HEAD_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.openshell_artifact_head_sha || '' }}
         run: |
           set -euo pipefail
           export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"

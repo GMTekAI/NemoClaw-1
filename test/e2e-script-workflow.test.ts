@@ -399,16 +399,15 @@ describe("E2E reusable workflow contract", () => {
     }
   });
 
-  it("only exposes the workflow token to MCP OpenShell installs for artifact-channel runs", () => {
+  it("does not pass repository credentials into the checked-out MCP OpenShell installer", () => {
     const job = nightlyWorkflow.jobs["mcp-bridge-e2e"];
     const installStep = job.steps?.find((step) => step.name === "Install OpenShell CLI");
 
     expect(installStep).toBeDefined();
     expect(installStep?.env ?? {}).not.toHaveProperty("GH_TOKEN");
-    expect(installStep?.env?.NEMOCLAW_INSTALL_OPENSHELL_GH_TOKEN).toContain(
-      "inputs.openshell_channel == 'artifact'",
-    );
-    expect(installStep?.run).toContain('if [[ "${NEMOCLAW_OPENSHELL_CHANNEL}" == "artifact" ]]');
+    expect(installStep?.env ?? {}).not.toHaveProperty("NEMOCLAW_INSTALL_OPENSHELL_GH_TOKEN");
+    expect(installStep?.run).not.toContain("artifact");
+    expect(installStep?.run).toContain("bash scripts/install-openshell.sh");
   });
 
   it("runs only validated test/e2e shell scripts through the composite action", () => {
@@ -461,7 +460,7 @@ describe("E2E reusable workflow contract", () => {
         "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
         "npm run build:cli",
         "npx tsx scripts/check-dist-sourcemaps.ts dist",
-        "npx vitest run --project cli \\",
+        "npx vitest run --project cli --project integration \\",
       ]),
     );
   });
@@ -985,7 +984,6 @@ describe("E2E reusable workflow contract", () => {
     // The current-main OpenShell channel is an MCP integration input. Keep
     // the independent network-policy lane on its normal installer contract.
     expect(networkPolicyEnv.NEMOCLAW_OPENSHELL_CHANNEL).toBeUndefined();
-    expect(networkPolicyEnv.NEMOCLAW_OPENSHELL_ARTIFACT_RUN_ID).toBeUndefined();
     const networkPolicyArtifactPath = nightlyWorkflow.jobs["network-policy-e2e"].with
       ?.artifact_path as string | undefined;
     expect(networkPolicyArtifactPath).toContain("test-network-policy-*.log");

@@ -10,10 +10,10 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-type LifecycleLockModule = typeof import("../dist/lib/state/mcp-lifecycle-lock");
+type LifecycleLockModule = typeof import("../src/lib/state/mcp-lifecycle-lock");
 
 const requireDist = createRequire(import.meta.url);
-const lockModulePath = requireDist.resolve("../dist/lib/state/mcp-lifecycle-lock.js");
+const lockModulePath = requireDist.resolve("../src/lib/state/mcp-lifecycle-lock.js");
 const lifecycleLock = requireDist(lockModulePath) as LifecycleLockModule;
 const currentProcessIdentity = lifecycleLock.readMcpLockProcessIdentity(process.pid);
 

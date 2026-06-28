@@ -50,7 +50,9 @@ For a single headless task, run:
 dcode -n "Summarize this repository"
 ```
 
-The managed wrapper launches Deep Agents Code with `HOME=/sandbox`, update checks disabled, remote Deep Agents sandbox providers disabled, user/project MCP auto-loading blocked, and shell allow-list overrides blocked. MCP servers registered through `nemoclaw <sandbox-name> mcp add` remain available through the managed user-level config and OpenShell egress policy.
+The managed wrapper launches Deep Agents Code with `HOME=/sandbox`, update checks disabled, remote Deep Agents sandbox providers disabled, user/project MCP auto-loading blocked, and shell allow-list overrides blocked.
+MCP servers registered through `nemoclaw <sandbox-name> mcp add` remain available through the managed user-level config and OpenShell egress policy.
+For authenticated MCP setup and credential rotation, see [Set Up MCP Servers](../manage-sandboxes/set-up-mcp-servers).
 
 ## Python Environment
 
@@ -65,7 +67,7 @@ Deep Agents Code state lives under `/sandbox/.deepagents`.
 NemoClaw snapshot and rebuild flows preserve the app state directory, skills, generated config, and hooks config when those files exist.
 Run `nemoclaw <sandbox-name> snapshot create` after active `dcode` tasks finish.
 For `langchain-deepagents-code` sandboxes, NemoClaw refuses backup when it detects an active `dcode` task or cannot verify that the state tree is idle.
-NemoClaw intentionally does not back up `.deepagents/.env` or user-authored portions of `.deepagents/.mcp.json` because users may put Tavily, LangSmith, MCP service, or provider credentials there. Managed MCP bridge definitions are restored separately from NemoClaw's credential-free registry; their service credentials remain in OpenShell provider state.
+NemoClaw intentionally does not back up `.deepagents/.env` or user-authored portions of `.deepagents/.mcp.json` because users may put Tavily, LangSmith, MCP service, or provider credentials there. NemoClaw restores its managed MCP definitions separately from the credential-free registry; service credentials remain in OpenShell provider state.
 
 ## Optional Web Search
 

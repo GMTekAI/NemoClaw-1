@@ -170,13 +170,11 @@ export function computeOpenshellInstallEnv(
   deps: OpenshellInstallPinDeps,
 ): OpenshellInstallEnvDirective {
   const channel = (baseEnv.NEMOCLAW_OPENSHELL_CHANNEL ?? "auto").trim();
-  // Dev and artifact installs already identify a non-stable build source.
-  // Stable release discovery must not block those current-main proof paths
-  // merely because the next semver release has not been published yet.
+  // Dev installs already identify a non-stable build source. Stable release
+  // discovery must not block that current-main proof path merely because the
+  // next semver release has not been published yet.
   const pin: OpenshellInstallPinResult =
-    channel === "dev" || channel === "artifact"
-      ? { kind: "no-max" }
-      : resolveOpenshellInstallPin(deps);
+    channel === "dev" ? { kind: "no-max" } : resolveOpenshellInstallPin(deps);
   if (pin.kind === "incompatible") {
     const error = deps.error ?? ((m: string) => console.error(m));
     error("");

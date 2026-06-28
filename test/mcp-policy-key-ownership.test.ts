@@ -31,8 +31,8 @@ exit 0
     { mode: 0o755 },
   );
   const script = `
-const registry = require("./dist/lib/state/registry.js");
-const policies = require("./dist/lib/policy/index.js");
+const registry = require("./src/lib/state/registry.js");
+const policies = require("./src/lib/policy/index.js");
 registry.registerSandbox({ name: "alpha" });
 const result = policies.applyPresetContent(
   "alpha",
@@ -72,7 +72,7 @@ printf 'Version: 1\nHash: test\n---\nversion: 1\nnetwork_policies:\n  example:\n
     { mode: 0o755 },
   );
   const script = `
-const policies = require("./dist/lib/policy/index.js");
+const policies = require("./src/lib/policy/index.js");
 process.stdout.write(String(policies.presetContentMatchesGateway("alpha", ${JSON.stringify(PRESET)})));
 `;
   const result = spawnSync(process.execPath, ["-e", script], {
@@ -108,8 +108,8 @@ exit 0
     { mode: 0o755 },
   );
   const script = `
-const registry = require("./dist/lib/state/registry.js");
-const policies = require("./dist/lib/policy/index.js");
+const registry = require("./src/lib/state/registry.js");
+const policies = require("./src/lib/policy/index.js");
 registry.registerSandbox({ name: "alpha" });
 ${
   operation === "remove"
@@ -201,6 +201,10 @@ describe("MCP-generated network policy ownership", () => {
       path.join(binDir, "openshell"),
       `#!/bin/sh
 printf '%s\n' "$*" >> ${JSON.stringify(callsPath)}
+if [ "$1 $2 $3" = "status --output json" ]; then
+  printf '%s\n' '{"capabilities":["authenticated-mcp-policy-bound-credential-rewrite-v1"]}'
+  exit 0
+fi
 if [ "$1 $2" = "provider get" ]; then
   printf 'Provider not found\n' >&2
   exit 1
@@ -215,9 +219,9 @@ exit 0
     const script = `
 process.env.HOME = ${JSON.stringify(home)};
 process.env.COLLISION_TOKEN = "host-only-secret";
-const registry = require("./dist/lib/state/registry.js");
-const gatewayRuntime = require("./dist/lib/gateway-runtime-action.js");
-const processRecovery = require("./dist/lib/actions/sandbox/process-recovery.js");
+const registry = require("./src/lib/state/registry.js");
+const gatewayRuntime = require("./src/lib/gateway-runtime-action.js");
+const processRecovery = require("./src/lib/actions/sandbox/process-recovery.js");
 gatewayRuntime.recoverNamedGatewayRuntime = async () => ({
   recovered: true,
   attempted: false,
@@ -229,8 +233,13 @@ processRecovery.executeSandboxCommand = () => ({
   stdout: "absent\\n",
   stderr: "",
 });
+processRecovery.executeSandboxExecCommand = () => ({
+  status: 0,
+  stdout: "",
+  stderr: "",
+});
 registry.registerSandbox({ name: "alpha", agent: "openclaw" });
-const bridge = require("./dist/lib/actions/sandbox/mcp-bridge.js");
+const bridge = require("./src/lib/actions/sandbox/mcp-bridge.js");
 bridge.addMcpBridge("alpha", {
   server: "example",
   url: "https://8.8.8.8/mcp",
@@ -272,14 +281,34 @@ bridge.addMcpBridge("alpha", {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-mcp-policy-registry-failure-"));
     const binDir = path.join(home, ".local", "bin");
     const callsPath = path.join(home, "calls.log");
+    const providerStatePath = path.join(home, "provider.state");
     fs.mkdirSync(binDir, { recursive: true });
     fs.writeFileSync(
       path.join(binDir, "openshell"),
       `#!/bin/sh
 printf '%s\n' "$*" >> ${JSON.stringify(callsPath)}
+if [ "$1 $2 $3" = "status --output json" ]; then
+  printf '%s\n' '{"capabilities":["authenticated-mcp-policy-bound-credential-rewrite-v1"]}'
+  exit 0
+fi
+if [ "$1 $2 $3" = "sandbox provider list" ]; then
+  printf '%s\n' '{"attachments":[]}'
+  exit 0
+fi
 if [ "$1 $2" = "provider get" ]; then
+  if [ -f ${JSON.stringify(providerStatePath)} ]; then
+    printf 'Id: 11111111-2222-4333-8444-555555555555\nType: generic\nResource version: 1\nCredential keys: RESERVATION_TOKEN\n'
+    exit 0
+  fi
   printf 'Provider not found\n' >&2
   exit 1
+fi
+if [ "$1 $2" = "provider create" ]; then
+  : > ${JSON.stringify(providerStatePath)}
+  printf '%s\n' '{"id":"11111111-2222-4333-8444-555555555555","resource_version":1}'
+fi
+if [ "$1 $2" = "provider delete" ]; then
+  rm -f -- ${JSON.stringify(providerStatePath)}
 fi
 if [ "$1 $2" = "policy get" ]; then
   printf 'Version: 1\nHash: test\n---\nversion: 1\nnetwork_policies: {}\n'
@@ -291,9 +320,9 @@ exit 0
     const script = `
 process.env.HOME = ${JSON.stringify(home)};
 process.env.RESERVATION_TOKEN = "host-only-secret";
-const registry = require("./dist/lib/state/registry.js");
-const gatewayRuntime = require("./dist/lib/gateway-runtime-action.js");
-const processRecovery = require("./dist/lib/actions/sandbox/process-recovery.js");
+const registry = require("./src/lib/state/registry.js");
+const gatewayRuntime = require("./src/lib/gateway-runtime-action.js");
+const processRecovery = require("./src/lib/actions/sandbox/process-recovery.js");
 gatewayRuntime.recoverNamedGatewayRuntime = async () => ({
   recovered: true,
   attempted: false,
@@ -312,7 +341,7 @@ processRecovery.executeSandboxExecCommand = () => ({
 });
 registry.registerSandbox({ name: "alpha", agent: "openclaw" });
 registry.addCustomPolicy = () => { throw new Error("injected registry write failure"); };
-const bridge = require("./dist/lib/actions/sandbox/mcp-bridge.js");
+const bridge = require("./src/lib/actions/sandbox/mcp-bridge.js");
 bridge.addMcpBridge("alpha", {
   server: "reservation",
   url: "https://8.8.8.8/mcp",
@@ -345,11 +374,11 @@ bridge.addMcpBridge("alpha", {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-mcp-policy-drift-"));
     const script = `
 process.env.HOME = ${JSON.stringify(home)};
-const registry = require("./dist/lib/state/registry.js");
-const globalActions = require("./dist/lib/actions/global.js");
-const gatewayRuntime = require("./dist/lib/gateway-runtime-action.js");
-const policies = require("./dist/lib/policy/index.js");
-const processRecovery = require("./dist/lib/actions/sandbox/process-recovery.js");
+const registry = require("./src/lib/state/registry.js");
+const globalActions = require("./src/lib/actions/global.js");
+const gatewayRuntime = require("./src/lib/gateway-runtime-action.js");
+const policies = require("./src/lib/policy/index.js");
+const processRecovery = require("./src/lib/actions/sandbox/process-recovery.js");
 let applyCalled = false;
 const providerCalls = [];
 
@@ -360,6 +389,15 @@ gatewayRuntime.recoverNamedGatewayRuntime = async () => ({
   after: { state: "healthy_named" },
 });
 globalActions.runOpenshellProviderCommand = (args) => {
+  if (args.join(" ") === "status --output json") {
+    return {
+      status: 0,
+      stdout: JSON.stringify({
+        capabilities: ["authenticated-mcp-policy-bound-credential-rewrite-v1"],
+      }),
+      stderr: "",
+    };
+  }
   providerCalls.push(args.join(" "));
   if (args[0] === "provider" && args[1] === "get") {
     return {
@@ -386,7 +424,7 @@ processRecovery.executeSandboxCommand = () => ({
   stderr: "",
 });
 
-const bridge = require("./dist/lib/actions/sandbox/mcp-bridge.js");
+const bridge = require("./src/lib/actions/sandbox/mcp-bridge.js");
 const entry = {
   server: "example",
   agent: "openclaw",
@@ -405,7 +443,7 @@ registry.registerSandbox({
 });
 registry.addCustomPolicy("alpha", {
   name: entry.policyName,
-  content: bridge.buildMcpBridgePolicyYaml(entry.server, entry.url, entry.adapter),
+  content: bridge.buildMcpBridgePolicyYaml(entry.server, entry.url, entry.adapter, entry.env[0]),
   sourcePath: "generated:nemoclaw-mcp-bridge",
 });
 

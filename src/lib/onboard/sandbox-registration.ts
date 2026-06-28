@@ -5,7 +5,11 @@ import type { AgentDefinition } from "../agent/defs";
 import type { InferenceSelection } from "../inference/selection";
 import { inferenceSelectionRegistryFields } from "../inference/selection";
 import * as onboardSession from "../state/onboard-session";
-import type { SandboxEntry, SandboxMessagingState } from "../state/registry";
+import type {
+  SandboxEntry,
+  SandboxMcpState,
+  SandboxMessagingState,
+} from "../state/registry";
 import * as registry from "../state/registry";
 import {
   getHermesDashboardRegistryFields,
@@ -34,6 +38,11 @@ export interface CreatedSandboxRegistryEntryInput {
   imageTag: string | null;
   appliedPolicies: string[];
   plannedMessagingState: SandboxMessagingState | undefined;
+  /**
+   * Durable MCP rebuild manifest carried across an already-absent sandbox.
+   * The caller must only supply state captured from the same sandbox name.
+   */
+  preservedMcpState?: SandboxMcpState;
   hermesToolGateways: string[];
   hermesDashboardState: HermesDashboardOnboardState;
   dashboardPort: number;
@@ -82,6 +91,7 @@ export function buildCreatedSandboxRegistryEntry(
     imageTag: input.imageTag,
     policies: input.appliedPolicies,
     messaging: messagingState,
+    mcp: input.preservedMcpState,
     hermesToolGateways:
       input.hermesToolGateways.length > 0 ? [...input.hermesToolGateways] : undefined,
     ...getHermesDashboardRegistryFields(input.hermesDashboardState),

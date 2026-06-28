@@ -112,13 +112,7 @@ async function applyPresetInteractively(
 ): Promise<ShellProbeResult> {
   const script = String.raw`
 set -euo pipefail
-preset_list="$(env NEMOCLAW_NON_INTERACTIVE= node "$NEMOCLAW_E2E_CLI" "$NEMOCLAW_E2E_SANDBOX" policy-add </dev/null 2>&1 || true)"
-preset_num="$(printf '%s\n' "$preset_list" | python3 -c 'import re,sys; preset=sys.argv[1]; text=sys.stdin.read(); m=re.search(r"(?m)^\s*(\d+)\).*" + re.escape(preset), text); print(m.group(1) if m else "")' "$NEMOCLAW_E2E_PRESET")"
-if [ -z "$preset_num" ]; then
-  printf 'preset %s not found in list:\n%s\n' "$NEMOCLAW_E2E_PRESET" "$preset_list" >&2
-  exit 1
-fi
-printf '%s\nY\n' "$preset_num" | env NEMOCLAW_NON_INTERACTIVE= node "$NEMOCLAW_E2E_CLI" "$NEMOCLAW_E2E_SANDBOX" policy-add
+printf 'Y\n' | env NEMOCLAW_NON_INTERACTIVE= node "$NEMOCLAW_E2E_CLI" "$NEMOCLAW_E2E_SANDBOX" policy-add "$NEMOCLAW_E2E_PRESET"
 `;
   const result = await host.command("bash", ["-lc", script], {
     artifactName: `policy-add-${preset}-interactive`,
@@ -563,6 +557,7 @@ hello
     expect(slackBefore).toMatch(/STATUS_403|ERROR_/);
     const slackApply = await applyPresetInteractively(host, "slack");
     expect(slackApply.exitCode, text(slackApply)).toBe(0);
+    expect(text(slackApply)).toContain("Applied preset: slack");
     const slackAfter = await fetchStatus(sandbox, "https://slack.com/", "tc-net-03-slack-after");
     expect(slackAfter).toMatch(/STATUS_200/);
 

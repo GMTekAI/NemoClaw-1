@@ -979,22 +979,6 @@ function validateNetworkPolicyVitestJob(
       "network-policy-vitest job must pass openshell_channel to install-openshell.sh",
     );
   }
-  if (
-    jobEnv.NEMOCLAW_OPENSHELL_ARTIFACT_RUN_ID !==
-    "${{ inputs.openshell_artifact_run_id }}"
-  ) {
-    errors.push(
-      "network-policy-vitest job must pass openshell_artifact_run_id to install-openshell.sh",
-    );
-  }
-  if (
-    jobEnv.NEMOCLAW_OPENSHELL_ARTIFACT_HEAD_SHA !==
-    "${{ inputs.openshell_artifact_head_sha }}"
-  ) {
-    errors.push(
-      "network-policy-vitest job must pass openshell_artifact_head_sha to install-openshell.sh",
-    );
-  }
   for (const secret of [
     "NVIDIA_INFERENCE_API_KEY",
     "DOCKERHUB_USERNAME",
@@ -1200,14 +1184,6 @@ function validateMcpBridgeVitestJob(
       "mcp-bridge-vitest job must pass openshell_channel to install-openshell.sh",
     );
   }
-  if (
-    jobEnv.NEMOCLAW_OPENSHELL_ARTIFACT_RUN_ID !==
-    "${{ inputs.openshell_artifact_run_id }}"
-  ) {
-    errors.push(
-      "mcp-bridge-vitest job must pass openshell_artifact_run_id to install-openshell.sh",
-    );
-  }
   for (const secret of [
     "NVIDIA_INFERENCE_API_KEY",
     "DOCKERHUB_USERNAME",
@@ -1308,26 +1284,11 @@ function validateMcpBridgeVitestJob(
     steps,
     "Install OpenShell CLI",
   );
-  const installEnv = asRecord(installOpenShell?.env);
   requireEnvDoesNotExposeSecret(
     errors,
     "mcp-bridge-vitest Install OpenShell CLI step",
-    installEnv,
+    asRecord(installOpenShell?.env),
     "GH_TOKEN",
-  );
-  if (
-    !stringValue(installEnv.NEMOCLAW_INSTALL_OPENSHELL_GH_TOKEN).includes(
-      "inputs.openshell_channel == 'artifact'",
-    )
-  ) {
-    errors.push(
-      "mcp-bridge-vitest OpenShell install token must be present only for artifact installs",
-    );
-  }
-  requireRunContains(
-    errors,
-    installOpenShell,
-    'if [[ "${NEMOCLAW_OPENSHELL_CHANNEL}" == "artifact" ]]',
   );
   requireRunContains(
     errors,
@@ -2071,6 +2032,9 @@ function validateRebuildHermesVitestJob(
   }
   if (jobEnv.NEMOCLAW_COMPAT_MODEL !== "nvidia/nvidia/nemotron-3-ultra") {
     errors.push(`${jobName} job must pin the CI-safe compatible model`);
+  }
+  if (jobEnv.NEMOCLAW_OPENSHELL_CHANNEL !== "${{ inputs.openshell_channel }}") {
+    errors.push(`${jobName} job must pass openshell_channel to install-openshell.sh`);
   }
   if (jobEnv.OPENSHELL_GATEWAY !== "nemoclaw") {
     errors.push(`${jobName} job must force OPENSHELL_GATEWAY=nemoclaw`);
@@ -4128,8 +4092,8 @@ function validateHermesE2EVitestJob(
   if (jobEnv.NEMOCLAW_AGENT !== "hermes") {
     errors.push("hermes-e2e-vitest job must set NEMOCLAW_AGENT=hermes");
   }
-  if (jobEnv.NEMOCLAW_MODEL !== "minimaxai/minimax-m2.7") {
-    errors.push("hermes-e2e-vitest job must pin the CI-safe Hermes model");
+  if (jobEnv.NEMOCLAW_MODEL !== undefined) {
+    errors.push("hermes-e2e-vitest job must use the shared hosted-compatible model default");
   }
   if (jobEnv.NEMOCLAW_ONBOARD_VALIDATION_TIMEOUT_SECONDS !== "60") {
     errors.push(

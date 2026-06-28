@@ -868,7 +868,16 @@ async function rebuildSandboxUnlocked(
       return;
     }
     sandboxStillExists = false;
-    removeSandboxRegistryEntry(sandboxName);
+    if (rebuildMcpEntries.length === 0) {
+      removeSandboxRegistryEntry(sandboxName);
+    } else {
+      // The registry entry is the durable MCP rebuild transaction. The inner
+      // onboard run observes that the sandbox is absent, carries the MCP state
+      // into the replacement registration, and never enters generic live
+      // recreation. Keeping it here closes every process-death window between
+      // successful delete and fresh registry registration.
+      log("Preserving MCP-bearing registry entry across sandbox recreation");
+    }
     log(
       `Registry after remove: ${JSON.stringify(registry.listSandboxes().sandboxes.map((s: { name: string }) => s.name))}`,
     );

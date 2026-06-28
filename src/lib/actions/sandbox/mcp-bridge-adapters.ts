@@ -1,0 +1,644 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+import { runOpenshellProviderCommand } from "../../actions/global";
+import type { AgentMcpAdapter } from "../../agent/defs";
+import { shellQuote } from "../../runner";
+import type { McpBridgeEntry } from "../../state/registry";
+import { McpBridgeError } from "./mcp-bridge-contracts";
+import { commandOutput, redactBridgeSecretsForDisplay } from "./mcp-bridge-output";
+import { executeSandboxCommand, type SandboxCommandResult } from "./process-recovery";
+
+export const MCPORTER_VERSION = "0.7.3";
+// deepagents-code 0.1.12 auto-discovers this as the user-level MCP config.
+// `/sandbox/.mcp.json` is project-level and is intentionally rejected by
+// headless `dcode -n` unless project MCP has been separately trusted.
+export const DEEPAGENTS_MCP_CONFIG_PATH = "/sandbox/.deepagents/.mcp.json";
+const DEFAULT_AUTH_HEADER = "Authorization";
+const DEFAULT_AUTH_SCHEME = "Bearer";
+
+function authPlaceholder(entry: Pick<McpBridgeEntry, "env">): string | null {
+  const envName = entry.env[0];
+  return envName ? `openshell:resolve:env:${envName}` : null;
+}
+
+function authorizationValue(entry: Pick<McpBridgeEntry, "env">): string | null {
+  const placeholder = authPlaceholder(entry);
+  return placeholder ? `${DEFAULT_AUTH_SCHEME} ${placeholder}` : null;
+}
+
+function entryHeaders(entry: Pick<McpBridgeEntry, "env">): Record<string, string> {
+  const authorization = authorizationValue(entry);
+  return authorization ? { [DEFAULT_AUTH_HEADER]: authorization } : {};
+}
+
+/**
+ * mcporter@0.7.3 normalizes every HTTP definition returned by
+ * `config get --json` with an `accept: application/json, text/event-stream`
+ * header, even when that header is absent from the persisted config. Treat
+ * only that synthesized header as equivalent; every persisted/other header
+ * remains part of the ownership fingerprint.
+ *
+ * This function is also serialized into the in-sandbox inspection commands,
+ * so keep it self-contained (no references to module-scope values).
+ */
+export function mcporterHeadersMatchExpected(
+  actual: unknown,
+  expected: Record<string, string>,
+): boolean {
+  if (!actual || typeof actual !== "object" || Array.isArray(actual)) {
+    return false;
+  }
+  const actualHeaders = actual as Record<string, unknown>;
+  for (const [name, value] of Object.entries(expected)) {
+    if (actualHeaders[name] !== value) return false;
+  }
+  const extraNames = Object.keys(actualHeaders).filter((name) => !Object.hasOwn(expected, name));
+  if (extraNames.length === 0) return true;
+  if (extraNames.length !== 1) return false;
+  const [extraName] = extraNames;
+  return (
+    extraName.toLowerCase() === "accept" &&
+    actualHeaders[extraName] === "application/json, text/event-stream"
+  );
+}
+
+function mcporterHeaderMatcherSource(): string {
+  return `const mcporterHeadersMatchExpected = ${mcporterHeadersMatchExpected.toString()};`;
+}
+
+function ensureMcporter(sandboxName: string): void {
+  const check = executeSandboxCommand(sandboxName, "command -v mcporter");
+  if (check?.status === 0 && check.stdout.trim()) return;
+  throw new McpBridgeError(
+    `mcporter is not available in sandbox '${sandboxName}'. Rebuild with a NemoClaw image that includes mcporter@${MCPORTER_VERSION}.`,
+  );
+}
+
+export function buildOpenClawMcporterRegisterCommand(
+  entry: McpBridgeEntry,
+  replaceExisting = false,
+): string {
+  const args = ["mcporter", "config", "add", entry.server, "--url", entry.url];
+  const authorization = authorizationValue(entry);
+  if (authorization) args.push("--header", `${DEFAULT_AUTH_HEADER}=${authorization}`);
+  args.push("--scope", "home");
+  const addCommand = args.map(shellQuote).join(" ");
+  if (replaceExisting) return addCommand;
+  const getCommand = ["mcporter", "config", "get", entry.server, "--json"]
+    .map(shellQuote)
+    .join(" ");
+  return [
+    `if ${getCommand} >/dev/null 2>&1; then`,
+    `  echo ${shellQuote(`MCP server '${entry.server}' already exists in mcporter config and is not managed by NemoClaw.`)} >&2`,
+    "  exit 2",
+    "fi",
+    addCommand,
+  ].join("\n");
+}
+
+function pythonJsonLiteral(value: unknown): string {
+  return JSON.stringify(JSON.stringify(value));
+}
+
+export function buildHermesMcpRegisterCommand(
+  entry: McpBridgeEntry,
+  replaceExisting = false,
+): string[] {
+  const payload = {
+    server: entry.server,
+    url: entry.url,
+    headers: entryHeaders(entry),
+    replace_existing: replaceExisting,
+  };
+  return [
+    "/opt/hermes/.venv/bin/python",
+    "/usr/local/lib/nemoclaw/hermes-mcp-config-transaction.py",
+    "add",
+    "--payload",
+    JSON.stringify(payload),
+  ];
+}
+
+function buildHermesMcpRemoveCommand(entry: McpBridgeEntry, force = false): string[] {
+  const payload = {
+    server: entry.server,
+    url: entry.url,
+    headers: entryHeaders(entry),
+    force,
+  };
+  return [
+    "/opt/hermes/.venv/bin/python",
+    "/usr/local/lib/nemoclaw/hermes-mcp-config-transaction.py",
+    "remove",
+    "--payload",
+    JSON.stringify(payload),
+  ];
+}
+
+export function buildHermesMcpLifecycleExecArgs(
+  sandboxName: string,
+  command: readonly string[],
+): string[] {
+  return ["sandbox", "exec", "--name", sandboxName, "--no-tty", "--", ...command];
+}
+
+function hermesManagedServerConfig(entry: McpBridgeEntry): Record<string, unknown> {
+  const headers = entryHeaders(entry);
+  return {
+    url: entry.url,
+    enabled: true,
+    timeout: 120,
+    connect_timeout: 60,
+    tools: { resources: true, prompts: true },
+    ...(Object.keys(headers).length > 0 ? { headers } : {}),
+  };
+}
+
+export function buildHermesMcpStatusCommand(entry: McpBridgeEntry): string {
+  const payload = {
+    server: entry.server,
+    expected: hermesManagedServerConfig(entry),
+  };
+  return [
+    "/opt/hermes/.venv/bin/python - <<'PY'",
+    "import json, pathlib, yaml",
+    `payload = json.loads(${pythonJsonLiteral(payload)})`,
+    'config_path = pathlib.Path("/sandbox/.hermes/config.yaml")',
+    "data = yaml.safe_load(config_path.read_text(encoding='utf-8')) if config_path.exists() else {}",
+    "servers = data.get('mcp_servers') if isinstance(data, dict) else None",
+    "present = isinstance(servers, dict) and payload['server'] in servers",
+    "server = servers.get(payload['server']) if present else None",
+    "ok = server == payload['expected']",
+    "print('registered' if ok else ('mismatch' if present else 'absent'))",
+    "PY",
+  ].join("\n");
+}
+
+export function buildDeepAgentsMcpRegisterCommand(
+  entry: McpBridgeEntry,
+  replaceExisting = false,
+): string {
+  const payload = {
+    server: entry.server,
+    expected: deepAgentsManagedServerConfig(entry),
+    replaceExisting,
+  };
+  return [
+    "python3 - <<'PY'",
+    "import json, os, pathlib, sys",
+    `payload = json.loads(${pythonJsonLiteral(payload)})`,
+    `config_path = pathlib.Path(${JSON.stringify(DEEPAGENTS_MCP_CONFIG_PATH)})`,
+    "data = {}",
+    "if config_path.exists():",
+    "    try:",
+    "        data = json.loads(config_path.read_text(encoding='utf-8') or '{}')",
+    "    except json.JSONDecodeError as exc:",
+    `        print(f'Invalid ${DEEPAGENTS_MCP_CONFIG_PATH}: {exc}', file=sys.stderr)`,
+    "        raise SystemExit(2)",
+    "if not isinstance(data, dict):",
+    `    print('Invalid ${DEEPAGENTS_MCP_CONFIG_PATH}: expected a JSON object', file=sys.stderr)`,
+    "    raise SystemExit(2)",
+    "servers = data.setdefault('mcpServers', {})",
+    "if not isinstance(servers, dict):",
+    `    print('Invalid ${DEEPAGENTS_MCP_CONFIG_PATH}: mcpServers must be an object', file=sys.stderr)`,
+    "    raise SystemExit(2)",
+    "if payload['server'] in servers and not payload['replaceExisting']:",
+    `    print(f"MCP server '{payload['server']}' already exists in ${DEEPAGENTS_MCP_CONFIG_PATH} and is not managed by NemoClaw.", file=sys.stderr)`,
+    "    raise SystemExit(2)",
+    "servers[payload['server']] = payload['expected']",
+    "tmp = config_path.with_name(config_path.name + '.nemoclaw-mcp.tmp')",
+    "tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + '\\n', encoding='utf-8')",
+    "os.chmod(tmp, 0o600)",
+    "os.replace(tmp, config_path)",
+    "os.chmod(config_path, 0o600)",
+    "PY",
+  ].join("\n");
+}
+
+function deepAgentsManagedServerConfig(entry: McpBridgeEntry): Record<string, unknown> {
+  const headers = entryHeaders(entry);
+  return {
+    type: "http",
+    url: entry.url,
+    ...(Object.keys(headers).length > 0 ? { headers } : {}),
+  };
+}
+
+export function buildDeepAgentsMcpRemoveCommand(entry: McpBridgeEntry, force = false): string {
+  const payload = {
+    server: entry.server,
+    expected: deepAgentsManagedServerConfig(entry),
+    force,
+  };
+  return [
+    "python3 - <<'PY'",
+    "import json, os, pathlib, sys",
+    `payload = json.loads(${pythonJsonLiteral(payload)})`,
+    `config_path = pathlib.Path(${JSON.stringify(DEEPAGENTS_MCP_CONFIG_PATH)})`,
+    "if not config_path.exists():",
+    "    raise SystemExit(0)",
+    "try:",
+    "    data = json.loads(config_path.read_text(encoding='utf-8') or '{}')",
+    "except json.JSONDecodeError as exc:",
+    `    print(f'Invalid ${DEEPAGENTS_MCP_CONFIG_PATH}: {exc}', file=sys.stderr)`,
+    "    raise SystemExit(2)",
+    "if not isinstance(data, dict):",
+    `    print('Invalid ${DEEPAGENTS_MCP_CONFIG_PATH}: expected a JSON object', file=sys.stderr)`,
+    "    raise SystemExit(2)",
+    "servers = data.get('mcpServers')",
+    "if servers is not None and not isinstance(servers, dict):",
+    `    print('Invalid ${DEEPAGENTS_MCP_CONFIG_PATH}: mcpServers must be an object', file=sys.stderr)`,
+    "    raise SystemExit(2)",
+    "if isinstance(servers, dict):",
+    "    present = payload['server'] in servers",
+    "    current = servers.get(payload['server'])",
+    "    if present and not payload['force']:",
+    "        if current != payload['expected']:",
+    `            print(f"Refusing to remove modified MCP server '{payload['server']}' from ${DEEPAGENTS_MCP_CONFIG_PATH}. Use --force to remove it.", file=sys.stderr)`,
+    "            raise SystemExit(2)",
+    "    servers.pop(payload['server'], None)",
+    "    if not servers:",
+    "        data.pop('mcpServers', None)",
+    "        if not data:",
+    "            config_path.unlink()",
+    "            raise SystemExit(0)",
+    "tmp = config_path.with_name(config_path.name + '.nemoclaw-mcp.tmp')",
+    "tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + '\\n', encoding='utf-8')",
+    "os.chmod(tmp, 0o600)",
+    "os.replace(tmp, config_path)",
+    "os.chmod(config_path, 0o600)",
+    "PY",
+  ].join("\n");
+}
+
+export function buildDeepAgentsMcpStatusCommand(entry: McpBridgeEntry): string {
+  const payload = {
+    server: entry.server,
+    expected: deepAgentsManagedServerConfig(entry),
+  };
+  return [
+    "python3 - <<'PY'",
+    "import json, pathlib",
+    `payload = json.loads(${pythonJsonLiteral(payload)})`,
+    `config_path = pathlib.Path(${JSON.stringify(DEEPAGENTS_MCP_CONFIG_PATH)})`,
+    "try:",
+    "    data = json.loads(config_path.read_text(encoding='utf-8') or '{}')",
+    "except Exception:",
+    "    data = {}",
+    "servers = data.get('mcpServers') if isinstance(data, dict) else None",
+    "present = isinstance(servers, dict) and payload['server'] in servers",
+    "server = servers.get(payload['server']) if present else None",
+    "ok = server == payload['expected']",
+    "print('registered' if ok else ('mismatch' if present else 'absent'))",
+    "PY",
+  ].join("\n");
+}
+
+export function buildOpenClawMcporterInspectCommand(
+  entry: McpBridgeEntry,
+  failOnMismatch: boolean,
+): string {
+  const payload = {
+    server: entry.server,
+    url: entry.url,
+    headers: entryHeaders(entry),
+    failOnMismatch,
+  };
+  return [
+    "node - <<'NODE'",
+    'const { spawnSync } = require("node:child_process");',
+    `const expected = JSON.parse(${pythonJsonLiteral(payload)});`,
+    'const result = spawnSync("mcporter", ["config", "get", expected.server, "--json"], { encoding: "utf8" });',
+    "if (result.error) { console.error(result.error.message); process.exit(3); }",
+    "if (result.status !== 0) {",
+    '  const detail = `${result.stderr || ""}\n${result.stdout || ""}`;',
+    "  if (/not\\s+found|does\\s+not\\s+exist|unknown\\s+server/i.test(detail)) { console.log('absent'); process.exit(0); }",
+    "  console.error(detail.trim() || `mcporter config get exited ${result.status}`);",
+    "  process.exit(3);",
+    "}",
+    "let actual = null;",
+    "try { actual = JSON.parse(result.stdout); } catch {}",
+    'const headers = actual && actual.headers && typeof actual.headers === "object" ? actual.headers : {};',
+    mcporterHeaderMatcherSource(),
+    'const registered = !!actual && actual.name === expected.server && actual.transport === "http" && actual.baseUrl === expected.url && mcporterHeadersMatchExpected(headers, expected.headers);',
+    'console.log(registered ? "registered" : "mismatch");',
+    "if (!registered && expected.failOnMismatch) process.exit(2);",
+    "NODE",
+  ].join("\n");
+}
+
+export function buildOpenClawMcporterRemoveCommand(entry: McpBridgeEntry, force = false): string {
+  const payload = {
+    server: entry.server,
+    url: entry.url,
+    headers: entryHeaders(entry),
+    force,
+  };
+  return [
+    "node - <<'NODE'",
+    'const { spawnSync } = require("node:child_process");',
+    `const expected = JSON.parse(${pythonJsonLiteral(payload)});`,
+    'const get = spawnSync("mcporter", ["config", "get", expected.server, "--json"], { encoding: "utf8" });',
+    "if (get.error) { console.error(get.error.message); process.exit(3); }",
+    'const getDetail = `${get.stderr || ""}\n${get.stdout || ""}`;',
+    "const absent = get.status !== 0 && /not\\s+found|does\\s+not\\s+exist|unknown\\s+server/i.test(getDetail);",
+    "if (absent) process.exit(0);",
+    "if (get.status !== 0) { console.error(getDetail.trim()); process.exit(3); }",
+    "let actual = null; try { actual = JSON.parse(get.stdout); } catch {}",
+    'const headers = actual && actual.headers && typeof actual.headers === "object" ? actual.headers : {};',
+    mcporterHeaderMatcherSource(),
+    'const registered = !!actual && actual.name === expected.server && actual.transport === "http" && actual.baseUrl === expected.url && mcporterHeadersMatchExpected(headers, expected.headers);',
+    "if (!registered && !expected.force) { console.error(`Refusing to remove modified mcporter MCP server '${expected.server}'. Use --force to remove it.`); process.exit(2); }",
+    'const remove = spawnSync("mcporter", ["config", "remove", expected.server], { encoding: "utf8" });',
+    "if (remove.stdout) process.stdout.write(remove.stdout);",
+    "if (remove.stderr) process.stderr.write(remove.stderr);",
+    "if (remove.error) { console.error(remove.error.message); process.exit(3); }",
+    'const removeDetail = `${remove.stderr || ""}\n${remove.stdout || ""}`;',
+    "if (remove.status !== 0 && /not\\s+found|does\\s+not\\s+exist|unknown\\s+server/i.test(removeDetail)) process.exit(0);",
+    "process.exit(remove.status === null ? 3 : remove.status);",
+    "NODE",
+  ].join("\n");
+}
+
+function registerOpenClawAdapter(
+  sandboxName: string,
+  entry: McpBridgeEntry,
+  envValues: Record<string, string> = {},
+  replaceExisting = false,
+): void {
+  ensureMcporter(sandboxName);
+  const result = executeSandboxCommand(
+    sandboxName,
+    buildOpenClawMcporterRegisterCommand(entry, replaceExisting),
+  );
+  const output = redactBridgeSecretsForDisplay(
+    [result?.stdout, result?.stderr].filter(Boolean).join("\n").trim(),
+    entry,
+    envValues,
+  );
+  if (!result || result.status !== 0) {
+    throw new McpBridgeError(output || `mcporter config add failed for '${entry.server}'.`);
+  }
+
+  // A zero exit from `config add` proves only that mcporter accepted the
+  // command. Re-read the persisted definition before claiming ownership so a
+  // changed mcporter normalization/schema cannot commit an entry that differs
+  // from the URL and opaque OpenShell placeholder NemoClaw intended.
+  const verification = executeSandboxCommand(
+    sandboxName,
+    buildOpenClawMcporterInspectCommand(entry, true),
+  );
+  const verificationOutput = redactBridgeSecretsForDisplay(
+    [verification?.stdout, verification?.stderr].filter(Boolean).join("\n").trim(),
+    entry,
+    envValues,
+  );
+  if (
+    !verification ||
+    verification.status !== 0 ||
+    verification.stdout.trim().split(/\r?\n/).at(-1) !== "registered"
+  ) {
+    throw new McpBridgeError(
+      `mcporter config verification failed after adding '${entry.server}'${verificationOutput ? `: ${verificationOutput}` : "."}`,
+    );
+  }
+}
+
+function runAdapterCommand(
+  sandboxName: string,
+  entry: Pick<McpBridgeEntry, "env">,
+  command: string,
+  failureMessage: string,
+  options: {
+    force?: boolean;
+    bestEffort?: boolean;
+    envValues?: Record<string, string>;
+  } = {},
+): void {
+  const result = executeSandboxCommand(sandboxName, command);
+  const output = redactBridgeSecretsForDisplay(
+    [result?.stdout, result?.stderr].filter(Boolean).join("\n").trim(),
+    entry,
+    options.envValues ?? {},
+  );
+  if (!result || result.status !== 0) {
+    if (options.bestEffort) return;
+    throw new McpBridgeError(output || failureMessage);
+  }
+}
+
+export type AdapterRegistrationInspection =
+  | { state: "absent" | "registered" | "mismatch" }
+  | { state: "error"; detail: string };
+
+export function parseAdapterRegistrationInspection(
+  result: SandboxCommandResult,
+  entry: McpBridgeEntry,
+): AdapterRegistrationInspection {
+  const output = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
+  if (result.status !== 0) {
+    return {
+      state: "error",
+      detail:
+        redactBridgeSecretsForDisplay(output, entry) ||
+        `MCP adapter inspection exited ${result.status}.`,
+    };
+  }
+  // Successful inspection commands write exactly one ownership state to
+  // stdout. Runtime warnings belong on stderr and must not replace that state.
+  const state = result.stdout.trim().split(/\r?\n/).at(-1)?.trim();
+  if (state === "absent" || state === "registered" || state === "mismatch") {
+    return { state };
+  }
+  return {
+    state: "error",
+    detail: redactBridgeSecretsForDisplay(
+      output || "MCP adapter inspection returned no state.",
+      entry,
+    ),
+  };
+}
+
+export function inspectAgentAdapterRegistration(
+  sandboxName: string,
+  adapter: AgentMcpAdapter,
+  entry: McpBridgeEntry,
+): AdapterRegistrationInspection {
+  const command =
+    adapter === "mcporter"
+      ? buildOpenClawMcporterInspectCommand(entry, false)
+      : adapter === "hermes-config"
+        ? buildHermesMcpStatusCommand(entry)
+        : buildDeepAgentsMcpStatusCommand(entry);
+  const result = executeSandboxCommand(sandboxName, command);
+  if (!result) return { state: "error", detail: "sandbox unreachable" };
+  return parseAdapterRegistrationInspection(result, entry);
+}
+
+function parseLastJsonObject(output: string): Record<string, unknown> | null {
+  for (const line of output.trim().split(/\r?\n/).reverse()) {
+    try {
+      const parsed = JSON.parse(line) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // OpenShell may frame diagnostics around the command's JSON line.
+    }
+  }
+  return null;
+}
+
+function runHermesAdapterCommand(
+  sandboxName: string,
+  entry: McpBridgeEntry,
+  command: readonly string[],
+  failureMessage: string,
+  options: {
+    bestEffort?: boolean;
+    envValues?: Record<string, string>;
+    requireReload?: boolean;
+  } = {},
+): void {
+  // OpenShell current main runs this one-shot command with the sandbox's
+  // configured workload uid and network namespace. That is the same identity
+  // and loopback namespace as Hermes, without a listener, proxy, or persistent
+  // privileged service. The argv carries only an OpenShell placeholder.
+  let result: ReturnType<typeof runOpenshellProviderCommand>;
+  try {
+    result = runOpenshellProviderCommand(buildHermesMcpLifecycleExecArgs(sandboxName, command), {
+      ignoreError: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      // Hermes can spend up to 180s draining, followed by a 60s health window.
+      timeout: 645_000,
+    });
+  } catch (error) {
+    if (options.bestEffort) return;
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new McpBridgeError(
+      redactBridgeSecretsForDisplay(detail, entry, options.envValues ?? {}) || failureMessage,
+    );
+  }
+  const output = redactBridgeSecretsForDisplay(
+    commandOutput(result, options.envValues ?? {}),
+    entry,
+    options.envValues ?? {},
+  );
+  if (result.status !== 0 || result.error) {
+    if (options.bestEffort) return;
+    const errorDetail = result.error
+      ? redactBridgeSecretsForDisplay(result.error.message, entry, options.envValues ?? {})
+      : "";
+    throw new McpBridgeError(errorDetail || output || failureMessage);
+  }
+  const stdout = result.stdout || "";
+  const response = parseLastJsonObject(stdout);
+  if (
+    response?.ok !== true ||
+    typeof response.changed !== "boolean" ||
+    typeof response.reloaded !== "boolean"
+  ) {
+    if (options.bestEffort) return;
+    throw new McpBridgeError(
+      `Hermes MCP lifecycle command returned an invalid response for '${entry.server}'.`,
+    );
+  }
+  if (options.requireReload && response.reloaded !== true) {
+    if (options.bestEffort) return;
+    throw new McpBridgeError(
+      `Hermes gateway was not running, so MCP server '${entry.server}' was not loaded.`,
+    );
+  }
+}
+
+export function registerAgentAdapter(
+  sandboxName: string,
+  adapter: AgentMcpAdapter,
+  entry: McpBridgeEntry,
+  envValues: Record<string, string> = {},
+  options: { replaceExisting?: boolean } = {},
+): void {
+  switch (adapter) {
+    case "mcporter":
+      registerOpenClawAdapter(sandboxName, entry, envValues, options.replaceExisting === true);
+      return;
+    case "hermes-config":
+      runHermesAdapterCommand(
+        sandboxName,
+        entry,
+        buildHermesMcpRegisterCommand(entry, options.replaceExisting === true),
+        `Hermes MCP config registration failed for '${entry.server}'.`,
+        { envValues, requireReload: true },
+      );
+      return;
+    case "deepagents-config":
+      runAdapterCommand(
+        sandboxName,
+        entry,
+        buildDeepAgentsMcpRegisterCommand(entry, options.replaceExisting === true),
+        `Deep Agents Code MCP config registration failed for '${entry.server}'.`,
+        { envValues },
+      );
+      return;
+  }
+}
+
+function unregisterOpenClawAdapter(
+  sandboxName: string,
+  entry: McpBridgeEntry,
+  options: {
+    force?: boolean;
+    bestEffort?: boolean;
+    envValues?: Record<string, string>;
+  } = {},
+): void {
+  const result = executeSandboxCommand(
+    sandboxName,
+    buildOpenClawMcporterRemoveCommand(entry, options.force === true),
+  );
+  const output = redactBridgeSecretsForDisplay(
+    [result?.stdout, result?.stderr].filter(Boolean).join("\n").trim(),
+    entry,
+    options.envValues ?? {},
+  );
+  if (!result || result.status !== 0) {
+    if (options.bestEffort) return;
+    throw new McpBridgeError(output || `mcporter config remove failed for '${entry.server}'.`);
+  }
+}
+
+export function unregisterAgentAdapter(
+  sandboxName: string,
+  adapter: AgentMcpAdapter,
+  entry: McpBridgeEntry,
+  options: {
+    force?: boolean;
+    bestEffort?: boolean;
+    envValues?: Record<string, string>;
+  } = {},
+): void {
+  switch (adapter) {
+    case "mcporter":
+      unregisterOpenClawAdapter(sandboxName, entry, options);
+      return;
+    case "hermes-config":
+      runHermesAdapterCommand(
+        sandboxName,
+        entry,
+        buildHermesMcpRemoveCommand(entry, options.force === true),
+        `Hermes MCP config removal failed for '${entry.server}'.`,
+        options,
+      );
+      return;
+    case "deepagents-config":
+      runAdapterCommand(
+        sandboxName,
+        entry,
+        buildDeepAgentsMcpRemoveCommand(entry, options.force === true),
+        `Deep Agents Code MCP config removal failed for '${entry.server}'.`,
+        options,
+      );
+      return;
+  }
+}

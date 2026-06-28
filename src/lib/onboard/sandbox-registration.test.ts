@@ -1,18 +1,14 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { createRequire } from "node:module";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createRequire } from "node:module";
-
-import {
-  buildCreatedSandboxRegistryEntry,
-  registerCreatedSandbox,
-  selection,
-} from "../../../dist/lib/onboard/sandbox-registration";
-
 const requireDist = createRequire(import.meta.url);
-const onboardSession = requireDist("../../../dist/lib/state/onboard-session.js");
+const onboardSession = requireDist("../state/onboard-session.js");
+const { buildCreatedSandboxRegistryEntry, registerCreatedSandbox, selection } = requireDist(
+  "./sandbox-registration.ts",
+) as typeof import("./sandbox-registration");
 
 const runtimeFields = {
   gpuEnabled: true,
@@ -129,6 +125,49 @@ describe("buildCreatedSandboxRegistryEntry", () => {
     expect(entry.hermesDashboardPort).toBeUndefined();
     expect(entry.hermesDashboardInternalPort).toBeUndefined();
     expect(entry.hermesDashboardTui).toBeUndefined();
+  });
+
+  it("carries a durable MCP rebuild manifest into the replacement registry entry", () => {
+    const preservedMcpState = {
+      bridges: {
+        github: {
+          server: "github",
+          agent: "openclaw",
+          adapter: "mcporter",
+          url: "https://mcp.example.test/mcp",
+          env: ["GITHUB_TOKEN"],
+          providerName: "demo-mcp-github",
+          policyName: "mcp-bridge-github",
+          addedAt: "2026-06-27T00:00:00.000Z",
+        },
+      },
+    };
+    const entry = buildCreatedSandboxRegistryEntry({
+      sandboxName: "demo",
+      inferenceSelection: {
+        model: "llama",
+        provider: "openai-compatible",
+        endpointUrl: null,
+        credentialEnv: null,
+        preferredInferenceApi: null,
+        nimContainer: null,
+      },
+      runtimeFields,
+      agent: null,
+      agentVersionKnown: true,
+      imageTag: "nemoclaw-demo:replacement",
+      appliedPolicies: [],
+      plannedMessagingState: undefined,
+      preservedMcpState,
+      hermesToolGateways: [],
+      hermesDashboardState: { enabled: false, config: null },
+      dashboardPort: 18789,
+      gatewayName: "nemoclaw",
+      gatewayPort: 8080,
+    });
+
+    expect(entry.mcp).toBe(preservedMcpState);
+    expect(entry.mcp?.bridges.github?.providerName).toBe("demo-mcp-github");
   });
 
   it("normalizes invalid preferred inference API values", () => {

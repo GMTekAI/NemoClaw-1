@@ -123,8 +123,8 @@ def _validate_payload(action: str, payload: dict[str, object]) -> None:
     if not isinstance(raw_url, str) or len(raw_url) > 2048:
         raise ValueError("MCP mutation payload has an invalid URL")
     parsed = urlsplit(raw_url)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        raise ValueError("MCP mutation payload URL must be HTTP or HTTPS")
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError("MCP mutation payload URL must use HTTPS")
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ValueError("MCP mutation payload URL contains forbidden components")
     hostname = parsed.hostname.lower().rstrip(".")
@@ -151,8 +151,6 @@ def _validate_payload(action: str, payload: dict[str, object]) -> None:
         )
     ):
         raise ValueError("MCP mutation payload URL uses a reserved hostname")
-    if parsed.scheme != "https" and not host_alias:
-        raise ValueError("Public MCP mutation payload URLs must use HTTPS")
     try:
         address = ipaddress.ip_address(hostname)
     except ValueError:
@@ -172,7 +170,7 @@ def _validate_payload(action: str, payload: dict[str, object]) -> None:
         char in path for char in ("%", "\\", ";", "*", "?", "[", "]", "{", "}")
     ):
         raise ValueError("MCP mutation payload URL path must be literal and canonical")
-    default_port = 443 if parsed.scheme == "https" else 80
+    default_port = 443
     authority = hostname if port in {None, default_port} else f"{hostname}:{port}"
     canonical = f"{parsed.scheme}://{authority}{path}"
     if raw_url != canonical:

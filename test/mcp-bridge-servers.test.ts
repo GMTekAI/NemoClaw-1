@@ -1,15 +1,52 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { afterEach, describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import https from "node:https";
+import os from "node:os";
+import path from "node:path";
+
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 
 import {
   type StartedHttpServer,
   startCompatibleMock,
-  startFakeMcpHttpServer,
+  startFakeMcpHttpsServer,
 } from "./e2e-scenario/live/mcp-bridge-servers";
 
 const servers: StartedHttpServer[] = [];
+const tlsDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-mcp-fixture-tls-"));
+execFileSync(
+  "openssl",
+  [
+    "req",
+    "-x509",
+    "-newkey",
+    "rsa:2048",
+    "-sha256",
+    "-nodes",
+    "-days",
+    "1",
+    "-subj",
+    "/CN=127.0.0.1",
+    "-addext",
+    "subjectAltName=IP:127.0.0.1",
+    "-keyout",
+    path.join(tlsDir, "server.key"),
+    "-out",
+    path.join(tlsDir, "server.crt"),
+  ],
+  { stdio: "ignore" },
+);
+const fixtureTls = {
+  cert: fs.readFileSync(path.join(tlsDir, "server.crt")),
+  key: fs.readFileSync(path.join(tlsDir, "server.key")),
+};
+
+afterAll(() => {
+  fs.rmSync(tlsDir, { recursive: true, force: true });
+});
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => server.close()));
@@ -20,52 +57,74 @@ describe("authenticated MCP live fixtures", () => {
     const secret = "fixture-secret";
     const challenge = "fixture-challenge";
     const resultToken = `MCP_AUTH_REWRITE_OK::${challenge}`;
-    const server = await startFakeMcpHttpServer({
+    const server = await startFakeMcpHttpsServer({
       secret,
       challenge,
       resultToken,
+      tls: fixtureTls,
     });
     servers.push(server);
-    const url = `http://127.0.0.1:${server.port}/mcp`;
+    const url = `https://127.0.0.1:${server.port}/mcp`;
     const headers = {
       authorization: `Bearer ${secret}`,
       "content-type": "application/json",
     };
 
-    expect((await fetch(url, { method: "HEAD" })).status).toBe(405);
-    const initialize = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "initialize",
-        params: { protocolVersion: "2025-06-18" },
-      }),
+    const request = async (
+      method: string,
+      body?: Record<string, unknown>,
+    ): Promise<{ status: number; json(): unknown }> =>
+      await new Promise((resolve, reject) => {
+        const encoded = body ? JSON.stringify(body) : "";
+        const req = https.request(
+          url,
+          {
+            method,
+            rejectUnauthorized: false,
+            headers: encoded
+              ? { ...headers, "content-length": Buffer.byteLength(encoded) }
+              : headers,
+          },
+          (response) => {
+            let responseBody = "";
+            response.setEncoding("utf8");
+            response.on("data", (chunk: string) => {
+              responseBody += chunk;
+            });
+            response.on("end", () =>
+              resolve({
+                status: response.statusCode ?? 0,
+                json: () => JSON.parse(responseBody),
+              }),
+            );
+          },
+        );
+        req.on("error", reject);
+        req.end(encoded);
+      });
+
+    expect((await request("HEAD")).status).toBe(405);
+    const initialize = await request("POST", {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18" },
     });
-    expect(await initialize.json()).toMatchObject({
+    expect(initialize.json()).toMatchObject({
       result: { protocolVersion: "2025-06-18" },
     });
-    const initialized = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        method: "notifications/initialized",
-      }),
+    const initialized = await request("POST", {
+      jsonrpc: "2.0",
+      method: "notifications/initialized",
     });
     expect(initialized.status).toBe(202);
 
-    const list = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 2,
-        method: "tools/list",
-      }),
+    const list = await request("POST", {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/list",
     });
-    expect(await list.json()).toMatchObject({
+    expect(list.json()).toMatchObject({
       result: {
         tools: [
           {
@@ -76,17 +135,13 @@ describe("authenticated MCP live fixtures", () => {
       },
     });
 
-    const call = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 3,
-        method: "tools/call",
-        params: { name: "fake_echo", arguments: { challenge } },
-      }),
+    const call = await request("POST", {
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: { name: "fake_echo", arguments: { challenge } },
     });
-    expect(await call.json()).toMatchObject({
+    expect(call.json()).toMatchObject({
       result: {
         content: [{ type: "text", text: resultToken }],
         isError: false,

@@ -3928,7 +3928,7 @@ function writeOpenShellOkStub(fakeBin: string, version = "0.0.72") {
     path.join(fakeBin, "openshell"),
     `#!/usr/bin/env bash
 if [ "$1" = "--version" ] || [ "$1" = "version" ]; then echo "openshell ${version}"; exit 0; fi
-# request-body-credential-rewrite websocket-credential-rewrite allow_all_known_mcp_methods
+# request-body-credential-rewrite websocket-credential-rewrite allow_all_known_mcp_methods authenticated-mcp-policy-bound-credential-rewrite-v1
 exit 0
 `,
   );
