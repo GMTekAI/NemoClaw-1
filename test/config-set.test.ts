@@ -92,29 +92,21 @@ describe("buildRecomputeSandboxConfigHashScript", () => {
 
 describe("selectDirectSandboxContainer", () => {
   it("returns the exact direct sandbox container when present", () => {
-    const selected = selectDirectSandboxContainer(
-      "demo",
-      "openshell-demo\nopenshell-demo-helper\n",
-      ["demo"],
-    );
+    const selected = selectDirectSandboxContainer("demo", "abc123\topenshell-demo\n");
 
-    expect(selected).toBe("openshell-demo");
+    expect(selected).toBe("abc123");
   });
 
   it("falls back to the generated direct sandbox container prefix", () => {
-    const selected = selectDirectSandboxContainer(
-      "demo",
-      "openshell-other\nopenshell-demo-abc123\n",
-      ["demo"],
-    );
+    const selected = selectDirectSandboxContainer("demo", "def456\topenshell-demo-abc123\n");
 
-    expect(selected).toBe("openshell-demo-abc123");
+    expect(selected).toBe("def456");
   });
 
-  it("does not select a prefix-collision container owned by a longer sandbox name", () => {
-    expect(
-      selectDirectSandboxContainer("demo", "openshell-demo-child\n", ["demo", "demo-child"]),
-    ).toBeNull();
+  it("rejects a labeled container whose name does not match the sandbox", () => {
+    expect(() =>
+      selectDirectSandboxContainer("demo", "abc123\topenshell-other\n"),
+    ).toThrow("labels and names disagree");
   });
 });
 
