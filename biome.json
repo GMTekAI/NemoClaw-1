@@ -144,6 +144,45 @@
       }
     },
     {
+      "includes": [
+        "src/lib/actions/sandbox/doctor.ts",
+        "src/lib/actions/sandbox/doctor-messaging.ts",
+        "src/lib/actions/sandbox/doctor-report.ts",
+        "src/lib/actions/sandbox/doctor-system-checks.ts"
+      ],
+      "linter": {
+        "rules": {
+          "complexity": {
+            "noExcessiveCognitiveComplexity": {
+              "level": "error",
+              "options": {
+                "maxAllowedComplexity": 10
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": [
+        "src/lib/onboard/machine/handlers/sandbox.ts",
+        "src/lib/onboard/machine/handlers/sandbox-messaging.ts",
+        "src/lib/onboard/machine/handlers/sandbox-resume.ts"
+      ],
+      "linter": {
+        "rules": {
+          "complexity": {
+            "noExcessiveCognitiveComplexity": {
+              "level": "error",
+              "options": {
+                "maxAllowedComplexity": 10
+              }
+            }
+          }
+        }
+      }
+    },
+    {
       "includes": ["nemoclaw/src/**/*.ts"],
       "linter": {
         "rules": {
