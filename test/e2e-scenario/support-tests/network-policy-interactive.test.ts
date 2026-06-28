@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   findPolicyPresetNumber,
   POLICY_ADD_EXPECT_SCRIPT,
+  requirePolicyPresetNumber,
 } from "../live/network-policy-interactive.ts";
 
 describe("network-policy interactive preset harness", () => {
@@ -19,6 +20,7 @@ describe("network-policy interactive preset harness", () => {
     expect(findPolicyPresetNumber(output, "slack")).toBe("15");
     expect(findPolicyPresetNumber(output, "pypi")).toBe("16");
     expect(findPolicyPresetNumber(output, "missing")).toBeNull();
+    expect(() => requirePolicyPresetNumber(output, "missing")).toThrow(/preset missing not found/);
   });
 
   it("waits for each prompt before sending the corresponding response", () => {

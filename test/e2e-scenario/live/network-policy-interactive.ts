@@ -48,3 +48,11 @@ export function findPolicyPresetNumber(output: string, preset: string): string |
   );
   return match?.[1] ?? null;
 }
+
+export function requirePolicyPresetNumber(output: string, preset: string): string {
+  const presetNumber = findPolicyPresetNumber(output, preset);
+  if (!presetNumber) {
+    throw new Error(`preset ${preset} not found in interactive policy-add list: ${output}`);
+  }
+  return presetNumber;
+}

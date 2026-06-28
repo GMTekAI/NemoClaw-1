@@ -22,7 +22,10 @@ import { type SandboxClient, trustedSandboxShellScript } from "../fixtures/clien
 import { expect, test } from "../fixtures/e2e-test.ts";
 import { shouldRunLiveE2EScenarios } from "../fixtures/live-project-gate.ts";
 import type { ShellProbeResult } from "../fixtures/shell-probe.ts";
-import { findPolicyPresetNumber, POLICY_ADD_EXPECT_SCRIPT } from "./network-policy-interactive.ts";
+import {
+  POLICY_ADD_EXPECT_SCRIPT,
+  requirePolicyPresetNumber,
+} from "./network-policy-interactive.ts";
 import { isTransientProviderValidationFailure } from "./network-policy-transient-provider.ts";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
@@ -125,12 +128,7 @@ async function applyPresetInteractively(
       timeoutMs: SANDBOX_EXEC_TIMEOUT_MS,
     },
   );
-  const presetNumber = findPolicyPresetNumber(text(listResult), preset);
-  if (!presetNumber) {
-    throw new Error(
-      `preset ${preset} not found in interactive policy-add list: ${text(listResult)}`,
-    );
-  }
+  const presetNumber = requirePolicyPresetNumber(text(listResult), preset);
 
   const result = await host.command("expect", ["-c", POLICY_ADD_EXPECT_SCRIPT], {
     artifactName: `policy-add-${preset}-interactive`,
