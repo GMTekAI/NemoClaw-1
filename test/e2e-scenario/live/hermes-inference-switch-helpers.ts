@@ -347,7 +347,7 @@ export function expectedApiMode(): string | undefined {
   ]).get(SWITCH_API);
 }
 
-export const API_KEY_SHAPE_PATTERN = `^[[:space:]]+api_key:[[:space:]]*["']?sk-[^"'[:space:]]+`;
+export const API_KEY_SHAPE_PATTERN = `^[[:space:]]*api_key:[[:space:]]*("sk-[^"[:space:]]+"|'sk-[^'[:space:]]+'|sk-[^"'[:space:]]+)[[:space:]]*$`;
 
 export function apiKeyShapeCommand(): string[] {
   return ["grep", "-Eq", API_KEY_SHAPE_PATTERN, "/sandbox/.hermes/config.yaml"];
