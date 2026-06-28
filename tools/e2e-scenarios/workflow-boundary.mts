@@ -4997,6 +4997,7 @@ function validateModelRouterProviderRoutedInferenceVitestJob(
     );
   }
   for (const secret of [
+    "NVIDIA_API_KEY",
     "NVIDIA_INFERENCE_API_KEY",
     "DOCKERHUB_USERNAME",
     "DOCKERHUB_TOKEN",
@@ -5020,9 +5021,15 @@ function validateModelRouterProviderRoutedInferenceVitestJob(
         errors,
         stepName,
         stepEnv,
-        "NVIDIA_INFERENCE_API_KEY",
+        "NVIDIA_API_KEY",
       );
     }
+    requireEnvDoesNotExposeSecret(
+      errors,
+      stepName,
+      stepEnv,
+      "NVIDIA_INFERENCE_API_KEY",
+    );
     if (step.name !== "Authenticate to Docker Hub") {
       requireEnvDoesNotExposeSecret(
         errors,
@@ -5132,12 +5139,9 @@ function validateModelRouterProviderRoutedInferenceVitestJob(
     "Run Model Router provider-routed inference live test",
   );
   const runVitestEnv = asRecord(runVitest?.env);
-  if (
-    runVitestEnv.NVIDIA_INFERENCE_API_KEY !==
-    "${{ secrets.NVIDIA_INFERENCE_API_KEY }}"
-  ) {
+  if (runVitestEnv.NVIDIA_API_KEY !== "${{ secrets.NVIDIA_API_KEY }}") {
     errors.push(
-      "model-router-provider-routed-inference-vitest Vitest step must receive NVIDIA_INFERENCE_API_KEY from secrets",
+      "model-router-provider-routed-inference-vitest Vitest step must receive NVIDIA_API_KEY from secrets",
     );
   }
   requireRunContains(
@@ -5206,6 +5210,35 @@ function validateModelRouterProviderRoutedInferenceVitestJob(
   }
   requireRunContains(errors, cleanup, "docker logout docker.io");
   requireRunContains(errors, cleanup, 'rm -rf "${DOCKER_CONFIG}"');
+}
+
+function validateGatewayDriftPreflightVitestJob(
+  errors: string[],
+  jobs: WorkflowRecord,
+): void {
+  const jobName = "gateway-drift-preflight-vitest";
+  const job = asRecord(jobs[jobName]);
+  validateFreeStandingJobSelector(
+    errors,
+    jobs,
+    jobName,
+    "gateway-drift-preflight",
+  );
+  if (Object.keys(job).length === 0) return;
+
+  const runVitest = requireJobStep(
+    errors,
+    jobName,
+    asSteps(job.steps),
+    "Run gateway drift preflight Vitest test",
+  );
+  requireRunContains(errors, runVitest, "npx vitest run --project integration");
+  requireRunContains(
+    errors,
+    runVitest,
+    "test/gateway-drift-preflight.test.ts",
+  );
+  requireRunDoesNotContain(errors, runVitest, "--project cli");
 }
 
 function runContainsCloudflaredAptInstall(run: string): boolean {
@@ -7805,12 +7838,7 @@ export function validateE2eVitestScenariosWorkflowBoundary(
   validateModelRouterProviderRoutedInferenceVitestJob(errors, jobs);
   validateSnapshotCommandsVitestJob(errors, jobs);
   validateSparkInstallVitestJob(errors, jobs);
-  validateFreeStandingJobSelector(
-    errors,
-    jobs,
-    "gateway-drift-preflight-vitest",
-    "gateway-drift-preflight",
-  );
+  validateGatewayDriftPreflightVitestJob(errors, jobs);
 
   validateFreeStandingJobSelector(
     errors,

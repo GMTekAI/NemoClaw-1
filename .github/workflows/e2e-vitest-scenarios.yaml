@@ -3958,7 +3958,7 @@ jobs:
         # sandbox inference.local completion boundaries without adding registry
         # or migration-ledger wiring.
         env:
-          NVIDIA_INFERENCE_API_KEY: ${{ secrets.NVIDIA_INFERENCE_API_KEY }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
         run: |
           set -euo pipefail
           npx vitest run --project e2e-scenarios-live \
@@ -4252,7 +4252,9 @@ jobs:
         # Docker/OpenShell mutation.
         run: |
           set -euo pipefail
-          npx vitest run --project cli             test/gateway-drift-preflight.test.ts             --silent=false --reporter=default
+          npx vitest run --project integration \
+            test/gateway-drift-preflight.test.ts \
+            --silent=false --reporter=default
 
       - name: Upload gateway drift preflight artifacts
         if: always()
