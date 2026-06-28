@@ -104,9 +104,9 @@ describe("selectDirectSandboxContainer", () => {
   });
 
   it("rejects a labeled container whose name does not match the sandbox", () => {
-    expect(() =>
-      selectDirectSandboxContainer("demo", "abc123\topenshell-other\n"),
-    ).toThrow("labels and names disagree");
+    expect(() => selectDirectSandboxContainer("demo", "abc123\topenshell-other\n")).toThrow(
+      "labels and names disagree",
+    );
   });
 });
 

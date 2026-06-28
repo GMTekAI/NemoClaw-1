@@ -1376,7 +1376,7 @@ fi
 # Same-uid lifecycle commands are valid only in OpenShell's non-root workload
 # topology. Stamp the legacy root-separated path before its gateway can start.
 install -d -m 0755 -o root -g root /run/nemoclaw
-printf '%s\n' 'root-separated' > /run/nemoclaw/hermes-root-lifecycle
+printf '%s\n' 'root-separated' >/run/nemoclaw/hermes-root-lifecycle
 chown root:root /run/nemoclaw/hermes-root-lifecycle
 chmod 0444 /run/nemoclaw/hermes-root-lifecycle
 

@@ -5,11 +5,7 @@ import type { AgentDefinition } from "../agent/defs";
 import type { InferenceSelection } from "../inference/selection";
 import { inferenceSelectionRegistryFields } from "../inference/selection";
 import * as onboardSession from "../state/onboard-session";
-import type {
-  SandboxEntry,
-  SandboxMcpState,
-  SandboxMessagingState,
-} from "../state/registry";
+import type { SandboxEntry, SandboxMcpState, SandboxMessagingState } from "../state/registry";
 import * as registry from "../state/registry";
 import {
   getHermesDashboardRegistryFields,

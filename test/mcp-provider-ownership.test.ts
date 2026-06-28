@@ -118,7 +118,9 @@ describe("MCP provider ownership", () => {
         false,
       );
       expect(
-        payload.calls.some((call) => call.startsWith("sandbox provider detach alpha alpha-mcp-fake")),
+        payload.calls.some((call) =>
+          call.startsWith("sandbox provider detach alpha alpha-mcp-fake"),
+        ),
       ).toBe(true);
       expect(payload.bridgePresent).toBe(true);
     });

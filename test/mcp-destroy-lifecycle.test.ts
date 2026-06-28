@@ -644,8 +644,8 @@ const bridge = require("./src/lib/actions/sandbox/mcp-bridge.js");
     expect(payload.message).toContain("--force does not delete");
     expect(payload.sandbox.mcp.bridges).toHaveProperty("github");
     expect(payload.providers).toContain("alpha-mcp-github");
-    expect(
-      payload.calls.some((call) => call.startsWith("provider delete alpha-mcp-github ")),
-    ).toBe(false);
+    expect(payload.calls.some((call) => call.startsWith("provider delete alpha-mcp-github "))).toBe(
+      false,
+    );
   });
 });

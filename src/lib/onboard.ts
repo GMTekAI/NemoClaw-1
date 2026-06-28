@@ -990,7 +990,7 @@ function isInferenceRouteReady(provider: string, model: string): boolean {
 }
 
 const {
-  sandboxExistsInGateway,
+  reconcileSandboxForCreate,
   pruneStaleSandboxEntry,
   shouldRestoreLatestBackupOnRecreate,
   confirmRecreateForSelectionDrift,
@@ -2627,22 +2627,7 @@ async function createSandbox(
     },
   );
 
-  const existingRegistryEntryBeforePrune = registry.getSandbox(sandboxName);
-  const preservedMcpState =
-    existingRegistryEntryBeforePrune?.mcp &&
-    Object.keys(existingRegistryEntryBeforePrune.mcp.bridges).length > 0
-      ? existingRegistryEntryBeforePrune.mcp
-      : undefined;
-
-  // Reconcile local registry state with the live OpenShell gateway state.
-  // An MCP-bearing entry is also the rebuild transaction manifest. Keep it
-  // durable while the old sandbox is absent so process death anywhere before
-  // registration cannot discard provider/policy ownership intent. The fresh
-  // registration below replaces the stale runtime fields and carries only the
-  // validated MCP state forward.
-  const liveExists = preservedMcpState
-    ? sandboxExistsInGateway(sandboxName)
-    : pruneStaleSandboxEntry(sandboxName);
+  const { existingEntry, preservedMcpState, liveExists } = reconcileSandboxForCreate(sandboxName);
   // #4614: capture default AFTER prune so a stale registry row isn't read as a live sandbox.
   const sandboxWasLiveDefault = liveExists && wasSandboxDefault(registry.getDefault(), sandboxName);
 
@@ -2651,7 +2636,7 @@ async function createSandbox(
   let pendingStateRestore: BackupResult | null = null;
   let pendingStateRestoreBackupPath: string | null = null;
 
-  if (!liveExists && existingRegistryEntryBeforePrune && shouldRestoreLatestBackupOnRecreate()) {
+  if (!liveExists && existingEntry && shouldRestoreLatestBackupOnRecreate()) {
     const latestBackup = sandboxState.getLatestBackup(sandboxName);
     if (latestBackup?.backupPath) {
       pendingStateRestoreBackupPath = latestBackup.backupPath;
