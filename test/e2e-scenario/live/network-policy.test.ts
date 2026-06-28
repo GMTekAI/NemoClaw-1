@@ -560,11 +560,19 @@ hello
       curlStatus(sandbox, "https://pypi.org/simple/le/", "tc-net-02-pypi-post", "-X POST"),
     ).resolves.toBe("403");
 
-    const slackBefore = await fetchStatus(sandbox, "https://slack.com/", "tc-net-03-slack-before");
+    const slackBefore = await fetchStatus(
+      sandbox,
+      "https://slack.com/api/api.test",
+      "tc-net-03-slack-before",
+    );
     expect(slackBefore).toMatch(/STATUS_403|ERROR_/);
     const slackApply = await applyPresetInteractively(host, "slack");
     expect(slackApply.exitCode, text(slackApply)).toBe(0);
-    const slackAfter = await fetchStatus(sandbox, "https://slack.com/", "tc-net-03-slack-after");
+    const slackAfter = await fetchStatus(
+      sandbox,
+      "https://slack.com/api/api.test",
+      "tc-net-03-slack-after",
+    );
     expect(slackAfter).toMatch(/STATUS_200/);
 
     const atlassianBefore = await fetchStatus(

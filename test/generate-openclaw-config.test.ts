@@ -1375,23 +1375,21 @@ describe("generate-openclaw-config.mts: config generation", () => {
     }
   }, 20_000);
 
-  // #4780: Nemotron generates invalid JS for OpenClaw's native code-based tool
-  // search (`tool_search_code`): CommonJS `require`, `openclaw.tools.search`
-  // called with an object instead of a string, `tool_describe`/`tool_call`
-  // invoked with bad ids. The run still succeeds via fallback, but the logs are
-  // flooded with `[tools] tool_search_code failed` errors. Disabling native
-  // tool search for this managed-inference route routes the model back to the
-  // structured tool-calling surface it handles correctly.
+  // #4780: Nemotron can generate invalid JS for OpenClaw's native
+  // `tool_search_code`. Disable it on affected managed-inference routes so
+  // these models use the structured tool-calling surface they handle correctly.
   it("disables native OpenClaw Tool Search for Nemotron managed inference (#4780)", () => {
-    const config = runConfigScript({
-      NEMOCLAW_MODEL: "nvidia/nemotron-3-super-120b-a12b",
-      NEMOCLAW_PROVIDER_KEY: "inference",
-      NEMOCLAW_PRIMARY_MODEL_REF: "inference/nvidia/nemotron-3-super-120b-a12b",
-      NEMOCLAW_INFERENCE_BASE_URL: "https://inference.local/v1",
-      NEMOCLAW_INFERENCE_API: "openai-completions",
-    });
+    for (const model of ["nvidia/nemotron-3-super-120b-a12b", "nvidia/nvidia/nemotron-3-ultra"]) {
+      const config = runConfigScript({
+        NEMOCLAW_MODEL: model,
+        NEMOCLAW_PROVIDER_KEY: "inference",
+        NEMOCLAW_PRIMARY_MODEL_REF: `inference/${model}`,
+        NEMOCLAW_INFERENCE_BASE_URL: "https://inference.local/v1",
+        NEMOCLAW_INFERENCE_API: "openai-completions",
+      });
 
-    expect(config.tools?.toolSearch).toBe(false);
+      expect(config.tools?.toolSearch, model).toBe(false);
+    }
   });
 
   it("does not disable native Tool Search for Nemotron on non-matching routes (#4780)", () => {
