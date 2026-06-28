@@ -1052,6 +1052,14 @@ describe("E2E reusable workflow contract", () => {
       (step) => step.name === "Install issue #4434 host dependencies",
     );
     const issue4434VitestInstallRun = issue4434VitestInstallStep?.run ?? "";
+    const networkPolicyVitestSteps =
+      vitestScenarioWorkflow.jobs["network-policy-vitest"].steps ?? [];
+    const networkPolicyVitestStepIndex = (name: string) =>
+      networkPolicyVitestSteps.findIndex((step) => step.name === name);
+    const networkPolicyVitestInstallStep = networkPolicyVitestSteps.find(
+      (step) => step.name === "Install network-policy host dependencies",
+    );
+    const networkPolicyVitestInstallRun = networkPolicyVitestInstallStep?.run ?? "";
     const installActionRun = installActionStep?.run ?? "";
 
     expect(issue4434VitestInstallStep?.uses).toBeUndefined();
@@ -1060,6 +1068,13 @@ describe("E2E reusable workflow contract", () => {
     );
     expect(issue4434VitestStepIndex("Install issue #4434 host dependencies")).toBeLessThan(
       issue4434VitestStepIndex("Authenticate to Docker Hub"),
+    );
+    expect(networkPolicyVitestInstallStep?.uses).toBeUndefined();
+    expect(networkPolicyVitestInstallRun).toContain(
+      "sudo apt-get install -y --no-install-recommends expect",
+    );
+    expect(networkPolicyVitestStepIndex("Install network-policy host dependencies")).toBeLessThan(
+      networkPolicyVitestStepIndex("Run network-policy live test"),
     );
 
     expect(installActionStep?.env?.APT_PACKAGES).toBe("${{ inputs.packages }}");
@@ -1082,6 +1097,7 @@ describe("E2E reusable workflow contract", () => {
       "sudo apt-get install -y --no-install-recommends",
     ]) {
       expect(issue4434VitestInstallRun, fragment).toContain(fragment);
+      expect(networkPolicyVitestInstallRun, fragment).toContain(fragment);
       expect(installActionRun, fragment).toContain(fragment);
     }
   });

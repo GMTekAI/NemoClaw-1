@@ -1034,6 +1034,28 @@ function validateNetworkPolicyVitestJob(
     );
   }
 
+  const installHostDependencies = requireJobStep(
+    errors,
+    jobName,
+    steps,
+    "Install network-policy host dependencies",
+  );
+  if (installHostDependencies?.uses) {
+    errors.push(
+      "network-policy-vitest host dependency setup must stay inline in trusted workflow YAML",
+    );
+  }
+  for (const fragment of [
+    "for attempt in 1 2 3",
+    "sudo apt-get update",
+    'if [ "$attempt" -eq 3 ]; then',
+    "apt-get update failed after 3 attempts",
+    "sleep $((attempt * 5))",
+    "sudo apt-get install -y --no-install-recommends expect",
+  ]) {
+    requireRunContains(errors, installHostDependencies, fragment);
+  }
+
   const setupNode = namedStep(steps, "Set up Node");
   if (!setupNode)
     errors.push("network-policy-vitest job missing step: Set up Node");
